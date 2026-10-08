@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit } from '../types'
+import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool } from './runs'
@@ -10,6 +10,8 @@ import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
+import { LIMIT_NAMES, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
+import type { ContextChipMode } from './usage'
 
 export { cellWidth } from './markdown'
 
@@ -25,10 +27,12 @@ const COLORS = {
   code: 'error',
   success: 'success',
   danger: 'error',
+  warning: 'warning',
 } as const
 
 const PANE = 'desk-diff'
 const SESSIONS_PANE = 'desk-sessions'
+const CONTEXT_PANE = 'desk-context'
 const PER_GROUP = 8
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
@@ -47,6 +51,8 @@ const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as cons
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
+const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
+const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
@@ -331,6 +337,43 @@ export function parseDiff(text: string, isNew = false): FileDiff[] {
 // 사용자 git 설정(diff.mnemonicPrefix·noprefix)과 상관없이 머리말을 a/ b/ 로 고정해 경로를 읽는다.
 const GIT_DIFF = ['--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/']
 
+// 컨텍스트 칩의 숫자: 인자 없는 usage() 는 상태 줄의 값이라 공짜다. 턴이 끝날 때마다 다시 읽는다.
+async function refreshUsage($: EngineInterface) {
+  const [raw, now] = await Promise.all([$.session.usage(), $.clock.now()])
+  const next = toUsage(raw, now)
+  await update($, usage, previous => (JSON.stringify({ ...previous, at: 0 }) === JSON.stringify({ ...next, at: 0 }) ? previous : next))
+}
+
+// 패널을 열 때만 항목별 내역을 계산한다. summary 는 로컬 추정이라 API 요청이 없다(full 은 도구마다 요청).
+async function refreshBreakdown($: EngineInterface) {
+  const [raw, now] = await Promise.all([$.session.usage({ breakdown: 'summary' }), $.clock.now()])
+  await update($, usage, () => toUsage(raw, now))
+  await update($, usageBreakdown, () => toBreakdown(raw, now))
+}
+
+async function openContext($: EngineInterface) {
+  await refreshBreakdown($).catch(() => undefined)
+  await $.ui.open({ id: CONTEXT_PANE, title: '컨텍스트', focus: true })
+}
+
+// 아래턱 오른쪽의 "◔ 62%": 링은 단계 색, 숫자는 누르면 컨텍스트 패널을 여는 버튼.
+function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode: ContextChipMode) {
+  const percent = info?.percent ?? null
+  if (!showsChip(mode, percent)) return null
+  const { Box, Text, Button } = els
+  const level = meterLevel(percent)
+  const label = `${percent}%`
+  return {
+    width: 2 + cellWidth(label),
+    node: (
+      <Box columnGap={1}>
+        <Text color={COLORS[level]}>{ring(percent)}</Text>
+        <Button key="context-chip" plain dimColor={level === 'muted'} label={label} onPress={() => void openContext($)} />
+      </Box>
+    ),
+  }
+}
+
 async function refreshDiff($: EngineInterface) {
   const git = (args: string[]) => $.process.run(['git', ...args], { timeoutMs: 5000 })
   const inside = await git(['rev-parse', '--is-inside-work-tree'])
@@ -536,6 +579,7 @@ function peerRow(els: Els, $: EngineInterface, name: string, text: string, openS
 // 서브에이전트 카드: 데스크톱처럼 에이전트마다 한 장. 종류·설명, 끝나면 도구 수·토큰·시간·바꾼 줄.
 // 설명을 누르면 결과 글을 마크다운으로 펼친다.
 export function formatTokens(count: number): string {
+  if (count >= 1_000_000) return `${Number((count / 1_000_000).toFixed(1))}M`
   return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count)
 }
 
@@ -672,6 +716,7 @@ export function bubbleSide(options: Record<string, unknown>): 'left' | 'right' {
 export const register: Register = (on, options) => {
   const side = bubbleSide(options)
   const edge = side === 'right' ? 'flex-end' : 'flex-start'
+  const chipMode = contextChipMode(options)
   registerAsk(on)
 
   on('session.start', async ($, e, next) => {
@@ -684,7 +729,12 @@ export const register: Register = (on, options) => {
       name: 'desk-diff',
       description: '데스크톱 앱처럼 우측에 변경 파일 diff 패널을 연다',
     })
+    await $.command.register({
+      name: 'desk-context',
+      description: '컨텍스트 사용량을 항목별로, 사용 한도·비용과 함께 패널로 연다',
+    })
     void refreshDiff($).catch(() => undefined)
+    void refreshUsage($).catch(() => undefined)
     void refreshSurface($).catch(() => undefined)
     // 테마를 바꾸면 3초 안에 말풍선·아래턱 색이 따라간다. 바뀌지 않았으면 다시 그리지 않는다.
     themeWatch?.cancel()
@@ -742,6 +792,7 @@ export const register: Register = (on, options) => {
       }
       await update($, pendingEdits, () => [])
       await update($, turnStartedAt, () => null)
+      void refreshUsage($).catch(() => undefined)
     }
     return done
   })
@@ -758,6 +809,11 @@ export const register: Register = (on, options) => {
     await refreshSessions($)
     await $.ui.open({ id: SESSIONS_PANE, title: '세션', focus: true })
     return { text: '세션 패널을 열었습니다.' }
+  })
+
+  on('command.run', { command: 'desk-context' }, async $ => {
+    await openContext($)
+    return { text: '컨텍스트 패널을 열었습니다.' }
   })
 
   on('command.run', { command: 'desk-diff' }, async $ => {
@@ -972,7 +1028,17 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
     const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
-    const chin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns)
+    const meter = contextMeter(els, $, await read($, usage), chipMode)
+    const reserve = meter === null ? 0 : meter.width + 1
+    const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
+    // 컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
+    const chin =
+      meter === null ? repoChin : (
+        <els.Box columnGap={1} paddingX={repoChin === null ? 1 : 0}>
+          {repoChin}
+          {meter.node}
+        </els.Box>
+      )
     // 질문 중에는 질문이 띠를 차지한다(엔진 설문처럼): 다른 밴드·할 일 카드는 숨기고, 남는 줄이 있을 때만 아래턱.
     if (asked) {
       return (
@@ -1125,6 +1191,76 @@ export const register: Register = (on, options) => {
   })
 
   // 우측 diff 패널: 파일별 +/− 요약과 헌크.
+  // 컨텍스트 패널: /context 의 항목별 내역을 막대로, 그 아래 사용 한도와 비용.
+  on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const [live, detail] = await Promise.all([read($, usage), read($, usageBreakdown)])
+    const percent = live?.percent ?? null
+    const width = Math.max(10, Math.min((e.viewport?.columns ?? 60) - 6, 40))
+    const nameWidth = Math.max(0, ...(detail?.categories ?? []).map(category => cellWidth(category.name)))
+    const used = detail?.categories.filter(category => category.kind !== 'free') ?? []
+    const free = detail?.categories.find(category => category.kind === 'free')
+
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        <Box columnGap={1}>
+          <Text color={COLORS.text} bold>
+            컨텍스트
+          </Text>
+          {percent !== null && <Text color={COLORS[meterLevel(percent)]}>{`${ring(percent)} ${percent}%`}</Text>}
+          <Button key="context-refresh" plain dimColor label="↻" onPress={() => void refreshBreakdown($).catch(() => undefined)} />
+        </Box>
+        {percent === null ? (
+          <Text color={COLORS.muted}>아직 모델 응답이 없어서 사용량을 몰라요.</Text>
+        ) : (
+          <Box flexDirection="column">
+            <Text color={COLORS[meterLevel(percent)]}>{meterBar(percent, width)}</Text>
+            <Text color={COLORS.muted}>
+              {[
+                live?.tokens != null ? `${formatTokens(live.tokens)} / ${formatTokens(live.window)} 토큰` : `창 ${formatTokens(live?.window ?? 0)} 토큰`,
+                detail?.compactAt != null ? `자동 압축 ${formatTokens(detail.compactAt)}` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </Text>
+          </Box>
+        )}
+        {detail && (
+          <Box flexDirection="column">
+            <Text color={COLORS.muted}>{`항목별 · ${detail.model} · 추정`}</Text>
+            {[...used, ...(free ? [free] : [])].map(category => (
+              <Box key={`cat-${category.name}`} columnGap={1}>
+                <Text color={(category.kind === 'free' ? COLORS.muted : category.color) as never}>{category.kind === 'free' ? '□' : '■'}</Text>
+                <Text color={category.kind === 'free' ? COLORS.muted : COLORS.text}>{category.name + ' '.repeat(Math.max(0, nameWidth - cellWidth(category.name)))}</Text>
+                <Text color={COLORS.muted}>{formatTokens(category.tokens).padStart(6)}</Text>
+                <Text color={COLORS.muted}>{`${detail.max > 0 ? Math.round((category.tokens / detail.max) * 100) : 0}%`.padStart(4)}</Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {live && live.limits.length > 0 && (
+          <Box flexDirection="column">
+            <Text color={COLORS.muted}>사용 한도</Text>
+            {live.limits.map(limit => {
+              const left = resetIn(limit.resetsAt, live.at)
+              const name = LIMIT_NAMES[limit.kind] ?? limit.kind
+              const limitWidth = Math.max(...live.limits.map(item => cellWidth(LIMIT_NAMES[item.kind] ?? item.kind)))
+              return (
+                <Box key={`limit-${limit.kind}`} columnGap={1}>
+                  <Text color={COLORS.text}>{name + ' '.repeat(Math.max(0, limitWidth - cellWidth(name)))}</Text>
+                  <Text color={COLORS[meterLevel(limit.percentUsed)]}>{meterBar(limit.percentUsed, 10)}</Text>
+                  <Text color={COLORS.text}>{`${limit.percentUsed}%`.padStart(4)}</Text>
+                  {left && <Text color={COLORS.muted}>{`${left} 뒤 초기화`}</Text>}
+                </Box>
+              )
+            })}
+          </Box>
+        )}
+        {live?.costUsd != null && <Text color={COLORS.muted}>{`이 세션 비용 $${live.costUsd.toFixed(2)}`}</Text>}
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Code } = $.ui.resolve(e)
     const files = await read($, diff)

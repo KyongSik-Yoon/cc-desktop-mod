@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Claude 데스크톱 앱 Code 탭처럼 보이도록 터미널 transcript 를 다시 그린다",
   "author": {
     "name": "KyongSik-Yoon",
@@ -19,6 +19,18 @@
         "right"
       ],
       "default": "left",
+      "required": false
+    },
+    "contextChip": {
+      "type": "string",
+      "title": "컨텍스트 칩",
+      "description": "입력창 아래턱 옆의 컨텍스트 사용량 칩(누르면 항목별 패널): auto 는 50% 이상일 때만, always 는 늘, off 는 끔",
+      "options": [
+        "auto",
+        "always",
+        "off"
+      ],
+      "default": "auto",
       "required": false
     }
   }

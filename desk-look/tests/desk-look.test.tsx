@@ -773,3 +773,120 @@ test('말풍선 오른쪽 설정', { options: { bubbleSide: 'right' } }, async $
   expect(JSON.stringify(await row.drawn())).toContain('"alignItems":"flex-end"')
   await row.unmount()
 })
+
+import { contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip } from '../hooks/usage'
+
+const USAGE = (percent: number) => ({
+  startedAt: 0,
+  context: {
+    tokens: percent * 2000,
+    window: 200000,
+    percent,
+    breakdown: {
+      categories: [
+        { name: 'System prompt', tokens: 3100, color: 'promptBorder', isDeferred: false, kind: 'used' },
+        { name: 'Messages', tokens: 80000, color: 'claude', isDeferred: false, kind: 'used' },
+        { name: 'MCP tools', tokens: 9000, color: 'subtle', isDeferred: true, kind: 'deferred' },
+        { name: 'Free space', tokens: 100000, color: 'inactive', isDeferred: false, kind: 'free' },
+      ],
+      totalTokens: percent * 2000,
+      maxTokens: 200000,
+      rawMaxTokens: 200000,
+      autocompactSource: 'model-default',
+      percentage: percent,
+      gridRows: [],
+      model: 'opus-5-5',
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+      autoCompactThreshold: 167000,
+    },
+  },
+  rateLimits: [{ kind: 'five_hour', percentUsed: 2, resetsAt: new Date(4 * 3600_000 + 7 * 60_000).toISOString() }],
+  cost: { usd: 1.5 },
+})
+
+test('컨텍스트 칩 판정과 글자', () => {
+  expect(contextChipMode({})).toBe('auto')
+  expect(contextChipMode({ contextChip: 'off' })).toBe('off')
+  expect(contextChipMode({ contextChip: 'weird' })).toBe('auto')
+  expect(showsChip('auto', 49)).toBe(false)
+  expect(showsChip('auto', 50)).toBe(true)
+  expect(showsChip('always', 3)).toBe(true)
+  expect(showsChip('off', 99)).toBe(false)
+  expect(showsChip('always', null)).toBe(false)
+  expect([0, 25, 50, 75, 100].map(ring).join('')).toBe('○◔◑◕●')
+  expect([10, 75, 90].map(meterLevel)).toEqual(['muted', 'warning', 'danger'])
+  expect(meterBar(50, 4)).toBe('▰▰▱▱')
+  expect(resetIn(new Date(4 * 3600_000 + 7 * 60_000).toISOString(), 0)).toBe('4시간 7분')
+  expect(resetIn(new Date(29 * 3600_000).toISOString(), 0)).toBe('1일 5시간')
+  expect(resetIn(new Date(0).toISOString(), 60_000)).toBe(null)
+  expect(resetIn(null, 0)).toBe(null)
+  expect([950, 62100, 1_000_000, 1_250_000].map(formatTokens)).toEqual(['950', '62.1k', '1M', '1.3M'])
+})
+
+test('컨텍스트 칩: 반을 넘기면 아래턱 옆에, 누르면 패널', async ($, on) => {
+  const opened: string[] = []
+  const asked: unknown[] = []
+  on('session.usage', ($, e) => {
+    asked.push(e)
+    return { value: USAGE(62) as never }
+  })
+  on('clock.now', () => ({ value: 0 }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  await $.command.run({ command: 'desk-context', args: '' } as never)
+  expect(asked).toEqual([{ breakdown: 'summary' }])
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+  expect(await band.find({ type: 'Button', key: 'context-chip' })).toBeDefined()
+  expect(JSON.stringify(await band.drawn())).toContain('◑')
+  await band.press({ key: 'context-chip' })
+  expect(opened).toEqual(['desk-context', 'desk-context'])
+  await band.unmount()
+
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-context', viewport: VIEWPORT, props: { title: '컨텍스트', isFocused: true } as never })
+  const drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('124.0k / 200.0k 토큰')
+  expect(drawn).toContain('자동 압축 167.0k')
+  expect(drawn).toContain('System prompt')
+  expect(drawn).toContain('Free space')
+  expect(drawn).not.toContain('MCP tools')
+  expect(drawn).toContain('5시간')
+  expect(drawn).toContain('4시간 7분 뒤 초기화')
+  expect(drawn).toContain('$1.50')
+  await pane.unmount()
+})
+
+test('컨텍스트 칩: 반이 안 되면 auto 는 숨김, always 는 보임', async ($, on) => {
+  on('session.usage', () => ({ value: USAGE(30) as never }))
+  on('clock.now', () => ({ value: 0 }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-context', args: '' } as never)
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+  expect(await band.find({ type: 'Button', key: 'context-chip' })).toBeUndefined()
+  await band.unmount()
+})
+
+test('컨텍스트 칩 always 설정', { options: { contextChip: 'always' } }, async ($, on) => {
+  on('session.usage', () => ({ value: USAGE(30) as never }))
+  on('clock.now', () => ({ value: 0 }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-context', args: '' } as never)
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+  expect(await band.find({ type: 'Button', key: 'context-chip' })).toBeDefined()
+  await band.unmount()
+})

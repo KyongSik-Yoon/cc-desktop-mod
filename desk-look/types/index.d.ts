@@ -50,6 +50,26 @@ export type TurnCard = { durationMs: number; files: TurnEdit[]; text?: string }
 // 세션 패널 한 줄: ~/.claude/projects 의 기록 파일 하나.
 export type SessionEntry = { id: string; updatedAt: number; cwd: string; title: string }
 
+// 컨텍스트 칩·패널: $.session.usage() 에서 그릴 것만 옮겨 둔 것. at 은 읽은 시각(ms).
+export type UsageInfo = {
+  percent: number | null
+  tokens: number | null
+  window: number
+  limits: Array<{ kind: string; percentUsed: number; resetsAt: string | null }>
+  costUsd: number | null
+  at: number
+}
+
+// /context 와 같은 항목별 내역(로컬 추정). compactAt 은 자동 압축이 도는 토큰 수, 꺼져 있으면 null.
+export type UsageBreakdown = {
+  categories: Array<{ name: string; tokens: number; kind: string; color: string }>
+  total: number
+  max: number
+  compactAt: number | null
+  model: string
+  at: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'desk-look': {
@@ -74,6 +94,9 @@ declare module 'claude-code' {
       tasks: TaskItem[]
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
       ask: AskState | null
+      // 컨텍스트·사용 한도(턴이 끝날 때마다), 그리고 컨텍스트 패널을 열 때 계산한 항목별 내역.
+      usage: UsageInfo | null
+      usageBreakdown: UsageBreakdown | null
     }
   }
 }
