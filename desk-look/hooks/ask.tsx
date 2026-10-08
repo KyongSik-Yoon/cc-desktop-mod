@@ -7,6 +7,7 @@ import type { AskQuestion, AskState } from '../types'
 // 도구 호출 훅이 답을 기다리며 결과를 직접 돌려주고, 엔진은 그 결과를 도구의 원래 변환기로 모델에게 넘긴다.
 // 입력창이 비어 있으면 숫자 키가 띠의 버튼을 바로 누른다: 1-8 선택지, 0 제출(여러 개 고르기), 9 엔진 창.
 // 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로.
+// 엔진 창은 뜰 때 알림(permission_prompt)을 보내지만 카드는 도구가 도는 중이라 엔진이 보내지 않는다. 그래서 카드가 직접 알린다(askNotify).
 
 type On = Parameters<Register>[0]
 
@@ -80,7 +81,13 @@ async function reply($: EngineInterface, dir: string, payload: AskReply) {
   await $.process.run(['sh', '-c', WRITE, 'sh', dir, JSON.stringify(payload)], { timeoutMs: 3000 })
 }
 
-export function registerAsk(on: On) {
+// 알림 본문: 첫 질문, 여러 개면 "외 N개".
+export function askNotice(questions: readonly AskQuestion[]): string {
+  const first = questions[0]?.question ?? ''
+  return questions.length > 1 ? `${first} (외 ${questions.length - 1}개)` : first
+}
+
+export function registerAsk(on: On, notify: boolean) {
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const questions = parseQuestions(e.questions)
     if (questions === null) return next(e)
@@ -94,6 +101,12 @@ export function registerAsk(on: On) {
     const id = e.tool_use_id ?? dir
     const shownAt = await $.clock.now()
     await update($, asking, () => ({ id, dir, questions, step: 0, picks: questions.map(() => []), texts: questions.map(() => ''), shownAt }))
+    if (notify) {
+      // 2.1.294 이하 엔진에는 notify 가 없다: 알림만 빠지고 카드는 그대로 뜬다.
+      try {
+        void $.ui.notify(askNotice(questions), { title: 'Claude 질문' }).catch(() => undefined)
+      } catch {}
+    }
 
     // 턴을 중단하면(Esc) 기다리던 셸을 끝낸다.
     const onAbort = () => void reply($, dir, { kind: 'cancel' }).catch(() => undefined)

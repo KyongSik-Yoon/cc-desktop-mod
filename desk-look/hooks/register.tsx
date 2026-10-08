@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
+import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
 import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
@@ -52,6 +52,8 @@ const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskSta
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
+// Button 안에 글·Text 를 넣을 수 있는 엔진(2.1.295+)인지. 모르는 동안은 옛 모양.
+const richButtons = atom({ plugin: 'desk-look', key: 'richButtons' } as const, false)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
@@ -356,8 +358,36 @@ async function openContext($: EngineInterface) {
   await $.ui.open({ id: CONTEXT_PANE, title: '컨텍스트', focus: true })
 }
 
-// 아래턱 오른쪽의 "◔ 62%": 링은 단계 색, 숫자는 누르면 컨텍스트 패널을 여는 버튼.
-function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode: ContextChipMode) {
+// 줄 전체가 눌리는 버튼. 2.1.295 부터 Button 안에 글·Text 를 넣을 수 있다. 그 전 엔진은 그런 그림을
+// 통째로 거부하고 자기 그림을 그리므로, 그때는 첫 조각만 버튼 라벨로 하고 나머지는 옆에 둔다.
+type RowButtonProps = { key: string; dimColor?: boolean; hotkey?: string; hover?: TextHoverProps; onPress: (press: UiPressArgument) => void }
+
+function rowButton(els: Els, rich: boolean, props: RowButtonProps, label: string, ...rest: unknown[]) {
+  const { Box, Text, Button } = els
+  const parts = rest.filter(part => part !== null && part !== undefined && part !== false && part !== '')
+  if (rich) {
+    return (
+      <Button plain {...props}>
+        {label}
+        {parts as never}
+      </Button>
+    )
+  }
+  return (
+    <Box>
+      <Button plain {...props} label={label} />
+      {parts.map(part => (typeof part === 'string' ? <Text>{part}</Text> : part)) as never}
+    </Box>
+  )
+}
+
+export function supportsRichButtons(base: string | undefined): boolean {
+  const [major = 0, minor = 0, patch = 0] = (base ?? '').split('-')[0]!.split('.').map(Number)
+  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 295)))
+}
+
+// 아래턱 오른쪽의 "◔ 62%": 링은 단계 색, 칩 전체가 컨텍스트 패널을 여는 버튼.
+function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode: ContextChipMode, rich: boolean) {
   const percent = info?.percent ?? null
   if (!showsChip(mode, percent)) return null
   const { Box, Text, Button } = els
@@ -365,7 +395,12 @@ function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode
   const label = `${percent}%`
   return {
     width: 2 + cellWidth(label),
-    node: (
+    node: rich ? (
+      <Button key="context-chip" plain dimColor={level === 'muted'} onPress={() => void openContext($)}>
+        <Text color={COLORS[level]}>{ring(percent)}</Text>
+        {` ${label}`}
+      </Button>
+    ) : (
       <Box columnGap={1}>
         <Text color={COLORS[level]}>{ring(percent)}</Text>
         <Button key="context-chip" plain dimColor={level === 'muted'} label={label} onPress={() => void openContext($)} />
@@ -550,22 +585,24 @@ export function textKey(text: string): string {
 }
 
 // 에이전트가 보낸 메시지: "◆ Explore  첫 줄 미리보기 ›", 누르면 본문을 마크다운으로.
-function peerRow(els: Els, $: EngineInterface, name: string, text: string, openState: Record<string, boolean>, columns: number) {
+function peerRow(els: Els, $: EngineInterface, name: string, text: string, openState: Record<string, boolean>, columns: number, rich: boolean) {
   const { Box, Text, Button } = els
   const key = `peer-${textKey(name + text)}`
   const isOpen = openState[key] ?? false
   const preview = text.split('\n').find(line => line.trim() !== '')?.trim() ?? ''
+  const who = name.replace(/^@/, '')
   return (
     <Box flexDirection="column">
       <Box columnGap={1}>
         <Text color={COLORS.clay}>◆</Text>
-        <Button key={key} plain label={name.replace(/^@/, '')} onPress={() => toggle($, key, isOpen)} />
-        {!isOpen && (
-          <Text color={COLORS.muted} wrap="truncate-end">
-            {preview}
-          </Text>
+        {rowButton(
+          els,
+          rich,
+          { key, onPress: () => toggle($, key, isOpen) },
+          who,
+          !isOpen && preview !== '' && <Text color={COLORS.muted}>{` ${clip(preview, Math.max(10, columns - cellWidth(who) - 6))}`}</Text>,
+          <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
         )}
-        <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>
       </Box>
       {isOpen && (
         <Box marginLeft={2} paddingX={1} borderStyle="round" borderColor={COLORS.border} flexDirection="column">
@@ -583,7 +620,7 @@ export function formatTokens(count: number): string {
   return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count)
 }
 
-function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>) {
+function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, rich: boolean) {
   const { Box, Text, Button } = els
   const fields = fieldsOf(call.input)
   const id = call.tool_use_id
@@ -605,12 +642,17 @@ function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Recor
       <Box columnGap={1}>
         <Text color={COLORS.clay}>{call.isRunning ? '···' : '◆'}</Text>
         <Text color={COLORS.muted}>{kind}</Text>
-        <Button key={`agent-${id}`} plain label={title} onPress={() => toggle($, id, isOpen)} />
-        {call.isRunning && <Text color={COLORS.muted}>running</Text>}
-        {isBackground && <Text color={COLORS.muted}>in background</Text>}
-        {call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}>failed</Text>}
-        {call.isInterrupted && <Text color={COLORS.muted}>interrupted</Text>}
-        {body !== '' && <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>}
+        {rowButton(
+          els,
+          rich,
+          { key: `agent-${id}`, onPress: () => toggle($, id, isOpen) },
+          title,
+          call.isRunning && <Text color={COLORS.muted}> running</Text>,
+          isBackground && <Text color={COLORS.muted}> in background</Text>,
+          call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}> failed</Text>,
+          call.isInterrupted && <Text color={COLORS.muted}> interrupted</Text>,
+          body !== '' && <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
+        )}
       </Box>
       {(facts.length > 0 || changed) && (
         <Box columnGap={1}>
@@ -628,26 +670,32 @@ function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Recor
 }
 
 // 호출 한 줄: "Edited register.tsx +12 −3 ›", 누르면 아래로 펼친다.
-function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, indent = 0, openFirst = false) {
-  if (isAgentTool(call.tool)) return agentCard(els, $, call, openState)
+function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, columns: number, rich: boolean, indent = 0, openFirst = false) {
+  if (isAgentTool(call.tool)) return agentCard(els, $, call, openState, rich)
   const { Box, Text, Button } = els
   const id = call.tool_use_id
   const isOpen = openState[id] ?? openFirst
   const stat = diffStat(call)
   const answer = call.tool === 'AskUserQuestion' ? askAnswer(call.output) : null
+  // 버튼 안의 글은 칸에 맞춰 잘리지 않으니 직접 자른다(동사·칩·꺾쇠 몫을 빼고).
+  const room = Math.max(12, columns - indent - cellWidth(verbOf(call.tool)) - (stat ? 16 : 0) - 8)
   return (
     <Box flexDirection="column" paddingLeft={indent}>
       <Box columnGap={1}>
         {call.isRunning && <Text color={COLORS.clay}>···</Text>}
-        <Button key={`row-${id}`} plain dimColor label={verbOf(call.tool)} onPress={() => toggle($, id, isOpen)} />
-        <Text color={COLORS.muted} wrap="truncate-end">
-          {summarize(call.tool, call.input)}
-        </Text>
-        {stat && diffChips(els.Text, stat.added, stat.removed)}
-        {answer && <Text color={COLORS.text} wrap="truncate-end">{`→ ${answer}`}</Text>}
-        {call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}>failed</Text>}
-        {call.isInterrupted && <Text color={COLORS.muted}>interrupted</Text>}
-        <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>
+        {rowButton(
+          els,
+          rich,
+          { key: `row-${id}`, dimColor: true, onPress: () => toggle($, id, isOpen) },
+          verbOf(call.tool),
+          <Text color={COLORS.muted}>{` ${clip(summarize(call.tool, call.input), answer ? Math.ceil(room / 2) : room)}`}</Text>,
+          stat && ' ',
+          stat && diffChips(els.Text, stat.added, stat.removed),
+          answer && <Text color={COLORS.text}>{` → ${clip(answer, Math.floor(room / 2))}`}</Text>,
+          call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}> failed</Text>,
+          call.isInterrupted && <Text color={COLORS.muted}> interrupted</Text>,
+          <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
+        )}
       </Box>
       {isOpen && (
         <Box marginLeft={2} borderStyle="round" borderColor={COLORS.border} paddingX={1} flexDirection="column">
@@ -660,10 +708,10 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
 
 // 묶음 한 줄: "Ran 2 commands, edited 3 files +54 −12 ›", 펼치면 호출마다 한 줄.
 // 데스크톱처럼 성공한 편집은 펼치자마자 diff 까지 보인다.
-function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], openState: Record<string, boolean>) {
+function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], openState: Record<string, boolean>, columns: number, rich: boolean) {
   // 에이전트만 모인 묶음은 접지 않고 카드를 쌓는다.
   if (calls.length > 0 && calls.every(call => isAgentTool(call.tool))) {
-    return <els.Box flexDirection="column">{calls.map(call => agentCard(els, $, call, openState))}</els.Box>
+    return <els.Box flexDirection="column">{calls.map(call => agentCard(els, $, call, openState, rich))}</els.Box>
   }
   const { Box, Text, Button } = els
   const key = `run-${runId}`
@@ -675,11 +723,17 @@ function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], 
     <Box flexDirection="column">
       <Box columnGap={1}>
         {calls.some(call => call.isRunning) && <Text color={COLORS.clay}>···</Text>}
-        <Button key={key} plain dimColor label={describeCalls(calls)} onPress={() => toggle($, key)} />
-        {stats.length > 0 && diffChips(els.Text, added, removed)}
-        <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>
+        {rowButton(
+          els,
+          rich,
+          { key, dimColor: true, onPress: () => toggle($, key) },
+          describeCalls(calls),
+          stats.length > 0 && ' ',
+          stats.length > 0 && diffChips(els.Text, added, removed),
+          <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
+        )}
       </Box>
-      {isOpen && calls.map(call => callLine(els, $, call, openState, 2, isEditShown(call)))}
+      {isOpen && calls.map(call => callLine(els, $, call, openState, columns, rich, 2, isEditShown(call)))}
     </Box>
   )
 }
@@ -717,7 +771,7 @@ export const register: Register = (on, options) => {
   const side = bubbleSide(options)
   const edge = side === 'right' ? 'flex-end' : 'flex-start'
   const chipMode = contextChipMode(options)
-  registerAsk(on)
+  registerAsk(on, options.askNotify !== 'off')
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -735,6 +789,10 @@ export const register: Register = (on, options) => {
     })
     void refreshDiff($).catch(() => undefined)
     void refreshUsage($).catch(() => undefined)
+    void $.session
+      .version()
+      .then(engine => update($, richButtons, () => supportsRichButtons(engine.base ?? engine.version)))
+      .catch(() => undefined)
     void refreshSurface($).catch(() => undefined)
     // 테마를 바꾸면 3초 안에 말풍선·아래턱 색이 따라간다. 바뀌지 않았으면 다시 그리지 않는다.
     themeWatch?.cancel()
@@ -849,7 +907,7 @@ export const register: Register = (on, options) => {
       const els = $.ui.resolve(e)
       const [openState, state] = await Promise.all([read($, open), read($, runs)])
       if (e.props.task) return taskRow(els, e.props.task, e.props.text, state)
-      return peerRow(els, $, e.props.from?.name ?? 'agent', e.props.text, openState, e.viewport?.columns ?? 80)
+      return peerRow(els, $, e.props.from?.name ?? 'agent', e.props.text, openState, e.viewport?.columns ?? 80, await read($, richButtons))
     }
     if (e.surface !== 'terminal' || e.props.origin.kind !== 'composer') {
       return next(e)
@@ -922,8 +980,8 @@ export const register: Register = (on, options) => {
     const [state, openState] = await Promise.all([read($, runs), read($, open)])
     const plan = planRow([e.props.tool_use_id], state)
     if (plan.kind === 'hide') return <els.Box display="none" />
-    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState)
-    return callLine(els, $, asRunCall(e.props), openState)
+    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80, await read($, richButtons))
+    return callLine(els, $, asRunCall(e.props), openState, e.viewport?.columns ?? 80, await read($, richButtons))
   })
 
   // 데스크톱은 결과를 따로 그리지 않는다. 펼친 행 안에서 보여 준다.
@@ -945,8 +1003,8 @@ export const register: Register = (on, options) => {
     const ids = e.props.calls.map(call => call.tool_use_id).filter((id): id is string => id !== undefined)
     const plan = planRow(ids, state)
     if (plan.kind === 'hide') return <els.Box display="none" />
-    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState)
-    return runLine(els, $, e.requestId, e.props.calls.map(asRunCall), openState)
+    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80, await read($, richButtons))
+    return runLine(els, $, e.requestId, e.props.calls.map(asRunCall), openState, e.viewport?.columns ?? 80, await read($, richButtons))
   })
 
   // 진행 표시: 데스크톱의 "··· Running… 2m 29s". 클레이색 점 셋이 돌고, 경과 시간은 흐리게.
@@ -1028,7 +1086,7 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
     const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
-    const meter = contextMeter(els, $, await read($, usage), chipMode)
+    const meter = contextMeter(els, $, await read($, usage), chipMode, await read($, richButtons))
     const reserve = meter === null ? 0 : meter.width + 1
     const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
     // 컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
@@ -1127,7 +1185,9 @@ export const register: Register = (on, options) => {
   // 세션 패널: 프로젝트별로 묶은 최근 세션. 현재 세션은 클레이색 ●.
   on('ui.render', { component: 'Pane', requestId: SESSIONS_PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
-    const { Box, Text, Button, Input } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button, Input } = els
+    const rich = await read($, richButtons)
     const [list, query, cwd, current, now, home] = await Promise.all([
       read($, sessions),
       read($, sessionQuery),
@@ -1174,14 +1234,13 @@ export const register: Register = (on, options) => {
                 <Text color={entry.id === current ? COLORS.clay : COLORS.muted}>
                   {entry.id === current ? ' ●' : String(order.indexOf(entry.id) + 1).padStart(2)}
                 </Text>
-                <Button
-                  key={`open-${entry.id}`}
-                  plain
-                  dimColor={entry.id !== current}
-                  label={clip(entry.title, room)}
-                  onPress={() => openSession($, entry)}
-                />
-                <Text color={COLORS.muted}>{ago(entry.updatedAt, now)}</Text>
+                {rowButton(
+                  els,
+                  rich,
+                  { key: `open-${entry.id}`, dimColor: entry.id !== current, onPress: () => openSession($, entry) },
+                  clip(entry.title, room),
+                  <Text color={COLORS.muted}>{` ${ago(entry.updatedAt, now)}`}</Text>,
+                )}
               </Box>
             ))}
           </Box>
@@ -1388,6 +1447,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
   const state = await read($, asking)
   const question = state?.questions[state.step]
   if (!state || !question) return null
+  const rich = await read($, richButtons)
   const done = (card: ReturnType<typeof h>) => ({ card, rows })
   const picks = state.picks[state.step] ?? []
   const text = state.texts[state.step] ?? ''
@@ -1502,18 +1562,19 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
             const mark = question.multiSelect ? (isPicked ? '☑ ' : '☐ ') : ''
             return (
               <Box key={`opt-${k}-${index}`} columnGap={2} hover={option.preview ? { scope: `askp-${k}-${index}` } : undefined}>
-                <Button
-                  key={`ask-${k}-${index}`}
-                  plain
-                  hover={{ color: COLORS.clay }}
-                  hotkey={index < 8 ? String(index + 1) : undefined}
-                  label={`${mark}${option.label}`}
-                  onPress={() => void pickAsk($, state, option.label, isPicked)}
-                />
-                {option.description && option.description !== option.label && (
-                  <Text color={COLORS.muted} wrap="truncate-end">
-                    {option.description}
-                  </Text>
+                {rowButton(
+                  els,
+                  rich,
+                  {
+                    key: `ask-${k}-${index}`,
+                    hover: { color: COLORS.clay },
+                    hotkey: index < 8 ? String(index + 1) : undefined,
+                    onPress: () => void pickAsk($, state, option.label, isPicked),
+                  },
+                  `${mark}${option.label}`,
+                  option.description && option.description !== option.label && (
+                    <Text color={COLORS.muted}>{`  ${clip(option.description, Math.max(10, columns - cellWidth(mark + option.label) - 10))}`}</Text>
+                  ),
                 )}
               </Box>
             )

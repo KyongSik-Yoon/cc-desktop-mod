@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Claude 데스크톱 앱 Code 탭처럼 보이도록 터미널 transcript 를 다시 그린다",
   "author": {
     "name": "KyongSik-Yoon",
@@ -31,6 +31,17 @@
         "off"
       ],
       "default": "auto",
+      "required": false
+    },
+    "askNotify": {
+      "type": "string",
+      "title": "질문 알림",
+      "description": "질문 카드가 뜰 때 알림을 보낸다(엔진 창이 보내던 것과 같은 채널, preferredNotifChannel). off 는 끔",
+      "options": [
+        "on",
+        "off"
+      ],
+      "default": "on",
       "required": false
     }
   }

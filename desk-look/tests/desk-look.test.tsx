@@ -539,7 +539,7 @@ test('할 일 목록 다시 세우기와 보일 줄', () => {
   expect(visibleTasks(many.map(item => ({ ...item, status: 'completed' as const })), 6).shown).toEqual([])
 })
 
-import { answerOf, numberProblem, parseQuestions } from '../hooks/ask'
+import { answerOf, askNotice, numberProblem, parseQuestions } from '../hooks/ask'
 
 test('질문 카드: 그릴 수 있는 질문과 답 모양', () => {
   const questions = parseQuestions([
@@ -663,8 +663,13 @@ const wait = (ms: number) =>
 test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결과', async ($, on) => {
   let answer: (stdout: string) => void = () => undefined
   const waiting = new Promise<string>(resolve => (answer = resolve))
+  const notified: unknown[] = []
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('clock.now', () => ({ value: Date.now() }))
+  on('ui.notify', ($, e) => {
+    notified.push(e)
+    return { value: { isSent: true, channel: 'ghostty' } }
+  })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine-band</Text>
@@ -702,6 +707,10 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
   await band.press({ key: key ?? '' })
   const result = (await call) as { result?: { answers?: Record<string, string> } }
   expect(result.result?.answers).toEqual({ '어느 쪽?': '오른쪽' })
+  // 엔진 창이 보내던 알림을 카드가 대신 보낸다
+  expect(notified).toEqual([{ text: '어느 쪽?', title: 'Claude 질문' }])
+  // 선택지 설명은 버튼 안에 들어가 줄 전체가 눌린다
+  expect(drawn).toContain('넓음')
   await band.unmount()
 })
 
@@ -890,3 +899,52 @@ test('컨텍스트 칩 always 설정', { options: { contextChip: 'always' } }, a
   expect(await band.find({ type: 'Button', key: 'context-chip' })).toBeDefined()
   await band.unmount()
 })
+
+test('질문 알림 본문: 첫 질문, 여러 개면 외 N개', () => {
+  const q = (question: string) => ({ question, header: '', kind: 'choice' as const, options: [{ label: 'a' }], multiSelect: false })
+  expect(askNotice([q('어느 쪽?')])).toBe('어느 쪽?')
+  expect(askNotice([q('어느 쪽?'), q('몇 개?'), q('언제?')])).toBe('어느 쪽? (외 2개)')
+})
+
+import { supportsRichButtons } from '../hooks/register'
+
+test('줄 전체 버튼은 2.1.295 부터', () => {
+  expect(supportsRichButtons('2.1.294')).toBe(false)
+  expect(supportsRichButtons('2.1.295')).toBe(true)
+  expect(supportsRichButtons('2.1.295-dev')).toBe(true)
+  expect(supportsRichButtons('2.2.0')).toBe(true)
+  expect(supportsRichButtons('3.0.0')).toBe(true)
+  expect(supportsRichButtons(undefined)).toBe(false)
+})
+
+for (const version of ['2.1.295', '2.1.294']) {
+  const rich = version !== '2.1.294'
+  test(`에이전트 메시지 줄 버튼 모양 (${version}: ${rich ? '줄 전체' : '이름만'})`, async ($, on) => {
+    on('session.version', () => ({ value: { version, base: version } }))
+    on('command.register', () => ({ value: undefined as never }))
+    on('clock.every', () => ({ value: undefined }))
+    on('session.start', ($, e) => e as never)
+    await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+    const row = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'UserMessage',
+      viewport: VIEWPORT,
+      props: { text: '첫 줄 미리보기\n\n본문', origin: { kind: 'unclassified' }, isExpanded: false, from: { name: '@Explore' } } as never,
+    })
+    let drawn = JSON.stringify(await row.drawn())
+    for (let tries = 0; tries < 50 && rich && !/"type":"Button"[^}]*"children"/.test(drawn); tries++) {
+      await wait(10)
+      drawn = JSON.stringify(await row.drawn())
+    }
+    const key = /"key":"(peer-[^"]+)"/.exec(drawn)?.[1] ?? ''
+    const button = await row.find({ type: 'Button', key })
+    expect(button).toBeDefined()
+    // 줄 전체 모양이면 미리보기가 버튼 안에, 옛 모양이면 이름이 라벨이고 미리보기는 옆에
+    expect(JSON.stringify(button).includes('첫 줄 미리보기')).toBe(rich)
+    expect(drawn).toContain('첫 줄 미리보기')
+    await row.press({ key })
+    expect(await row.find({ type: 'Text', text: /본문/ })).toBeDefined()
+    await row.unmount()
+  })
+}

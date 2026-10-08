@@ -97,6 +97,8 @@ declare module 'claude-code' {
       // 컨텍스트·사용 한도(턴이 끝날 때마다), 그리고 컨텍스트 패널을 열 때 계산한 항목별 내역.
       usage: UsageInfo | null
       usageBreakdown: UsageBreakdown | null
+      // Button 안에 글·Text 를 넣을 수 있는 엔진(2.1.295+)인지.
+      richButtons: boolean
     }
   }
 }
