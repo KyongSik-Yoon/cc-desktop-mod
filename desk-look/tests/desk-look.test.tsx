@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
+import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
 const VIEWPORT = { columns: 100, rows: 40 }
@@ -261,6 +261,9 @@ test('순수 함수', async () => {
   expect(lineChange('a\nhello\nb', 'a\nhi\nb')).toEqual({ added: 1, removed: 1 })
   expect(lineChange('', 'new')).toEqual({ added: 1, removed: 0 })
   expect(editHunk('a', 'b')).toBe('@@ -1,1 +1,1 @@\n-a\n+b')
+  // 편집 결과에 헌크가 있으면 파일 기준 줄 번호를 쓴다
+  expect(patchOf({ structuredPatch: [{ oldStart: 2, oldLines: 2, newStart: 2, newLines: 2, lines: [' a', '-b', '+c'] }] })).toBe('@@ -2,2 +2,2 @@\n a\n-b\n+c')
+  expect(patchOf('ok')).toBeNull()
   // 문맥 줄은 −/+ 가 아니라 공백으로, 두 줄까지만
   expect(editHunk('1\n2\n3\nold\n4', '1\n2\n3\nnew\n4')).toBe('@@ -2,4 +2,4 @@\n 2\n 3\n-old\n+new\n 4')
 

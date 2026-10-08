@@ -7,13 +7,15 @@ const LIMIT = 4000
 
 const clip = (text: string) => (text.length > LIMIT ? `${text.slice(0, LIMIT)}\n…` : text)
 
-function outputOf(value: unknown): string | undefined {
+function outputOf(value: unknown): string | { structuredPatch: unknown[] } | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value === 'string') return clip(value)
   const fields = value as Record<string, unknown>
   if (typeof fields.stdout === 'string') {
     return clip([fields.stdout, typeof fields.stderr === 'string' ? fields.stderr : ''].filter(Boolean).join('\n'))
   }
+  // 편집 결과: 파일 전문(originalFile)은 버리고 실제 줄 번호가 붙은 헌크만 둔다.
+  if (Array.isArray(fields.structuredPatch)) return { structuredPatch: fields.structuredPatch.slice(0, 20) }
   const file = (fields.file ?? {}) as Record<string, unknown>
   const content = typeof file.content === 'string' ? file.content : typeof fields.content === 'string' ? fields.content : undefined
   if (content !== undefined) return clip(content)

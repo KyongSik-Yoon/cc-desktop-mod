@@ -247,7 +247,19 @@ function cap(text: string, lines: number): string {
   return all.length <= lines ? all.join('\n') : `${all.slice(0, lines).join('\n')}\n… ${all.length - lines}줄 더`
 }
 
-// 편집 하나를 diff 헌크로: 바뀐 줄만 −/+, 앞뒤 같은 줄은 문맥으로 두 줄까지.
+// Edit·MultiEdit 결과의 structuredPatch: 파일 기준 줄 번호와 앞뒤 문맥이 붙은 헌크. 없으면 null.
+export function patchOf(output: unknown): string | null {
+  const hunks = (output as { structuredPatch?: unknown } | null | undefined)?.structuredPatch
+  if (!Array.isArray(hunks) || hunks.length === 0) return null
+  return hunks
+    .map(hunk => {
+      const h = hunk as { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }
+      return [`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, ...h.lines].join('\n')
+    })
+    .join('\n')
+}
+
+// 편집 하나를 diff 헌크로(결과에 헌크가 없을 때): 바뀐 줄만 −/+, 앞뒤 같은 줄은 문맥으로 두 줄까지.
 export function editHunk(oldText: string, newText: string, context = 2): string {
   const before = linesOf(oldText)
   const after = linesOf(newText)
@@ -394,17 +406,10 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall) {
         </Box>
       )
     case 'Edit':
-      return (
-        <Code
-          source={cap(editHunk(stringField(fields, 'old_string') ?? '', stringField(fields, 'new_string') ?? ''), 40)}
-          path={filePath}
-          format="diff"
-        />
-      )
     case 'MultiEdit': {
-      const edits = Array.isArray(fields.edits) ? fields.edits.map(fieldsOf) : []
-      const hunks = edits.map(edit => editHunk(stringField(edit, 'old_string') ?? '', stringField(edit, 'new_string') ?? ''))
-      return <Code source={cap(hunks.join('\n'), 40)} path={filePath} format="diff" />
+      const edits = call.tool === 'Edit' ? [fields] : Array.isArray(fields.edits) ? fields.edits.map(fieldsOf) : []
+      const guessed = edits.map(edit => editHunk(stringField(edit, 'old_string') ?? '', stringField(edit, 'new_string') ?? ''))
+      return <Code source={cap(patchOf(call.output) ?? guessed.join('\n'), 40)} path={filePath} format="diff" />
     }
     case 'Write':
       return <Code source={cap(stringField(fields, 'content') ?? '', 40)} path={filePath} />
