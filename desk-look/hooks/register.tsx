@@ -1072,8 +1072,9 @@ export const register: Register = on => {
         <Input
           key="sessions-search"
           label="검색"
-          placeholder="제목이나 폴더, Enter 로 첫 결과 열기"
+          placeholder="제목이나 폴더"
           value={query}
+          submitLabel="첫 결과 열기"
           autoFocus
           onInput={value => void update($, sessionQuery, () => value)}
           onSubmit={value => {
