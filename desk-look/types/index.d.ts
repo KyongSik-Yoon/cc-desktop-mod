@@ -24,7 +24,11 @@ export type ImageInfo = { path: string; width: number; height: number }
 // 한 턴에 편집 도구로 바꾼 파일. 턴이 끝나면 소요 시간과 함께 카드로 남는다.
 export type TurnEdit = { path: string; added: number; removed: number }
 
-export type TurnCard = { durationMs: number; files: TurnEdit[] }
+// text: 그 턴의 답변(턴 끝 줄의 복사 버튼용). 예전 기록에는 없다.
+// 할 일 목록 한 줄(TodoWrite·TaskCreate 에서).
+export type TaskItem = { id: string; subject: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }
+
+export type TurnCard = { durationMs: number; files: TurnEdit[]; text?: string }
 
 // 세션 패널 한 줄: ~/.claude/projects 의 기록 파일 하나.
 export type SessionEntry = { id: string; updatedAt: number; cwd: string; title: string }
@@ -47,6 +51,8 @@ declare module 'claude-code' {
       turnStartedAt: number | null
       // 스피너를 다시 그리게 하는 시계(ms).
       tick: number
+      // 지금의 할 일 목록.
+      tasks: TaskItem[]
     }
   }
 }

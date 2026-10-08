@@ -13,7 +13,8 @@ mod 는 Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두�
 | mermaid | 코드 블록 | 박스 그림 ([lovely-mermaid](https://github.com/xl0/lovely-mermaid)), 화살촉이 상자에 꽂힘 |
 | `> [!NOTE]` 알림 | 인용문 | 종류별 색 테두리 박스 |
 | 도구 호출 | 호출마다 행 + 결과 블록 | 이어진 호출을 `Ran 2 commands, edited a file +3 −1 ›` 한 줄로 접고, 누르면 펼침 |
-| 턴 끝 | 소요 시간 줄 | 그 턴에 고친 파일 카드 `Edited N files +N −M` |
+| 턴 끝 | 소요 시간 줄 | 그 턴에 고친 파일 카드 `Edited N files +N −M`, 오른쪽 끝에 답변 복사 `⧉ copy` |
+| 할 일 | 도구 줄 | 입력창 위 체크리스트 카드 `Tasks 2/5` (✓ 끝남, ◉ 하는 중, ○ 남음). `TodoWrite`·`TaskCreate` 가 있는 세션에서만 |
 | 입력창 위 | — | 데스크톱 입력창 아래턱 같은 둥근 회색 띠: 왼쪽 `저장소  브랜치`, 오른쪽 `+N −M` |
 | 진행 표시 | `✻ Simmering… (12s · ↓ 300 tokens)` | `●·· Running…  2m 29s` (하는 일에 맞춘 낱말, 클레이색 점) |
 | 코드 블록 | 복사 수단 없음 | 마우스를 올리면 위 테두리 오른쪽에 `⧉ copy`, 누르면 `/copy` 와 같은 길로 복사 |

@@ -461,3 +461,50 @@ test('진행 표시 글자', () => {
   expect(formatElapsed(3_720_000)).toBe('1h 2m')
   expect([0, 500, 1000, 1500].map(spinnerDots)).toEqual(['●··', '·●·', '··●', '●··'])
 })
+
+import { computeTasks, visibleTasks } from '../hooks/tasks'
+
+test('할 일 목록 다시 세우기와 보일 줄', () => {
+  const ok = (id: string, result: unknown) => ({ tool_use_id: id, text: 'ok', isError: false, result })
+  const list = computeTasks([
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [
+        { tool_use_id: 'a', tool: 'TaskCreate', input: { subject: '아래턱', activeForm: '아래턱 그리는 중' } },
+        { tool_use_id: 'b', tool: 'TaskCreate', input: { subject: '스피너' } },
+        { tool_use_id: 'c', tool: 'TaskCreate', input: { subject: '버릴 일' } },
+      ],
+    },
+    { role: 'user', text: '', toolUses: [], toolResults: [ok('a', { task: { id: '1', subject: '아래턱' } }), ok('b', { task: { id: '2', subject: '스피너' } }), ok('c', { task: { id: '3', subject: '버릴 일' } })] },
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [
+        { tool_use_id: 'd', tool: 'TaskUpdate', input: { taskId: '1', status: 'completed' } },
+        { tool_use_id: 'e', tool: 'TaskUpdate', input: { taskId: '2', status: 'in_progress' } },
+        { tool_use_id: 'f', tool: 'TaskUpdate', input: { taskId: '3', status: 'deleted' } },
+        { tool_use_id: 'g', tool: 'TaskUpdate', input: { taskId: '2', status: 'completed' } },
+      ],
+    },
+    { role: 'user', text: '', toolUses: [], toolResults: [ok('d', {}), ok('e', {}), ok('f', {}), { tool_use_id: 'g', text: 'boom', isError: true }] },
+  ])
+  expect(list.map(item => [item.id, item.status])).toEqual([
+    ['1', 'completed'],
+    ['2', 'in_progress'],
+  ])
+  const todos = computeTasks([
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't', tool: 'TodoWrite', input: { todos: [{ content: '가', status: 'completed', activeForm: '가 중' }, { content: '나', status: 'pending', activeForm: '나 중' }] } }] },
+  ])
+  expect(todos.map(item => item.subject)).toEqual(['가', '나'])
+
+  const many = Array.from({ length: 9 }, (_, index) => ({
+    id: String(index),
+    subject: `일 ${index}`,
+    status: (index < 5 ? 'completed' : index === 5 ? 'in_progress' : 'pending') as 'completed' | 'in_progress' | 'pending',
+  }))
+  const view = visibleTasks(many, 6)
+  expect(view.shown.map(item => item.id)).toEqual(['3', '4', '5', '6', '7', '8'])
+  expect(view.hidden).toBe(3)
+  expect(visibleTasks(many.map(item => ({ ...item, status: 'completed' as const })), 6).shown).toEqual([])
+})

@@ -1,11 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, SessionEntry, Surface, TurnCard, TurnEdit } from '../types'
+import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, renderMarkdown } from './markdown'
 import { computeRuns } from './runs'
 import { LIST_SESSIONS, ago, clip, groupSessions, numbered, parseSessions } from './sessions'
+import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 
 export { cellWidth } from './markdown'
@@ -39,6 +40,7 @@ const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const,
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
+const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
@@ -50,6 +52,9 @@ let spinnerFallbackStart = 0
 
 const FILE_EDITING = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
 const CARD_ROWS = 3
+// 턴 기록은 최근 60턴, 복사할 답변은 턴마다 5만 자까지만 둔다.
+const TURN_CARDS = 60
+const MAX_COPY = 50_000
 
 // 같은 파일을 여러 번 고치면 한 줄로 합친다.
 export function mergeEdit(list: TurnEdit[], edit: TurnEdit): TurnEdit[] {
@@ -340,15 +345,18 @@ async function openSession($: EngineInterface, entry: SessionEntry) {
 }
 
 // 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 멀티플렉서·SSH 안에서도 된다.
-async function copyCode($: EngineInterface, source: string, press: UiPressArgument) {
-  const copied = await $.ui.copy({ text: source, surface: press.surface })
-  const lines = source.split('\n').length
-  $.ui.toast(copied.isCopied ? `코드 ${lines}줄을 복사했어요` : `복사하지 못했어요: ${copied.reason}`)
+async function copyText($: EngineInterface, text: string, press: UiPressArgument, what: string) {
+  const copied = await $.ui.copy({ text, surface: press.surface })
+  const lines = text.split('\n').length
+  $.ui.toast(copied.isCopied ? `${what} ${lines}줄을 복사했어요` : `복사하지 못했어요: ${copied.reason}`)
 }
 
 async function refreshRuns($: EngineInterface) {
-  const next = computeRuns(await $.session.messages())
+  const messages = await $.session.messages()
+  const next = computeRuns(messages)
   await update($, runs, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
+  const list = computeTasks(messages)
+  await update($, tasks, previous => (JSON.stringify(previous) === JSON.stringify(list) ? previous : list))
 }
 
 type Els = Elements['terminal']
@@ -512,8 +520,9 @@ export const register: Register = on => {
     const done = await next(e)
     if (e.agentId === undefined) {
       const files = await read($, pendingEdits)
-      if (files.length > 0) {
-        await update($, turnCards, cards => [...cards, { durationMs: e.durationMs, files }].slice(-100))
+      const text = done.text.trim().slice(0, MAX_COPY)
+      if (files.length > 0 || text !== '') {
+        await update($, turnCards, cards => [...cards, { durationMs: e.durationMs, files, text }].slice(-TURN_CARDS))
       }
       await update($, pendingEdits, () => [])
       await update($, turnStartedAt, () => null)
@@ -620,7 +629,7 @@ export const register: Register = on => {
 
     return (
       <els.Box flexDirection="column" marginTop={e.props.isFirstOfReply ? 1 : 0}>
-        {renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns, { onCopy: (source, press) => void copyCode($, source, press) })}
+        {renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns, { onCopy: (source, press) => void copyText($, source, press, '코드') })}
       </els.Box>
     )
   })
@@ -691,53 +700,23 @@ export const register: Register = on => {
     )
   })
 
-  // 입력창 위 칩: "저장소  브랜치  +63 −29". 다른 플러그인의 밴드는 위에 그대로 둔다.
+  // 입력창 위: 할 일 카드와 "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 위에 그대로 둔다.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) {
       return next(e)
     }
     const below = await next(e)
-    const info = await read($, repo)
-    if (info === null) {
-      return below
-    }
-    const { Box, Text } = $.ui.resolve(e)
-    const face = await read($, surface)
-    const files = await read($, diff)
-    const added = files.reduce((sum, file) => sum + file.added, 0)
-    const removed = files.reduce((sum, file) => sum + file.removed, 0)
-
-    if (!face) {
-      return (
-        <Box flexDirection="column">
-          {below}
-          <Box columnGap={2} paddingX={1}>
-            <Text color={COLORS.muted}>{info.name}</Text>
-            {info.branch && <Text color={COLORS.muted}>{info.branch}</Text>}
-            {files.length > 0 && diffChips(Text, added, removed)}
-          </Box>
-        </Box>
-      )
-    }
-
-    // 데스크톱 입력창의 회색 아래턱: 폭을 채운 알약 띠, 왼쪽에 저장소·브랜치, 오른쪽에 diff 칩.
-    const left = chinLabel(info.name, info.branch)
-    const chips = files.length > 0 ? ` +${added}  −${removed} ` : ''
-    const gap = Math.max(1, e.props.bodyColumns - 2 - cellWidth(left) - cellWidth(chips) - 1)
+    const [info, list] = await Promise.all([read($, repo), read($, tasks)])
+    const els = $.ui.resolve(e)
+    const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
+    const chin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns)
+    if (plan === null && chin === null) return below
     return (
-      <Box flexDirection="column">
+      <els.Box flexDirection="column">
         {below}
-        <Text>
-          <Text color={face.bubble}>{EDGES.single[0]}</Text>
-          <Text color={COLORS.muted} backgroundColor={face.bubble}>
-            {left}
-          </Text>
-          <Text backgroundColor={face.bubble}>{' '.repeat(gap)}</Text>
-          {files.length > 0 && diffChips(Text, added, removed)}
-          <Text backgroundColor={face.bubble}> </Text>
-          <Text color={face.bubble}>{EDGES.single[1]}</Text>
-        </Text>
-      </Box>
+        {plan}
+        {chin}
+      </els.Box>
     )
   })
 
@@ -748,6 +727,24 @@ export const register: Register = on => {
     const card = cardFor(await read($, turnCards), e.props.durationMs)
     if (!card) return line
     const { Box, Text, Button } = $.ui.resolve(e)
+    const answer = card.text ?? ''
+    // 데스크톱 답변 아래의 복사 버튼: 턴 끝 줄과 나란히, 오른쪽 끝에 흐리게. 그 줄이 위에 빈 줄을
+    // 두면(paneline 등) 버튼은 그 빈 줄, 곧 답변 바로 아래에 놓인다. 줄은 늘지 않는다.
+    const head = (
+      <Box columnGap={2}>
+        {line}
+        {answer !== '' && (
+          <Button
+            key={`copy-turn-${card.durationMs}`}
+            plain
+            dimColor
+            label="⧉ copy"
+            onPress={press => void copyText($, answer, press, '답변')}
+          />
+        )}
+      </Box>
+    )
+    if (card.files.length === 0) return head
     const key = `card-${card.durationMs}`
     const isOpen = (await read($, open))[key] ?? false
     const added = card.files.reduce((sum, file) => sum + file.added, 0)
@@ -759,7 +756,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {line}
+        {head}
         <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
           <Box justifyContent="space-between">
             <Text color={COLORS.text} bold>
@@ -875,6 +872,79 @@ export const register: Register = on => {
       </Box>
     )
   })
+}
+
+// 데스크톱 입력창의 회색 아래턱: 폭을 채운 알약 띠, 왼쪽에 저장소·브랜치, 오른쪽에 diff 칩.
+// omarchy 테마를 못 읽으면 띠 없이 칩만.
+async function chinBand($: EngineInterface, els: Elements['terminal'], info: RepoInfo, columns: number) {
+  const { Box, Text } = els
+  const face = await read($, surface)
+  const files = await read($, diff)
+  const added = files.reduce((sum, file) => sum + file.added, 0)
+  const removed = files.reduce((sum, file) => sum + file.removed, 0)
+  if (!face) {
+    return (
+      <Box columnGap={2} paddingX={1}>
+        <Text color={COLORS.muted}>{info.name}</Text>
+        {info.branch && <Text color={COLORS.muted}>{info.branch}</Text>}
+        {files.length > 0 && diffChips(Text, added, removed)}
+      </Box>
+    )
+  }
+  const left = chinLabel(info.name, info.branch)
+  const chips = files.length > 0 ? ` +${added}  −${removed} ` : ''
+  const gap = Math.max(1, columns - 2 - cellWidth(left) - cellWidth(chips) - 1)
+  return (
+    <Text>
+      <Text color={face.bubble}>{EDGES.single[0]}</Text>
+      <Text color={COLORS.muted} backgroundColor={face.bubble}>
+        {left}
+      </Text>
+      <Text backgroundColor={face.bubble}>{' '.repeat(gap)}</Text>
+      {files.length > 0 && diffChips(Text, added, removed)}
+      <Text backgroundColor={face.bubble}> </Text>
+      <Text color={face.bubble}>{EDGES.single[1]}</Text>
+    </Text>
+  )
+}
+
+// 데스크톱의 계획 카드: 끝난 일 ✓(흐리게), 하는 중 ◉(클레이, 진행형 문구), 남은 일 ○.
+const TASK_ROWS = 6
+const TASK_MARKS = {
+  completed: { mark: '✓', color: COLORS.success, text: COLORS.muted },
+  in_progress: { mark: '◉', color: COLORS.clay, text: COLORS.text },
+  pending: { mark: '○', color: COLORS.muted, text: COLORS.text },
+} as const
+
+export function taskCard(els: Elements['terminal'], list: ReadonlyArray<TaskItem>, columns: number, rows: number) {
+  const { Box, Text } = els
+  const { shown, hidden } = visibleTasks(list, Math.max(2, rows))
+  if (shown.length === 0) return null
+  const done = list.filter(item => item.status === 'completed').length
+  const width = Math.max(24, Math.min(columns, 72))
+  return (
+    <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
+      <Box columnGap={1}>
+        <Text color={COLORS.text} bold>
+          Tasks
+        </Text>
+        <Text color={COLORS.muted}>{`${done}/${list.length}`}</Text>
+      </Box>
+      {shown.map(item => {
+        const style = TASK_MARKS[item.status]
+        const label = item.status === 'in_progress' ? (item.activeForm ?? item.subject) : item.subject
+        return (
+          <Text wrap="truncate-end">
+            <Text color={style.color}>{`${style.mark} `}</Text>
+            <Text color={style.text} bold={item.status === 'in_progress'}>
+              {label}
+            </Text>
+          </Text>
+        )
+      })}
+      {hidden > 0 && <Text color={COLORS.muted}>{`+${hidden} more`}</Text>}
+    </Box>
+  )
 }
 
 // 터미널은 Box 배경을 칠하지 않으므로 말풍선의 모든 칸을 글자 바탕으로 칠한다.
