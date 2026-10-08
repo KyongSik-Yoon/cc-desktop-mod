@@ -303,8 +303,9 @@ async function refreshImages($: EngineInterface) {
 }
 
 async function refreshSessions($: EngineInterface) {
-  const ran = await $.process.run(['sh', '-c', LIST_SESSIONS, 'sh', '40'], { timeoutMs: 5000 })
-  const next = ran.exitCode === 0 ? parseSessions(ran.stdout) : []
+  // 빈 세션을 걸러 낸 뒤에도 40개가 차도록 넉넉히 읽는다
+  const ran = await $.process.run(['sh', '-c', LIST_SESSIONS, 'sh', '80'], { timeoutMs: 5000 })
+  const next = ran.exitCode === 0 ? parseSessions(ran.stdout).slice(0, 40) : []
   await update($, sessions, () => next)
 }
 

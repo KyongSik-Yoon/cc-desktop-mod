@@ -19,7 +19,10 @@ export function parseSessions(listing: string): SessionEntry[] {
   for (const line of listing.split('\n')) {
     const [id, mtime, cwd, custom, ai, last] = line.split('\t')
     if (!id || !mtime || !/^[0-9a-f-]{36}$/.test(id)) continue
-    out.push({ id, updatedAt: Number(mtime) * 1000, cwd: cwd ?? '', title: custom || ai || last || '(제목 없음)' })
+    // 제목도 프롬프트도 없는 세션은 대화가 한 번도 없었던 빈 세션이라 목록에서 뺀다
+    const title = custom || ai || last
+    if (!title) continue
+    out.push({ id, updatedAt: Number(mtime) * 1000, cwd: cwd ?? '', title })
   }
   return out
 }

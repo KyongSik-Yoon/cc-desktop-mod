@@ -415,6 +415,7 @@ test('세션 목록 읽기·묶기·표시', async () => {
     'ab12bc38-9375-438b-b199-90724fcb83cd\t1791456080\t/home/u/repo\t\tClaude Code 모드 아이디어',
     '83c92571-f2bb-4513-8111-da82e042ba8f\t1791455457\t/home/u/other\t직접 붙인 이름\t자동 제목',
     '554bfb0b-ba79-4f30-bf0b-03fb9fcd7140\t1791455005\t/home/u/repo\t\t\t마지막 프롬프트',
+    '65688aaf-c25e-4243-975e-4e7a106d7071\t1791455000\t/home/u/repo\t\t\t',
     'not-a-session\t1\t/x\t\t',
   ].join('\n')
   const list = parseSessions(listing)
