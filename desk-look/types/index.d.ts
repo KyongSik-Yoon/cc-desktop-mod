@@ -34,7 +34,7 @@ export type AskQuestion = {
   header: string
   kind: 'choice' | 'text' | 'number'
   description?: string
-  options: { label: string; description?: string }[]
+  options: { label: string; description?: string; preview?: string }[]
   multiSelect: boolean
   placeholder?: string
   min?: number
@@ -64,6 +64,8 @@ declare module 'claude-code' {
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
       sessions: SessionEntry[]
+      // 세션 패널 검색어.
+      sessionQuery: string
       // 지금 턴이 시작된 시각(ms), 턴 밖이면 null.
       turnStartedAt: number | null
       // 스피너를 다시 그리게 하는 시계(ms).

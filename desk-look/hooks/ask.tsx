@@ -6,7 +6,7 @@ import type { AskQuestion, AskState } from '../types'
 // 질문 카드: AskUserQuestion 을 엔진 창 대신 입력창 위 띠의 카드로 묻는다(데스크톱과 같은 자리).
 // 도구 호출 훅이 답을 기다리며 결과를 직접 돌려주고, 엔진은 그 결과를 도구의 원래 변환기로 모델에게 넘긴다.
 // 입력창이 비어 있으면 숫자 키가 띠의 버튼을 바로 누른다: 1-8 선택지, 0 제출(여러 개 고르기), 9 엔진 창.
-// 못 그리는 질문(미리보기가 있는 것)이나 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로.
+// 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로.
 
 type On = Parameters<Register>[0]
 
@@ -30,6 +30,7 @@ const str = (value: unknown) => (typeof value === 'string' ? value : undefined)
 const num = (value: unknown) => (typeof value === 'number' ? value : undefined)
 
 // 도구 입력을 읽는다. 그릴 수 없는 질문이 하나라도 있으면 null(엔진 창).
+// 미리보기(preview)는 선택지에 마우스를 올리면 카드 아래에 보인다.
 export function parseQuestions(value: unknown): AskQuestion[] | null {
   if (!Array.isArray(value) || value.length === 0) return null
   const out: AskQuestion[] = []
@@ -38,14 +39,13 @@ export function parseQuestions(value: unknown): AskQuestion[] | null {
     if (!question) return null
     const kind = raw.kind === 'text' || raw.kind === 'number' ? raw.kind : 'choice'
     const options = Array.isArray(raw.options) ? (raw.options as Array<Record<string, unknown>>) : []
-    if (options.some(option => str(option?.preview))) return null
     if (kind === 'choice' && options.length === 0) return null
     out.push({
       question,
       header: str(raw.header) ?? '',
       kind,
       description: str(raw.description),
-      options: options.map(option => ({ label: str(option.label) ?? '', description: str(option.description) })),
+      options: options.map(option => ({ label: str(option.label) ?? '', description: str(option.description), preview: str(option.preview) })),
       multiSelect: raw.multiSelect === true,
       placeholder: str(raw.placeholder),
       min: num(raw.min),

@@ -66,3 +66,13 @@ export function clip(text: string, width: number): string {
   }
   return `${out}…`
 }
+
+// 검색: 띄어 쓴 낱말이 모두 제목이나 폴더에 들어 있는 세션만(대소문자 무시).
+export function filterSessions(list: SessionEntry[], query: string): SessionEntry[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return list
+  return list.filter(entry => {
+    const hay = `${entry.title} ${entry.cwd}`.toLowerCase()
+    return words.every(word => hay.includes(word))
+  })
+}

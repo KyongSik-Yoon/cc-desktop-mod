@@ -450,7 +450,7 @@ test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', async ($, on)
   await row.unmount()
 })
 
-import { ago, clip, groupSessions, numbered, parseSessions } from '../hooks/sessions'
+import { ago, clip, filterSessions, groupSessions, numbered, parseSessions } from '../hooks/sessions'
 
 test('세션 목록 읽기·묶기·표시', async () => {
   const listing = [
@@ -548,8 +548,8 @@ test('질문 카드: 그릴 수 있는 질문과 답 모양', () => {
     { question: '몇 개?', header: '개수', kind: 'number', multiSelect: false, options: [], min: 1, max: 5 },
   ])
   expect(questions?.map(item => item.kind)).toEqual(['choice', 'choice', 'number'])
-  // 미리보기가 있으면 엔진 창
-  expect(parseQuestions([{ question: '?', header: '', multiSelect: false, options: [{ label: 'a', preview: 'x' }, { label: 'b' }] }])).toBeNull()
+  // 미리보기는 선택지에 담아 둔다(마우스를 올리면 보임)
+  expect(parseQuestions([{ question: '?', header: '', multiSelect: false, options: [{ label: 'a', preview: 'x' }, { label: 'b' }] }])?.[0]?.options[0]?.preview).toBe('x')
   expect(parseQuestions([])).toBeNull()
   const [where, what, count] = questions ?? []
   if (!where || !what || !count) throw new Error('parse')
@@ -615,4 +615,113 @@ test('명령 출력 마크다운 판별과 질문 힌트', async $ => {
   })
   expect(JSON.stringify(await row.drawn())).toContain('"borderStyle":"round"')
   await row.unmount()
+})
+
+test('모드 칩: 테마를 모르면 엔진 그림 그대로', async ($, on) => {
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{e.props.modes.join(' & ')}</Text>
+  })
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'SessionMode', viewport: VIEWPORT, props: { modes: ['focus'] } })
+  expect(await row.find({ type: 'Text', text: 'focus' })).toBeDefined()
+  await row.unmount()
+})
+
+test('diff 패널 되돌리기는 두 번 눌러야 git restore', async ($, on) => {
+  const ran: string[][] = []
+  const PATCH = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n'
+  on('process.run', ($, e) => {
+    ran.push([...e.argv])
+    const stdout = e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? PATCH : e.argv.includes('--abbrev-ref') ? 'main\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeDefined()
+  await pane.press({ key: 'revert-a.txt' })
+  expect(ran.some(argv => argv.includes('restore'))).toBe(false)
+  expect(JSON.stringify(await pane.drawn())).toContain('다시 누르면 되돌려요')
+  await pane.press({ key: 'revert-a.txt' })
+  expect(ran.find(argv => argv.includes('restore'))).toEqual(['git', 'restore', '--source=HEAD', '--staged', '--worktree', '--', 'a.txt'])
+  await pane.unmount()
+})
+
+test('세션 검색', () => {
+  const entry = (id: string, title: string, cwd: string) => ({ id, title, cwd, updatedAt: 0 })
+  const list = [entry('1', 'desk-look 아래턱', '/home/u/cc-desktop-mod'), entry('2', 'Fix login bug', '/home/u/app')]
+  expect(filterSessions(list, '').length).toBe(2)
+  expect(filterSessions(list, 'LOGIN').map(item => item.id)).toEqual(['2'])
+  expect(filterSessions(list, 'desktop 아래턱').map(item => item.id)).toEqual(['1'])
+  expect(filterSessions(list, 'nothing')).toEqual([])
+})
+
+// 테스트 환경의 실제 시간 대기(타입 정의에 setTimeout 이 없어 globalThis 로).
+const wait = (ms: number) =>
+  new Promise<void>(resolve => (globalThis as unknown as { setTimeout: (fn: () => void, ms: number) => void }).setTimeout(resolve, ms))
+
+test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결과', async ($, on) => {
+  let answer: (stdout: string) => void = () => undefined
+  const waiting = new Promise<string>(resolve => (answer = resolve))
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('clock.now', () => ({ value: Date.now() }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  on('process.run', async ($, e) => {
+    const done = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === 'mktemp') return done('/tmp/ask-test\n')
+    const script = e.argv[2] ?? ''
+    if (script.includes('while [ ! -e')) return done(await waiting)
+    if (script.includes('answer.tmp')) {
+      answer(e.argv[5] ?? '')
+      return done('')
+    }
+    return done('')
+  })
+  const call = $.tool.call({
+    tool: 'AskUserQuestion',
+    questions: [{ question: '어느 쪽?', header: '방향', multiSelect: false, options: [{ label: '왼쪽' }, { label: '오른쪽', description: '넓음' }] }],
+  } as never)
+  const band = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    viewport: VIEWPORT,
+    props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never,
+  })
+  // 카드가 그려질 때까지(도구 훅이 상태를 쓰면 다시 그린다)
+  for (let tries = 0; tries < 50 && !(await band.find({ type: 'Text', text: '어느 쪽?' })); tries++) await wait(10)
+  const drawn = JSON.stringify(await band.drawn())
+  expect(await band.find({ type: 'Text', text: '어느 쪽?' })).toBeDefined()
+  const key = /"key":"(ask-[^"]+-1)"/.exec(drawn)?.[1]
+  expect(key).toBeDefined()
+  // 질문이 막 떠서 0.35초 동안은 숫자 키를 버리므로 기다렸다 누른다
+  await wait(400)
+  await band.press({ key: key ?? '' })
+  const result = (await call) as { result?: { answers?: Record<string, string> } }
+  expect(result.result?.answers).toEqual({ '어느 쪽?': '오른쪽' })
+  await band.unmount()
+})
+
+test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', async ($, on) => {
+  const PATCH = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1,2 @@\n-a\n+b\n+c\n'
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', ($, e) => {
+    const stdout = e.argv.includes('--show-toplevel') ? '/src/myrepo\n' : e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? PATCH : e.argv.includes('--abbrev-ref') ? 'feature/x\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+  const drawn = JSON.stringify(await band.drawn())
+  expect(drawn.indexOf('engine-band')).toBeLessThan(drawn.indexOf('myrepo'))
+  expect(drawn).toContain('feature/x')
+  expect(drawn).toContain(' +2 ')
+  expect(drawn).toContain(' −1 ')
+  await band.unmount()
 })

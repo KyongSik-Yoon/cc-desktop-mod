@@ -5,7 +5,7 @@ import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEnt
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool } from './runs'
-import { LIST_SESSIONS, ago, clip, groupSessions, numbered, parseSessions } from './sessions'
+import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
 import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
@@ -41,6 +41,7 @@ const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
+const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
 // 질문 카드 상태. ask.tsx 의 것과 같은 키다(상태 원본은 파일마다 선언해야 한다).
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
@@ -358,6 +359,27 @@ async function refreshDiff($: EngineInterface) {
     isRepo: true,
   }))
   await update($, diff, () => files)
+}
+
+// diff 패널의 되돌리기: 처음 누르면 5초 동안 확인 상태, 그 안에 한 번 더 누르면 HEAD 로 되돌린다.
+// 커밋하지 않은 변경을 버리는 일이라 두 번 눌러야 하고, git 이 아는 파일만 대상이다(새 파일은 지우게 되므로 없음).
+const REVERT_ARM_MS = 5000
+
+async function revertFile($: EngineInterface, path: string, isArmed: boolean) {
+  const key = `revert:${path}`
+  if (!isArmed) {
+    await update($, open, state => ({ ...state, [key]: true }))
+    $.clock.after(REVERT_ARM_MS, () => void update($, open, state => ({ ...state, [key]: false })))
+    return
+  }
+  await update($, open, state => ({ ...state, [key]: false }))
+  const top = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { timeoutMs: 5000 })
+  const ran = await $.process.run(['git', 'restore', '--source=HEAD', '--staged', '--worktree', '--', path], {
+    cwd: top.stdout.trim() || undefined,
+    timeoutMs: 5000,
+  })
+  $.ui.toast(ran.exitCode === 0 ? `${path} 을(를) 되돌렸어요` : `되돌리지 못했어요: ${ran.stderr.trim().split('\n')[0] ?? ''}`)
+  await refreshDiff($)
 }
 
 // 처음 상태가 펼침인 행(묶음 안의 편집)도 있어서, 지금 보이는 상태를 받아 뒤집는다.
@@ -727,13 +749,13 @@ export const register: Register = on => {
       return { text: `${index}번 세션: ${entry.title}` }
     }
     await refreshSessions($)
-    await $.ui.open({ id: SESSIONS_PANE, title: '세션' })
+    await $.ui.open({ id: SESSIONS_PANE, title: '세션', focus: true })
     return { text: '세션 패널을 열었습니다.' }
   })
 
   on('command.run', { command: 'desk-diff' }, async $ => {
     await refreshDiff($)
-    await $.ui.open({ id: PANE, title: '변경 사항' })
+    await $.ui.open({ id: PANE, title: '변경 사항', focus: true })
     return { text: '변경 사항 패널을 열었습니다.' }
   })
 
@@ -894,6 +916,28 @@ export const register: Register = on => {
     )
   })
 
+  // 모드 라벨(focus, memory paused …): 흐린 글자 대신 데스크톱 입력창의 알약 칩으로.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || e.props.modes.length === 0) return next(e)
+    const face = await read($, surface)
+    if (!face) return next(e)
+    const { Text } = $.ui.resolve(e)
+    return (
+      <Text>
+        {e.props.modes.map((mode, index) => (
+          <Text>
+            {index > 0 ? ' ' : ''}
+            <Text color={face.bubble}>{EDGES.single[0]}</Text>
+            <Text color={COLORS.muted} backgroundColor={face.bubble}>
+              {mode}
+            </Text>
+            <Text color={face.bubble}>{EDGES.single[1]}</Text>
+          </Text>
+        ))}
+      </Text>
+    )
+  })
+
   // 명령 출력: 표·제목·코드·인용이 든 출력만 답변처럼 마크다운으로. 나머지(엔진 명령의 평문)는 그대로.
   on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.isErrored || !looksLikeMarkdown(e.props.text)) return next(e)
@@ -1000,10 +1044,12 @@ export const register: Register = on => {
   })
 
   // 세션 패널: 프로젝트별로 묶은 최근 세션. 현재 세션은 클레이색 ●.
-  on('ui.render', { component: 'Pane', requestId: SESSIONS_PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const [list, cwd, current, now, home] = await Promise.all([
+  on('ui.render', { component: 'Pane', requestId: SESSIONS_PANE }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const { Box, Text, Button, Input } = $.ui.resolve(e)
+    const [list, query, cwd, current, now, home] = await Promise.all([
       read($, sessions),
+      read($, sessionQuery),
       $.session.cwd(),
       $.session.id(),
       $.clock.now(),
@@ -1011,7 +1057,9 @@ export const register: Register = on => {
     ])
     const room = Math.max(16, e.props.bodyColumns - 12)
     const label = (path: string) => (home && path.startsWith(home) ? `~${path.slice(home.length)}` : path)
+    // 번호는 거르기 전 목록 기준이라 /desk-sessions <번호> 와 늘 맞는다.
     const order = numbered(list, cwd, PER_GROUP, current).map(entry => entry.id)
+    const shown = filterSessions(list, query)
 
     return (
       <Box flexDirection="column" rowGap={1}>
@@ -1021,7 +1069,20 @@ export const register: Register = on => {
           </Text>
           <Button key="sessions-refresh" plain dimColor label="↻" onPress={() => refreshSessions($)} />
         </Box>
-        {groupSessions(list, cwd).map(group => (
+        <Input
+          key="sessions-search"
+          label="검색"
+          placeholder="제목이나 폴더, Enter 로 첫 결과 열기"
+          value={query}
+          autoFocus
+          onInput={value => void update($, sessionQuery, () => value)}
+          onSubmit={value => {
+            const first = filterSessions(list, value).find(entry => entry.id !== current)
+            if (first) void openSession($, first)
+          }}
+        />
+        {query.trim() !== '' && shown.length === 0 && <Text color={COLORS.muted}>맞는 세션이 없어요.</Text>}
+        {groupSessions(shown, cwd).map(group => (
           <Box key={`group-${group.cwd}`} flexDirection="column">
             <Text color={group.cwd === cwd ? COLORS.clay : COLORS.muted} bold wrap="truncate-start">
               {label(group.cwd)}
@@ -1051,6 +1112,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Code } = $.ui.resolve(e)
     const files = await read($, diff)
+    const armed = await read($, open)
     const info = await read($, repo)
     const added = files.reduce((sum, file) => sum + file.added, 0)
     const removed = files.reduce((sum, file) => sum + file.removed, 0)
@@ -1074,6 +1136,15 @@ export const register: Register = on => {
               </Text>
               {file.isNew && <Text color={COLORS.muted}>new</Text>}
               {diffChips(Text, file.added, file.removed)}
+              {!file.isNew && (
+                <Button
+                  key={`revert-${file.path}`}
+                  plain
+                  dimColor={!armed[`revert:${file.path}`]}
+                  label={armed[`revert:${file.path}`] ? '다시 누르면 되돌려요' : '되돌리기'}
+                  onPress={() => void revertFile($, file.path, armed[`revert:${file.path}`] ?? false)}
+                />
+              )}
             </Box>
             {file.patch ? (
               <Code source={file.patch} path={file.path} format="diff" />
@@ -1180,7 +1251,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
             const isPicked = picks.includes(option.label)
             const mark = question.multiSelect ? (isPicked ? '☑ ' : '☐ ') : ''
             return (
-              <Box key={`opt-${k}-${index}`} columnGap={2}>
+              <Box key={`opt-${k}-${index}`} columnGap={2} hover={option.preview ? { scope: `askp-${k}-${index}` } : undefined}>
                 <Button
                   key={`ask-${k}-${index}`}
                   plain
@@ -1197,6 +1268,28 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
               </Box>
             )
           })}
+          {question.options.some(option => option.preview) && <Text color={COLORS.muted}>선택지에 마우스를 올리면 미리보기</Text>}
+          {question.options.map((option, index) =>
+            option.preview ? (
+              <Box
+                key={`askp-box-${k}-${index}`}
+                display="none"
+                hover={{ scope: `askp-${k}-${index}`, display: 'flex' }}
+                flexDirection="column"
+                borderStyle="round"
+                borderColor={COLORS.border}
+                paddingX={1}
+              >
+                {cap(option.preview, 16)
+                  .split('\n')
+                  .map(line => (
+                    <Text color={COLORS.text} wrap="truncate-end">
+                      {line === '' ? ' ' : line}
+                    </Text>
+                  ))}
+              </Box>
+            ) : null,
+          )}
         </Box>
       )}
       <Box marginTop={1}>
