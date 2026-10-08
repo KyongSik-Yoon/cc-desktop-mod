@@ -47,6 +47,8 @@ const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
 const SPINNER_TICK = 500
 let ticker: Timer | null = null
+const THEME_POLL = 3000
+let themeWatch: Timer | null = null
 let spinnerSeen = 0
 let spinnerFallbackStart = 0
 
@@ -336,8 +338,9 @@ const toggle = ($: EngineInterface, id: string, shown?: boolean) =>
   update($, open, state => ({ ...state, [id]: !(state[id] ?? shown ?? false) }))
 
 async function refreshSurface($: EngineInterface) {
-  const ran = await $.process.run(['sh', '-c', `cat "${OMARCHY_COLORS}"`], { timeoutMs: 2000 })
-  const next = ran.exitCode === 0 ? parseSurface(ran.stdout) : null
+  const home = await $.env.get('HOME')
+  const toml = home ? await $.fs.read(`${home}/${OMARCHY_COLORS}`).catch(() => null) : null
+  const next = toml === null ? null : parseSurface(toml)
   await update($, surface, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
 }
 
@@ -505,6 +508,9 @@ export const register: Register = on => {
     })
     void refreshDiff($).catch(() => undefined)
     void refreshSurface($).catch(() => undefined)
+    // 테마를 바꾸면 3초 안에 말풍선·아래턱 색이 따라간다. 바뀌지 않았으면 다시 그리지 않는다.
+    themeWatch?.cancel()
+    themeWatch = $.clock.every(THEME_POLL, () => void refreshSurface($).catch(() => undefined))
     void refreshRuns($).catch(() => undefined)
     void refreshImages($).catch(() => undefined)
     void (async () => {
@@ -520,7 +526,7 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다 (cat 한 번).
+  // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다(타이머를 기다리지 않게).
   on('prompt.submit', async ($, e, next) => {
     void refreshSurface($).catch(() => undefined)
     const submitted = await next(e)

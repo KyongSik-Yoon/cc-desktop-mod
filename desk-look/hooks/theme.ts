@@ -1,7 +1,7 @@
 import type { Surface } from '../types'
 
-// omarchy 현재 테마. 다른 환경이면 파일이 없고 null 을 돌려준다.
-export const OMARCHY_COLORS = '$HOME/.local/state/omarchy/current/theme/colors.toml'
+// omarchy 현재 테마(HOME 기준). 다른 환경이면 파일이 없고 null 을 돌려준다.
+export const OMARCHY_COLORS = '.local/state/omarchy/current/theme/colors.toml'
 
 const hex = (value: string) => {
   const match = /^#?([0-9a-f]{6})$/i.exec(value.trim())
