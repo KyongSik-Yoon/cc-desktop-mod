@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
+import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
 const VIEWPORT = { columns: 100, rows: 40 }
@@ -537,4 +537,35 @@ test('할 일 목록 다시 세우기와 보일 줄', () => {
   expect(view.shown.map(item => item.id)).toEqual(['3', '4', '5', '6', '7', '8'])
   expect(view.hidden).toBe(3)
   expect(visibleTasks(many.map(item => ({ ...item, status: 'completed' as const })), 6).shown).toEqual([])
+})
+
+import { answerOf, numberProblem, parseQuestions } from '../hooks/ask'
+
+test('질문 카드: 그릴 수 있는 질문과 답 모양', () => {
+  const questions = parseQuestions([
+    { question: '어디에?', header: '위치', multiSelect: false, options: [{ label: '왼쪽' }, { label: '오른쪽', description: '넓음' }] },
+    { question: '무엇을?', header: '기능', multiSelect: true, options: [{ label: '가' }, { label: '나' }] },
+    { question: '몇 개?', header: '개수', kind: 'number', multiSelect: false, options: [], min: 1, max: 5 },
+  ])
+  expect(questions?.map(item => item.kind)).toEqual(['choice', 'choice', 'number'])
+  // 미리보기가 있으면 엔진 창
+  expect(parseQuestions([{ question: '?', header: '', multiSelect: false, options: [{ label: 'a', preview: 'x' }, { label: 'b' }] }])).toBeNull()
+  expect(parseQuestions([])).toBeNull()
+  const [where, what, count] = questions ?? []
+  if (!where || !what || !count) throw new Error('parse')
+  expect(answerOf(where, ['왼쪽'], '')).toBe('왼쪽')
+  expect(answerOf(where, ['왼쪽'], ' 가운데 ')).toBe('가운데')
+  expect(answerOf(what, ['가', '나'], '다')).toBe('가, 나, 다')
+  expect(numberProblem(count, '7')).toBe('5 이하여야 해요')
+  expect(numberProblem(count, 'x')).toBe('숫자를 입력해 주세요')
+  expect(numberProblem(count, '3')).toBeNull()
+  expect(answerOf(count, [], '3')).toBe('3')
+})
+
+test('질문 도구 줄: 질문과 답', () => {
+  expect(summarize('AskUserQuestion', { questions: [{ question: 'Which color?' }] })).toBe('Which color?')
+  expect(describeCalls([{ tool: 'AskUserQuestion', input: {}, isRunning: false, isErrored: false, isInterrupted: false }])).toBe('Asked a question')
+  expect(askAnswer({ answers: { 'Which color?': 'Blue', 'Pet?': 'Dogs' } })).toBe('Blue · Dogs')
+  expect(askAnswer('{"answers":{"q":"a"}}')).toBe('a')
+  expect(askAnswer('oops')).toBeNull()
 })

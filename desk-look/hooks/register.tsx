@@ -6,6 +6,7 @@ import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize 
 import { cellWidth, renderMarkdown } from './markdown'
 import { computeRuns } from './runs'
 import { LIST_SESSIONS, ago, clip, groupSessions, numbered, parseSessions } from './sessions'
+import { registerAsk } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 
@@ -81,7 +82,7 @@ const EDITING_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit', 'Ba
 
 type Call = Pick<ToolGroupCall, 'tool' | 'input' | 'isRunning' | 'isErrored' | 'isInterrupted' | 'output'>
 
-type Category = 'command' | 'read' | 'edit' | 'create' | 'search' | 'web' | 'agent' | 'todo' | 'other'
+type Category = 'command' | 'read' | 'edit' | 'create' | 'search' | 'web' | 'agent' | 'todo' | 'ask' | 'other'
 
 const CATEGORY_OF: Record<string, Category> = {
   Bash: 'command',
@@ -103,6 +104,10 @@ const CATEGORY_OF: Record<string, Category> = {
   Agent: 'agent',
   Task: 'agent',
   TodoWrite: 'todo',
+  TaskCreate: 'todo',
+  TaskUpdate: 'todo',
+  TaskList: 'todo',
+  AskUserQuestion: 'ask',
 }
 
 // 데스크톱의 "Ran 2 commands, created a file, edited 3 files, and 3 more actions" 문구.
@@ -115,6 +120,7 @@ const PHRASES: Record<Category, [string, (count: number) => string]> = {
   web: ['fetched a page', count => `fetched ${count} pages`],
   agent: ['ran an agent', count => `ran ${count} agents`],
   todo: ['updated todos', () => 'updated todos'],
+  ask: ['asked a question', count => `asked ${count} questions`],
   other: ['used a tool', count => `used ${count} tools`],
 }
 
@@ -127,6 +133,7 @@ const VERB: Record<Category, string> = {
   web: 'Fetched',
   agent: 'Agent',
   todo: 'Updated todos',
+  ask: 'Asked',
   other: 'Used',
 }
 
@@ -158,8 +165,10 @@ const stringField = (fields: Record<string, unknown>, key: string) =>
 export function summarize(tool: string, input: unknown): string {
   const fields = fieldsOf(input)
   const path = stringField(fields, 'file_path') ?? stringField(fields, 'notebook_path') ?? stringField(fields, 'path')
+  const questions = Array.isArray(fields.questions) ? fields.questions.map(fieldsOf) : []
   const summary =
     (tool === 'Bash' ? stringField(fields, 'command') : undefined) ??
+    (tool === 'AskUserQuestion' ? stringField(questions[0] ?? {}, 'question') : undefined) ??
     (path ? path.split('/').pop() : undefined) ??
     stringField(fields, 'pattern') ??
     stringField(fields, 'url') ??
@@ -171,6 +180,21 @@ export function summarize(tool: string, input: unknown): string {
   return summary.split('\n')[0] ?? ''
 }
 
+// 질문 도구의 답: 결과의 answers 값들. 없으면 null.
+export function askAnswer(output: unknown): string | null {
+  let value = output
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return null
+    }
+  }
+  const answers = fieldsOf(fieldsOf(value).answers)
+  const list = Object.values(answers).filter((answer): answer is string => typeof answer === 'string' && answer !== '')
+  return list.length > 0 ? list.join(' · ') : null
+}
+
 function verbOf(tool: string): string {
   const category = categoryOf(tool)
   if (category !== 'other') return VERB[category]
@@ -180,7 +204,6 @@ function verbOf(tool: string): string {
 
 const lineCount = (text: unknown) => (typeof text === 'string' && text.length > 0 ? text.split('\n').length : 0)
 
-// Edit 의 old/new 는 바꾼 줄 앞뒤 문맥 줄을 함께 담는다. 앞뒤 공통 줄을 걷어내고 남은 줄만 센다.
 // 앞뒤로 같은 줄 수. 편집은 old_string 에 문맥 줄을 함께 넣으니 그 줄은 바뀐 것으로 치지 않는다.
 function commonEnds(before: string[], after: string[]): { head: number; tail: number } {
   let head = 0
@@ -197,6 +220,7 @@ function commonEnds(before: string[], after: string[]): { head: number; tail: nu
 
 const linesOf = (text: string) => (text === '' ? [] : text.split('\n'))
 
+// Edit 의 old/new 는 바꾼 줄 앞뒤 문맥 줄을 함께 담는다. 앞뒤 공통 줄을 걷어내고 남은 줄만 센다.
 export function lineChange(oldText: string, newText: string): { added: number; removed: number } {
   const before = linesOf(oldText)
   const after = linesOf(newText)
@@ -427,6 +451,7 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
   const id = call.tool_use_id
   const isOpen = openState[id] ?? openFirst
   const stat = diffStat(call)
+  const answer = call.tool === 'AskUserQuestion' ? askAnswer(call.output) : null
   return (
     <Box flexDirection="column" paddingLeft={indent}>
       <Box columnGap={1}>
@@ -436,6 +461,7 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
           {summarize(call.tool, call.input)}
         </Text>
         {stat && diffChips(els.Text, stat.added, stat.removed)}
+        {answer && <Text color={COLORS.text} wrap="truncate-end">{`→ ${answer}`}</Text>}
         {call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}>failed</Text>}
         {call.isInterrupted && <Text color={COLORS.muted}>interrupted</Text>}
         <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>
@@ -496,6 +522,8 @@ const asRunCall = (call: ToolGroupCall | (Call & { tool_use_id: string })): RunC
 })
 
 export const register: Register = on => {
+  registerAsk(on, COLORS)
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'desk-sessions',

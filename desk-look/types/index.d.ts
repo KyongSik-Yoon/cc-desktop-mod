@@ -28,6 +28,22 @@ export type TurnEdit = { path: string; added: number; removed: number }
 // 할 일 목록 한 줄(TodoWrite·TaskCreate 에서).
 export type TaskItem = { id: string; subject: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }
 
+// 질문 카드: AskUserQuestion 질문 하나와 지금 묻는 상태.
+export type AskQuestion = {
+  question: string
+  header: string
+  kind: 'choice' | 'text' | 'number'
+  description?: string
+  options: { label: string; description?: string }[]
+  multiSelect: boolean
+  placeholder?: string
+  min?: number
+  max?: number
+  unit?: string
+}
+// dir: 답 파일을 주고받는 임시 폴더. picks·texts 는 질문마다 고른 라벨과 입력한 글.
+export type AskState = { id: string; dir: string; questions: AskQuestion[]; step: number; picks: string[][]; texts: string[] }
+
 export type TurnCard = { durationMs: number; files: TurnEdit[]; text?: string }
 
 // 세션 패널 한 줄: ~/.claude/projects 의 기록 파일 하나.
@@ -53,6 +69,8 @@ declare module 'claude-code' {
       tick: number
       // 지금의 할 일 목록.
       tasks: TaskItem[]
+      // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
+      ask: AskState | null
     }
   }
 }
