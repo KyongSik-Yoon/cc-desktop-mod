@@ -4,7 +4,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
 const VIEWPORT = { columns: 100, rows: 40 }
-const call = (tool: string, input: unknown, extra: Partial<{ isErrored: boolean }> = {}) => ({
+const call = (tool: string, input: unknown, extra: Partial<{ isErrored: boolean; output: string }> = {}) => ({
   tool,
   input,
   isRunning: false,
@@ -199,6 +199,31 @@ describe('도구 활동', () => {
     await group.unmount()
   })
 
+  test('묶음을 펼치면 편집 diff 가 바로, 다시 누르면 접힌다', async $ => {
+    const group = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolGroup',
+      requestId: 'g2',
+      viewport: VIEWPORT,
+      props: {
+        calls: [
+          { tool_use_id: 'r', ...call('Read', { file_path: '/r/a.ts' }) },
+          { tool_use_id: 'e', ...call('Edit', { file_path: '/r/a.ts', old_string: 'x\nold', new_string: 'x\nnew' }, { output: 'ok' }) },
+        ],
+        isActive: false,
+        isExpanded: false,
+      },
+    })
+    expect(await group.find({ type: 'Code' })).toBeUndefined()
+    await group.press({ key: 'run-g2' })
+    const code = JSON.stringify(await group.drawn())
+    expect(code).toContain(' x\\n-old\\n+new')
+    await group.press({ key: 'row-e' })
+    expect(await group.find({ type: 'Code' })).toBeUndefined()
+    await group.unmount()
+  })
+
   test('입력창 위 밴드는 다른 플러그인의 밴드를 지우지 않는다', async ($, on) => {
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
@@ -236,6 +261,8 @@ test('순수 함수', async () => {
   expect(lineChange('a\nhello\nb', 'a\nhi\nb')).toEqual({ added: 1, removed: 1 })
   expect(lineChange('', 'new')).toEqual({ added: 1, removed: 0 })
   expect(editHunk('a', 'b')).toBe('@@ -1,1 +1,1 @@\n-a\n+b')
+  // 문맥 줄은 −/+ 가 아니라 공백으로, 두 줄까지만
+  expect(editHunk('1\n2\n3\nold\n4', '1\n2\n3\nnew\n4')).toBe('@@ -2,4 +2,4 @@\n 2\n 3\n-old\n+new\n 4')
 
   const blocks = parseBlocks(REPLY)
   expect(blocks.map(block => block.kind)).toEqual(['heading', 'paragraph', 'table', 'list', 'quote', 'code'])

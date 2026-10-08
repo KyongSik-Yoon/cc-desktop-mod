@@ -179,9 +179,8 @@ function verbOf(tool: string): string {
 const lineCount = (text: unknown) => (typeof text === 'string' && text.length > 0 ? text.split('\n').length : 0)
 
 // Edit 의 old/new 는 바꾼 줄 앞뒤 문맥 줄을 함께 담는다. 앞뒤 공통 줄을 걷어내고 남은 줄만 센다.
-export function lineChange(oldText: string, newText: string): { added: number; removed: number } {
-  const before = oldText === '' ? [] : oldText.split('\n')
-  const after = newText === '' ? [] : newText.split('\n')
+// 앞뒤로 같은 줄 수. 편집은 old_string 에 문맥 줄을 함께 넣으니 그 줄은 바뀐 것으로 치지 않는다.
+function commonEnds(before: string[], after: string[]): { head: number; tail: number } {
   let head = 0
   while (head < before.length && head < after.length && before[head] === after[head]) head++
   let tail = 0
@@ -191,6 +190,15 @@ export function lineChange(oldText: string, newText: string): { added: number; r
     before[before.length - 1 - tail] === after[after.length - 1 - tail]
   )
     tail++
+  return { head, tail }
+}
+
+const linesOf = (text: string) => (text === '' ? [] : text.split('\n'))
+
+export function lineChange(oldText: string, newText: string): { added: number; removed: number } {
+  const before = linesOf(oldText)
+  const after = linesOf(newText)
+  const { head, tail } = commonEnds(before, after)
   return { added: after.length - head - tail, removed: before.length - head - tail }
 }
 
@@ -239,13 +247,22 @@ function cap(text: string, lines: number): string {
   return all.length <= lines ? all.join('\n') : `${all.slice(0, lines).join('\n')}\n… ${all.length - lines}줄 더`
 }
 
-export function editHunk(oldText: string, newText: string): string {
-  const removed = oldText.split('\n')
-  const added = newText.split('\n')
+// 편집 하나를 diff 헌크로: 바뀐 줄만 −/+, 앞뒤 같은 줄은 문맥으로 두 줄까지.
+export function editHunk(oldText: string, newText: string, context = 2): string {
+  const before = linesOf(oldText)
+  const after = linesOf(newText)
+  const { head, tail } = commonEnds(before, after)
+  const lead = before.slice(Math.max(0, head - context), head)
+  const trail = before.slice(before.length - tail, before.length - tail + context)
+  const removed = before.slice(head, before.length - tail)
+  const added = after.slice(head, after.length - tail)
+  const start = head - lead.length + 1
   return [
-    `@@ -1,${removed.length} +1,${added.length} @@`,
+    `@@ -${start},${lead.length + removed.length + trail.length} +${start},${lead.length + added.length + trail.length} @@`,
+    ...lead.map(line => ` ${line}`),
     ...removed.map(line => `-${line}`),
     ...added.map(line => `+${line}`),
+    ...trail.map(line => ` ${line}`),
   ].join('\n')
 }
 
@@ -302,7 +319,9 @@ async function refreshDiff($: EngineInterface) {
   await update($, diff, () => files)
 }
 
-const toggle = ($: EngineInterface, id: string) => update($, open, state => ({ ...state, [id]: !state[id] }))
+// 처음 상태가 펼침인 행(묶음 안의 편집)도 있어서, 지금 보이는 상태를 받아 뒤집는다.
+const toggle = ($: EngineInterface, id: string, shown?: boolean) =>
+  update($, open, state => ({ ...state, [id]: !(state[id] ?? shown ?? false) }))
 
 async function refreshSurface($: EngineInterface) {
   const ran = await $.process.run(['sh', '-c', `cat "${OMARCHY_COLORS}"`], { timeoutMs: 2000 })
@@ -377,11 +396,16 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall) {
     case 'Edit':
       return (
         <Code
-          source={editHunk(stringField(fields, 'old_string') ?? '', stringField(fields, 'new_string') ?? '')}
+          source={cap(editHunk(stringField(fields, 'old_string') ?? '', stringField(fields, 'new_string') ?? ''), 40)}
           path={filePath}
           format="diff"
         />
       )
+    case 'MultiEdit': {
+      const edits = Array.isArray(fields.edits) ? fields.edits.map(fieldsOf) : []
+      const hunks = edits.map(edit => editHunk(stringField(edit, 'old_string') ?? '', stringField(edit, 'new_string') ?? ''))
+      return <Code source={cap(hunks.join('\n'), 40)} path={filePath} format="diff" />
+    }
     case 'Write':
       return <Code source={cap(stringField(fields, 'content') ?? '', 40)} path={filePath} />
     default:
@@ -390,16 +414,16 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall) {
 }
 
 // 호출 한 줄: "Edited register.tsx +12 −3 ›", 누르면 아래로 펼친다.
-function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, indent = 0) {
+function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, indent = 0, openFirst = false) {
   const { Box, Text, Button } = els
   const id = call.tool_use_id
-  const isOpen = openState[id] ?? false
+  const isOpen = openState[id] ?? openFirst
   const stat = diffStat(call)
   return (
     <Box flexDirection="column" paddingLeft={indent}>
       <Box columnGap={1}>
         {call.isRunning && <Text color={COLORS.clay}>···</Text>}
-        <Button key={`row-${id}`} plain dimColor label={verbOf(call.tool)} onPress={() => toggle($, id)} />
+        <Button key={`row-${id}`} plain dimColor label={verbOf(call.tool)} onPress={() => toggle($, id, isOpen)} />
         <Text color={COLORS.muted} wrap="truncate-end">
           {summarize(call.tool, call.input)}
         </Text>
@@ -418,6 +442,7 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
 }
 
 // 묶음 한 줄: "Ran 2 commands, edited 3 files +54 −12 ›", 펼치면 호출마다 한 줄.
+// 데스크톱처럼 성공한 편집은 펼치자마자 diff 까지 보인다.
 function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], openState: Record<string, boolean>) {
   const { Box, Text, Button } = els
   const key = `run-${runId}`
@@ -433,10 +458,12 @@ function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], 
         {stats.length > 0 && diffChips(els.Text, added, removed)}
         <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>
       </Box>
-      {isOpen && calls.map(call => callLine(els, $, call, openState, 2))}
+      {isOpen && calls.map(call => callLine(els, $, call, openState, 2, isEditShown(call)))}
     </Box>
   )
 }
+
+const isEditShown = (call: RunCall) => FILE_EDITING.has(call.tool) && call.tool !== 'Write' && diffStat(call) !== null
 
 export type RowPlan = { kind: 'hide' } | { kind: 'run'; first: string; calls: RunCall[] } | { kind: 'own' }
 
