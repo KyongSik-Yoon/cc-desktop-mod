@@ -964,14 +964,22 @@ export const register: Register = on => {
     const [info, list] = await Promise.all([read($, repo), read($, tasks)])
     const els = $.ui.resolve(e)
     const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
-    const question = await askCard($, els, e.props.bodyColumns)
+    const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
     const chin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns)
-    if (plan === null && question === null && chin === null) return below
+    // 질문 중에는 질문이 띠를 차지한다(엔진 설문처럼): 다른 밴드·할 일 카드는 숨기고, 남는 줄이 있을 때만 아래턱.
+    if (asked) {
+      return (
+        <els.Box flexDirection="column">
+          {asked.card}
+          {asked.rows < e.props.maxRows ? chin : null}
+        </els.Box>
+      )
+    }
+    if (plan === null && chin === null) return below
     return (
       <els.Box flexDirection="column">
         {below}
         {plan}
-        {question}
         {chin}
       </els.Box>
     )
@@ -1215,11 +1223,29 @@ async function advanceAsk($: EngineInterface, state: AskState, picks: string[], 
 }
 
 // 입력창 위 띠의 질문 카드. 묻는 중이 아니면 null.
-async function askCard($: EngineInterface, els: Elements['terminal'], columns: number) {
+// 질문 카드가 차지할 줄 수. 띠가 모자라면(낮은 터미널) 선택지 밖으로 밀린 버튼은 숫자 키가 먹지 않으므로
+// 간단한 모양(제목·질문 한 줄 + 선택지, 여러 개 고르기면 제출 줄)으로, 그래도 모자라면 테두리 없는 두 줄로 줄인다.
+export function askRows(question: { kind: string; description?: string; multiSelect: boolean; options: { preview?: string }[] }, compact: boolean): number {
+  if (compact) return 2 + 1 + (question.kind === 'choice' ? question.options.length : 1) + (question.multiSelect ? 1 : 0)
+  const choice = question.kind === 'choice'
+  const hint = question.options.some(option => option.preview) ? 1 : 0
+  return 2 + 2 + (question.description ? 1 : 0) + (choice ? 1 + question.options.length + hint : 0) + 1 + 1 + 1
+}
+
+// 띠 줄 수에 맞는 모양: 다 들어가면 full, 아니면 테두리 카드(compact), 그것도 안 되면 두 줄(inline).
+export type AskMode = 'full' | 'compact' | 'inline'
+export function askMode(question: Parameters<typeof askRows>[0], room: number): { mode: AskMode; rows: number } {
+  if (askRows(question, false) <= room) return { mode: 'full', rows: askRows(question, false) }
+  if (askRows(question, true) <= room) return { mode: 'compact', rows: askRows(question, true) }
+  return { mode: 'inline', rows: 2 }
+}
+
+async function askCard($: EngineInterface, els: Elements['terminal'], columns: number, room: number) {
   const { Box, Text, Button, Input } = els
   const state = await read($, asking)
   const question = state?.questions[state.step]
   if (!state || !question) return null
+  const done = (card: ReturnType<typeof h>) => ({ card, rows })
   const picks = state.picks[state.step] ?? []
   const text = state.texts[state.step] ?? ''
   const total = state.questions.length
@@ -1231,8 +1257,88 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
     )
   const unit = question.unit ? ` (${question.unit})` : ''
   const width = Math.max(30, Math.min(columns, 100))
+  const { mode, rows } = askMode(question, room)
+  const compact = mode !== 'full'
+  const inline = mode === 'inline'
 
-  return (
+  // 가장 낮은 띠: 테두리 없이 두 줄(제목·질문 / 선택지를 한 줄에 나란히).
+  if (inline) {
+    return done(
+      <Box flexDirection="column" width={width} paddingX={1}>
+        <Text wrap="truncate-end">
+          {question.header !== '' && <Text color={COLORS.clay} bold>{`${question.header} `}</Text>}
+          {total > 1 && <Text color={COLORS.muted}>{`${state.step + 1}/${total} `}</Text>}
+          <Text color={COLORS.text} bold>
+            {question.question}
+          </Text>
+        </Text>
+        <Box columnGap={2} flexWrap="wrap">
+          {question.kind === 'choice' ? (
+            question.options.map((option, index) => {
+              const isPicked = picks.includes(option.label)
+              const mark = question.multiSelect ? (isPicked ? '☑ ' : '☐ ') : ''
+              return (
+                <Box key={`opt-${k}-${index}`}>
+                  <Button
+                    key={`ask-${k}-${index}`}
+                    plain
+                    hover={{ color: COLORS.clay }}
+                    hotkey={index < 8 ? String(index + 1) : undefined}
+                    label={`${mark}${option.label}`}
+                    onPress={() => void pickAsk($, state, option.label, isPicked)}
+                  />
+                </Box>
+              )
+            })
+          ) : (
+            <Button key={`ask-engine-${k}`} plain hotkey="9" label="기본 창에서 답하기" onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
+          )}
+          {question.multiSelect && (
+            <Button key={`ask-next-${k}`} plain hotkey="0" label={isLast ? '제출' : '다음 →'} onPress={() => void advanceAsk($, state, picks, text)} />
+          )}
+        </Box>
+      </Box>
+    )
+  }
+
+  if (compact) {
+    return done(
+      <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
+        <Text wrap="truncate-end">
+          {question.header !== '' && <Text color={COLORS.clay} bold>{`${question.header} `}</Text>}
+          {total > 1 && <Text color={COLORS.muted}>{`${state.step + 1}/${total} `}</Text>}
+          <Text color={COLORS.text} bold>
+            {question.question}
+          </Text>
+        </Text>
+        {question.kind === 'choice' ? (
+          question.options.map((option, index) => {
+            const isPicked = picks.includes(option.label)
+            const mark = question.multiSelect ? (isPicked ? '☑ ' : '☐ ') : ''
+            return (
+              <Box key={`opt-${k}-${index}`}>
+                <Button
+                  key={`ask-${k}-${index}`}
+                  plain
+                  hover={{ color: COLORS.clay }}
+                  hotkey={index < 8 ? String(index + 1) : undefined}
+                  label={`${mark}${option.label}`}
+                  onPress={() => void pickAsk($, state, option.label, isPicked)}
+                />
+              </Box>
+            )
+          })
+        ) : (
+          <Button key={`ask-engine-${k}`} plain hotkey="9" label="기본 창에서 답하기" onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
+        )}
+        {question.multiSelect && (
+          <Button key={`ask-next-${k}`} hotkey="0" label={isLast ? '제출' : '다음 →'} onPress={() => void advanceAsk($, state, picks, text)} />
+        )}
+      </Box>
+    )
+  }
+
+  return done(
     <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
       <Box columnGap={1}>
         {question.header !== '' && (
@@ -1270,27 +1376,30 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
             )
           })}
           {question.options.some(option => option.preview) && <Text color={COLORS.muted}>선택지에 마우스를 올리면 미리보기</Text>}
-          {question.options.map((option, index) =>
-            option.preview ? (
+          {question.options.map((option, index) => {
+            if (!option.preview) return null
+            // 카드 오른쪽, 제목 줄 높이부터 겹쳐 그린다(카드가 커지면 띠가 위로 자라 선택지가 커서 밑에서 밀려나므로).
+            // 상자 배경은 칠해지지 않아 줄마다 같은 폭의 공백으로 채워 아래 글자를 덮는다.
+            const lines = cap(option.preview, 10).split('\n')
+            const inner = Math.max(...lines.map(cellWidth))
+            return (
               <Box
                 key={`askp-box-${k}-${index}`}
+                position="absolute"
+                top={-(question.description ? 4 : 3)}
+                right={0}
                 display="none"
                 hover={{ scope: `askp-${k}-${index}`, display: 'flex' }}
                 flexDirection="column"
                 borderStyle="round"
-                borderColor={COLORS.border}
-                paddingX={1}
+                borderColor={COLORS.clay}
               >
-                {cap(option.preview, 16)
-                  .split('\n')
-                  .map(line => (
-                    <Text color={COLORS.text} wrap="truncate-end">
-                      {line === '' ? ' ' : line}
-                    </Text>
-                  ))}
+                {lines.map(line => (
+                  <Text color={COLORS.text}>{` ${line}${' '.repeat(inner - cellWidth(line))} `}</Text>
+                ))}
               </Box>
-            ) : null,
-          )}
+            )
+          })}
         </Box>
       )}
       <Box marginTop={1}>

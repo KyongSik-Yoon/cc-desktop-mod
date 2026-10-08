@@ -571,7 +571,7 @@ test('질문 도구 줄: 질문과 답', () => {
 })
 
 import { agentOf } from '../hooks/runs'
-import { askHint, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
+import { askHint, askRows, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
 
 test('서브에이전트 카드 요약과 묶음', () => {
   const raw = {
@@ -724,4 +724,12 @@ test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', asy
   expect(drawn).toContain(' +2 ')
   expect(drawn).toContain(' −1 ')
   await band.unmount()
+})
+
+test('질문 카드 줄 수: 모자라면 간단한 모양', () => {
+  const two = { kind: 'choice', multiSelect: false, options: [{}, {}] }
+  expect(askRows(two, false)).toBe(2 + 2 + 1 + 2 + 3)
+  expect(askRows(two, true)).toBe(2 + 1 + 2)
+  expect(askRows({ ...two, multiSelect: true }, true)).toBe(6)
+  expect(askRows({ ...two, options: [{ preview: 'x' }, {}] }, false)).toBe(11)
 })
