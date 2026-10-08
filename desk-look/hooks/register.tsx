@@ -308,15 +308,20 @@ async function refreshSessions($: EngineInterface) {
   await update($, sessions, () => next)
 }
 
-// 세션 줄을 눌렀을 때. 같은 폴더의 세션은 입력창에 /resume <id> 를 채워 Enter 한 번으로 넘어가게 한다.
-// ($.command.run 은 /resume 같은 기본 명령을 대신 실행하지 못한다 — 실제 세션에서 거부됨을 확인.)
+// 세션 줄을 눌렀을 때. 같은 폴더의 세션은 /resume <id> 를 실행해 지금 창에서 바로 넘어간다.
+// $.command.run 은 턴이 기다리는 훅(/desk-sessions 의 command.run) 안에서는 거부되므로, 훅이 끝난 뒤
+// 타이머로 실행한다. 그래도 실패하면 입력창에 채워 Enter 한 번으로 넘어가게 한다.
 // 다른 폴더의 세션은 그 폴더에서 열어야 하므로 실행할 명령을 클립보드에 복사한다.
 async function openSession($: EngineInterface, entry: SessionEntry) {
   const cwd = await $.session.cwd()
   if (entry.id === (await $.session.id())) return
   if (entry.cwd === cwd) {
-    await $.prompt.fill({ text: `/resume ${entry.id}` })
-    $.ui.toast(`Enter 를 누르면 "${entry.title}" 세션으로 넘어가요.`)
+    $.clock.after(50, () => {
+      void $.command.run({ command: 'resume', args: entry.id }).catch(async () => {
+        await $.prompt.fill({ text: `/resume ${entry.id}` })
+        $.ui.toast(`Enter 를 누르면 "${entry.title}" 세션으로 넘어가요.`)
+      })
+    })
     return
   }
   const shell = `cd '${entry.cwd.replace(/'/g, "'\\''")}' && claude --resume ${entry.id}`

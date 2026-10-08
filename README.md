@@ -42,7 +42,7 @@ claude plugin update desk-look
 
 `/desk-sessions` 패널의 줄을 누르거나 `/desk-sessions 3` 처럼 번호를 주면:
 
-- **같은 폴더의 세션**: 입력창에 `/resume <id>` 가 채워집니다. Enter 를 누르면 넘어갑니다. (플러그인은 `/resume` 같은 기본 명령을 대신 실행할 수 없습니다.)
+- **같은 폴더의 세션**: 지금 창에서 바로 그 세션으로 넘어갑니다(`/resume <id>` 실행). 실행이 막히면 입력창에 채워 두니 Enter 를 누르면 됩니다.
 - **다른 폴더의 세션**: `cd <폴더> && claude --resume <id>` 명령을 클립보드에 복사합니다(`wl-copy`).
 
 ### 환경별 동작
