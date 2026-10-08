@@ -93,6 +93,10 @@ async function advance($: EngineInterface, state: AskState, picks: string[], tex
   const nextTexts = state.texts.map((value, index) => (index === state.step ? text : value))
   if (state.step + 1 < state.questions.length) {
     await update($, asking, current => (current && current.id === state.id ? { ...current, step: current.step + 1, picks: nextPicks, texts: nextTexts } : current))
+    // 다음 질문의 요소는 키가 새로 생겨 포커스가 사라진다. 첫 선택지(글 답이면 입력칸)로 옮긴다.
+    const following = state.questions[state.step + 1]
+    const k = `${state.id}-${state.step + 1}`
+    await $.ui.focus({ requestId: ASK_PANE, key: following?.kind === 'choice' ? `ask-${k}-0` : `ask-text-${k}` }).catch(() => undefined)
     return
   }
   const answers = Object.fromEntries(
@@ -205,7 +209,14 @@ export function registerAsk(on: On, colors: Colors) {
               const isPicked = picks.includes(option.label)
               const mark = question.multiSelect ? (isPicked ? '☑ ' : '☐ ') : ''
               return (
-                <Box key={`opt-${k}-${index}`} flexDirection="column">
+                <Box
+                  key={`opt-${k}-${index}`}
+                  flexDirection="column"
+                  borderStyle="round"
+                  borderColor={isPicked ? colors.clay : colors.border}
+                  hover={{ borderColor: colors.clay }}
+                  paddingX={1}
+                >
                   <Button
                     key={`ask-${k}-${index}`}
                     plain
@@ -230,7 +241,7 @@ export function registerAsk(on: On, colors: Colors) {
         )}
         <Input
           key={`ask-text-${k}`}
-          label={question.kind === 'choice' ? 'Other ' : `답${unit} `}
+          label={question.kind === 'choice' ? 'Other' : `답${unit}`}
           placeholder={question.placeholder ?? (question.kind === 'number' ? '숫자' : '직접 입력하고 Enter')}
           value={text}
           autoFocus={question.kind === 'choice' ? undefined : true}
