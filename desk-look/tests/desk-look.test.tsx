@@ -751,3 +751,25 @@ test('에이전트 메시지 줄: 누르면 그 자리에서 마크다운으로 
   expect(await row.find({ type: 'Text', text: /L19 table row/ })).toBeDefined()
   await row.unmount()
 })
+
+import { bubbleSide } from '../hooks/register'
+
+test('말풍선 위치 설정: 기본 왼쪽', () => {
+  expect(bubbleSide({})).toBe('left')
+  expect(bubbleSide({ bubbleSide: 'right' })).toBe('right')
+  expect(bubbleSide({ bubbleSide: 'weird' })).toBe('left')
+})
+
+const PROMPT = { text: '안녕', origin: { kind: 'composer' }, isExpanded: false } as never
+
+test('말풍선 왼쪽(기본)', async $ => {
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: VIEWPORT, props: PROMPT })
+  expect(JSON.stringify(await row.drawn())).toContain('"alignItems":"flex-start"')
+  await row.unmount()
+})
+
+test('말풍선 오른쪽 설정', { options: { bubbleSide: 'right' } }, async $ => {
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: VIEWPORT, props: PROMPT })
+  expect(JSON.stringify(await row.drawn())).toContain('"alignItems":"flex-end"')
+  await row.unmount()
+})

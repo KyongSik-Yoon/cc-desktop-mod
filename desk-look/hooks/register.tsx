@@ -664,7 +664,14 @@ const asRunCall = (call: ToolGroupCall | (Call & { tool_use_id: string })): RunC
   output: call.output,
 })
 
-export const register: Register = on => {
+// 내 말풍선 위치(설정 메뉴의 bubbleSide). 왼쪽이 기본: 엔진이 말풍선 아래에 그리는 첨부 줄(└ …)이 왼쪽이라 나란해진다.
+export function bubbleSide(options: Record<string, unknown>): 'left' | 'right' {
+  return options.bubbleSide === 'right' ? 'right' : 'left'
+}
+
+export const register: Register = (on, options) => {
+  const side = bubbleSide(options)
+  const edge = side === 'right' ? 'flex-end' : 'flex-start'
   registerAsk(on)
 
   on('session.start', async ($, e, next) => {
@@ -809,9 +816,9 @@ export const register: Register = on => {
     const thumbColumns = Math.min(36, Math.floor(columns * 0.4))
 
     return (
-      <Box flexDirection="column" alignItems="flex-end" marginTop={1} rowGap={attached.length > 0 && text ? 1 : 0}>
+      <Box flexDirection="column" alignItems={edge} marginTop={1} rowGap={attached.length > 0 && text ? 1 : 0}>
         {attached.length > 0 && (
-          <Box flexDirection="row" columnGap={1} flexWrap="wrap" justifyContent="flex-end">
+          <Box flexDirection="row" columnGap={1} flexWrap="wrap" justifyContent={edge}>
             {attached.map(image => (
               <Image
                 key={`image-${image.number}`}
