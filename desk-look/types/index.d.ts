@@ -1,0 +1,44 @@
+export type FileDiff = { path: string; added: number; removed: number; patch: string; isNew: boolean }
+
+export type RepoInfo = { name: string; branch: string | null; isRepo: boolean }
+
+// 터미널 배경에서 계산한 데스크톱식 회색 면. omarchy 테마를 못 읽으면 null.
+export type Surface = { mode: 'light' | 'dark'; background: string; bubble: string }
+
+export type RunCall = {
+  tool_use_id: string
+  tool: string
+  input: unknown
+  isRunning: boolean
+  isErrored: boolean
+  isInterrupted: boolean
+  output?: unknown
+}
+
+// 답변 텍스트 없이 이어진 도구 호출 묶음. firstOf: 호출 id → 묶음 첫 호출 id.
+export type Runs = { firstOf: Record<string, string>; calls: Record<string, RunCall[]> }
+
+// 붙여 넣은 이미지 파일과 PNG 헤더의 크기. 키는 [Image #N] 의 N.
+export type ImageInfo = { path: string; width: number; height: number }
+
+// 한 턴에 편집 도구로 바꾼 파일. 턴이 끝나면 소요 시간과 함께 카드로 남는다.
+export type TurnEdit = { path: string; added: number; removed: number }
+
+export type TurnCard = { durationMs: number; files: TurnEdit[] }
+
+declare module 'claude-code' {
+  interface PluginState {
+    'desk-look': {
+      open: Record<string, boolean>
+      diff: FileDiff[]
+      repo: RepoInfo | null
+      surface: Surface | null
+      runs: Runs
+      images: Record<string, ImageInfo>
+      // 터미널이 kitty 그래픽을 그리는지(멀티플렉서 밖의 kitty·Ghostty).
+      graphics: boolean
+      pendingEdits: TurnEdit[]
+      turnCards: TurnCard[]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Claude Code 로컬 설정
+/.claude/settings.local.json
+
+# 엔진이 mod 를 로드할 때마다 다시 까는 타입 정의 — 커밋하지 않는다
+.claude-plugin/types/
+node_modules/

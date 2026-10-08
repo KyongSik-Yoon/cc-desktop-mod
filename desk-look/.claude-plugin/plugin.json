@@ -1,0 +1,9 @@
+{
+  "name": "desk-look",
+  "version": "0.1.0",
+  "description": "Claude 데스크톱 앱 Code 탭처럼 보이도록 터미널 transcript 를 다시 그린다",
+  "author": { "name": "KyongSik-Yoon", "url": "https://github.com/KyongSik-Yoon" },
+  "homepage": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
+  "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
+  "types": "./types/index.d.ts"
+}

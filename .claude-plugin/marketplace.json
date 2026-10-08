@@ -1,0 +1,17 @@
+{
+  "name": "cc-desktop-mod",
+  "owner": {
+    "name": "KyongSik-Yoon",
+    "url": "https://github.com/KyongSik-Yoon"
+  },
+  "metadata": {
+    "description": "Claude Code 터미널 UI 를 데스크톱 앱처럼 꾸미는 mod 모음"
+  },
+  "plugins": [
+    {
+      "name": "desk-look",
+      "source": "./desk-look",
+      "description": "Claude 데스크톱 앱 Code 탭처럼 보이도록 터미널 transcript 를 다시 그린다"
+    }
+  ]
+}
