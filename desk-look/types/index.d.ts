@@ -42,7 +42,8 @@ export type AskQuestion = {
   unit?: string
 }
 // dir: 답 파일을 주고받는 임시 폴더. picks·texts 는 질문마다 고른 라벨과 입력한 글.
-export type AskState = { id: string; dir: string; questions: AskQuestion[]; step: number; picks: string[][]; texts: string[] }
+// shownAt: 지금 질문을 띄운 시각(ms). 질문이 바뀐 직후의 숫자 키는 무시한다.
+export type AskState = { id: string; dir: string; questions: AskQuestion[]; step: number; picks: string[][]; texts: string[]; shownAt: number }
 
 export type TurnCard = { durationMs: number; files: TurnEdit[]; text?: string }
 

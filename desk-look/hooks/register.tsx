@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit } from '../types'
+import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, renderMarkdown } from './markdown'
 import { computeRuns } from './runs'
 import { LIST_SESSIONS, ago, clip, groupSessions, numbered, parseSessions } from './sessions'
-import { registerAsk } from './ask'
+import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
+import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 
@@ -41,6 +42,8 @@ const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const,
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
+// 질문 카드 상태. ask.tsx 의 것과 같은 키다(상태 원본은 파일마다 선언해야 한다).
+const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 
@@ -522,7 +525,7 @@ const asRunCall = (call: ToolGroupCall | (Call & { tool_use_id: string })): RunC
 })
 
 export const register: Register = on => {
-  registerAsk(on, COLORS)
+  registerAsk(on)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -766,7 +769,7 @@ export const register: Register = on => {
     )
   })
 
-  // 입력창 위: 할 일 카드와 "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 위에 그대로 둔다.
+  // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 위에 그대로 둔다.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) {
       return next(e)
@@ -775,12 +778,14 @@ export const register: Register = on => {
     const [info, list] = await Promise.all([read($, repo), read($, tasks)])
     const els = $.ui.resolve(e)
     const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
+    const question = await askCard($, els, e.props.bodyColumns)
     const chin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns)
-    if (plan === null && chin === null) return below
+    if (plan === null && question === null && chin === null) return below
     return (
       <els.Box flexDirection="column">
         {below}
         {plan}
+        {question}
         {chin}
       </els.Box>
     )
@@ -938,6 +943,130 @@ export const register: Register = on => {
       </Box>
     )
   })
+}
+
+// 질문 카드(입력창 위 띠). 묻는 상태와 도구 호출 훅은 ask.tsx, 그리기와 버튼은 여기($ 는 파일을 넘지 못한다).
+async function replyAsk($: EngineInterface, dir: string, payload: AskReply) {
+  await $.process.run(['sh', '-c', ASK_WRITE, 'sh', dir, JSON.stringify(payload)], { timeoutMs: 3000 })
+}
+
+// 지금 질문에 답을 정하고 다음 질문으로, 마지막이면 답을 보낸다.
+// 선택지 하나를 눌렀을 때. 질문이 바뀐 직후(ASK_SETTLE)의 키는 앞 질문에서 넘어온 것이라 버린다:
+// 키를 누르고 떼는 사이에 질문이 바뀌면 다음 질문의 같은 번호가 함께 눌리기 때문이다.
+const ASK_SETTLE = 350
+
+async function pickAsk($: EngineInterface, state: AskState, label: string, isPicked: boolean) {
+  if ((await $.clock.now()) - state.shownAt < ASK_SETTLE) return
+  const question = state.questions[state.step]
+  if (!question) return
+  if (!question.multiSelect) return advanceAsk($, state, [label], '')
+  const picks = state.picks[state.step] ?? []
+  const value = isPicked ? picks.filter(item => item !== label) : [...picks, label]
+  await update($, asking, current =>
+    current && current.id === state.id ? { ...current, picks: current.picks.map((item, index) => (index === current.step ? value : item)) } : current,
+  )
+}
+
+async function advanceAsk($: EngineInterface, state: AskState, picks: string[], text: string) {
+  const question = state.questions[state.step]
+  if (!question) return
+  const problem = numberProblem(question, text)
+  if (problem) {
+    $.ui.toast(problem)
+    return
+  }
+  const nextPicks = state.picks.map((value, index) => (index === state.step ? picks : value))
+  const nextTexts = state.texts.map((value, index) => (index === state.step ? text : value))
+  if (state.step + 1 < state.questions.length) {
+    const shownAt = await $.clock.now()
+    await update($, asking, current =>
+      current && current.id === state.id ? { ...current, step: current.step + 1, picks: nextPicks, texts: nextTexts, shownAt } : current,
+    )
+    return
+  }
+  const answers = Object.fromEntries(
+    state.questions.map((item, index) => [item.question, answerOf(item, nextPicks[index] ?? [], nextTexts[index] ?? '')]),
+  )
+  await replyAsk($, state.dir, { kind: 'answer', answers })
+}
+
+// 입력창 위 띠의 질문 카드. 묻는 중이 아니면 null.
+async function askCard($: EngineInterface, els: Elements['terminal'], columns: number) {
+  const { Box, Text, Button, Input } = els
+  const state = await read($, asking)
+  const question = state?.questions[state.step]
+  if (!state || !question) return null
+  const picks = state.picks[state.step] ?? []
+  const text = state.texts[state.step] ?? ''
+  const total = state.questions.length
+  const isLast = state.step + 1 === total
+  const k = `${state.id}-${state.step}`
+  const setText = (value: string) =>
+    update($, asking, current =>
+      current && current.id === state.id ? { ...current, texts: current.texts.map((item, index) => (index === current.step ? value : item)) } : current,
+    )
+  const unit = question.unit ? ` (${question.unit})` : ''
+  const width = Math.max(30, Math.min(columns, 100))
+
+  return (
+    <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
+      <Box columnGap={1}>
+        {question.header !== '' && (
+          <Text color={COLORS.clay} bold>
+            {question.header}
+          </Text>
+        )}
+        {total > 1 && <Text color={COLORS.muted}>{`${state.step + 1}/${total}`}</Text>}
+      </Box>
+      <Text color={COLORS.text} bold>
+        {question.question}
+      </Text>
+      {question.description && <Text color={COLORS.muted}>{question.description}</Text>}
+      {question.kind === 'choice' && (
+        <Box flexDirection="column" marginTop={1}>
+          {question.options.map((option, index) => {
+            const isPicked = picks.includes(option.label)
+            const mark = question.multiSelect ? (isPicked ? '☑ ' : '☐ ') : ''
+            return (
+              <Box key={`opt-${k}-${index}`} columnGap={2}>
+                <Button
+                  key={`ask-${k}-${index}`}
+                  plain
+                  hover={{ color: COLORS.clay }}
+                  hotkey={index < 8 ? String(index + 1) : undefined}
+                  label={`${mark}${option.label}`}
+                  onPress={() => void pickAsk($, state, option.label, isPicked)}
+                />
+                {option.description && option.description !== option.label && (
+                  <Text color={COLORS.muted} wrap="truncate-end">
+                    {option.description}
+                  </Text>
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )}
+      <Box marginTop={1}>
+        <Input
+          key={`ask-text-${k}`}
+          label={question.kind === 'choice' ? 'Other' : `답${unit}`}
+          placeholder={question.placeholder ?? (question.kind === 'number' ? '숫자' : '클릭해서 입력, 키보드로는 9 → Type something')}
+          value={text}
+          submitLabel={isLast ? '제출' : '다음'}
+          onInput={value => void setText(value)}
+          onSubmit={value => void advanceAsk($, state, question.multiSelect ? picks : [], value)}
+        />
+      </Box>
+      <Box columnGap={2}>
+        {question.multiSelect && (
+          <Button key={`ask-next-${k}`} hotkey="0" label={isLast ? '제출' : '다음 →'} onPress={() => void advanceAsk($, state, picks, text)} />
+        )}
+        <Button key={`ask-engine-${k}`} plain dimColor hotkey="9" label="기본 창으로" onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
+        <Button key={`ask-close-${k}`} plain dimColor label="닫기" onPress={() => void replyAsk($, state.dir, { kind: 'dismiss' })} />
+      </Box>
+    </Box>
+  )
 }
 
 // 데스크톱 입력창의 회색 아래턱: 폭을 채운 알약 띠, 왼쪽에 저장소·브랜치, 오른쪽에 diff 칩.
