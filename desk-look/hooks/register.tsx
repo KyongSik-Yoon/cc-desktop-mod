@@ -464,6 +464,43 @@ async function revertFile($: EngineInterface, path: string, isArmed: boolean) {
 const toggle = ($: EngineInterface, id: string, shown?: boolean) =>
   update($, open, state => ({ ...state, [id]: !(state[id] ?? shown ?? false) }))
 
+// 턴 끝 카드의 파일(도구가 준 경로, 보통 절대 경로)이나 /desk-diff 에 준 이름(뒷부분)에 맞는
+// diff 패널 파일(저장소 기준 경로). 절대 경로 쪽은 가장 길게 맞는 것, 이름 쪽은 첫 번째.
+export function matchDiffFile(files: ReadonlyArray<{ path: string }>, path: string): string | null {
+  const whole = files.filter(file => file.path === path || path.endsWith(`/${file.path}`))
+  const best = whole.sort((a, b) => b.path.length - a.path.length)[0]
+  return best?.path ?? files.find(file => file.path.endsWith(`/${path}`))?.path ?? null
+}
+
+// 앞을 줄인다: 경로는 파일 이름 쪽이 중요하다.
+export function clipStart(text: string, width: number): string {
+  if (cellWidth(text) <= width) return text
+  let out = ''
+  for (const ch of [...text].reverse()) {
+    if (cellWidth(ch + out) > width - 1) break
+    out = ch + out
+  }
+  return `…${out}`
+}
+
+// 데스크톱처럼 턴 끝 카드의 파일을 누르면 diff 패널을 그 파일에서 연다(접혀 있으면 펼쳐서).
+async function openDiffAt($: EngineInterface, path: string) {
+  await refreshDiff($)
+  const target = matchDiffFile(await read($, diff), path)
+  await $.ui.open({ id: PANE, title: '변경 사항', focus: true })
+  if (target === null) {
+    $.ui.toast('이 파일은 지금 커밋되지 않은 변경에 없어요(커밋했거나 저장소 밖).')
+    return
+  }
+  await update($, open, state => ({ ...state, [`fold:${target}`]: false }))
+  // 막 연 패널은 아직 그려지기 전이라 스크롤이 거부된다("not this plugin's site"). 그려질 때까지 잠깐 다시 한다.
+  for (let tries = 0; tries < 8; tries++) {
+    const moved = await $.ui.scroll({ to: { key: `file-${target}` }, in: PANE, block: 'start' }).catch(() => ({ deny: 'failed' }))
+    if (!moved.deny) return
+    await $.clock.sleep(100).catch(() => undefined)
+  }
+}
+
 async function refreshSurface($: EngineInterface) {
   const home = await $.env.get('HOME')
   const toml = home ? await $.fs.read(`${home}/${OMARCHY_COLORS}`).catch(() => null) : null
@@ -781,7 +818,8 @@ export const register: Register = (on, options) => {
     })
     await $.command.register({
       name: 'desk-diff',
-      description: '데스크톱 앱처럼 우측에 변경 파일 diff 패널을 연다',
+      description: '데스크톱 앱처럼 우측에 변경 파일 diff 패널을 연다 (파일 이름을 주면 그 파일에서)',
+      argumentHint: '[파일]',
     })
     await $.command.register({
       name: 'desk-context',
@@ -874,7 +912,12 @@ export const register: Register = (on, options) => {
     return { text: '컨텍스트 패널을 열었습니다.' }
   })
 
-  on('command.run', { command: 'desk-diff' }, async $ => {
+  on('command.run', { command: 'desk-diff' }, async ($, e) => {
+    const name = e.args.trim()
+    if (name !== '') {
+      await openDiffAt($, name)
+      return { text: `변경 사항 패널을 ${name} 에서 열었습니다.` }
+    }
     await refreshDiff($)
     await $.ui.open({ id: PANE, title: '변경 사항', focus: true })
     return { text: '변경 사항 패널을 열었습니다.' }
@@ -1149,6 +1192,21 @@ export const register: Register = (on, options) => {
     const hidden = card.files.length - shown.length
     const width = Math.max(30, Math.min((e.viewport?.columns ?? 80) - 4, 72))
     const name = (path: string) => path.split('/').pop() ?? path
+    const rich = await read($, richButtons)
+    const els = $.ui.resolve(e)
+    // 파일 줄은 누르면 diff 패널의 그 파일로. 이름을 채워 칩을 오른쪽 끝에 맞춘다(테두리·여백 4칸).
+    const fileRow = (file: TurnEdit) => {
+      const chips = ` +${file.added}  −${file.removed} `
+      const room = Math.max(8, width - 4 - cellWidth(chips))
+      const label = clipStart(name(file.path), room)
+      return rowButton(
+        els,
+        rich,
+        { key: `diffat-${card.durationMs}-${file.path}`, onPress: () => void openDiffAt($, file.path).catch(() => undefined) },
+        label + ' '.repeat(Math.max(0, room - cellWidth(label))),
+        diffChips(Text, file.added, file.removed),
+      )
+    }
 
     return (
       <Box flexDirection="column">
@@ -1160,14 +1218,7 @@ export const register: Register = (on, options) => {
             </Text>
             {diffChips(Text, added, removed)}
           </Box>
-          {shown.map(file => (
-            <Box justifyContent="space-between">
-              <Text color={COLORS.text} wrap="truncate-start">
-                {name(file.path)}
-              </Text>
-              {diffChips(Text, file.added, file.removed)}
-            </Box>
-          ))}
+          {shown.map(fileRow)}
           {(hidden > 0 || isOpen) && card.files.length > CARD_ROWS && (
             <Button
               key={key}
@@ -1321,9 +1372,13 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Code } = $.ui.resolve(e)
+    // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
+    const els = $.ui.resolve(e) as Els
+    const { Box, Text, Button, Code } = els
     const files = await read($, diff)
     const armed = await read($, open)
+    const rich = await read($, richButtons)
+    const columns = e.viewport?.columns ?? 80
     const info = await read($, repo)
     const added = files.reduce((sum, file) => sum + file.added, 0)
     const removed = files.reduce((sum, file) => sum + file.removed, 0)
@@ -1342,11 +1397,17 @@ export const register: Register = (on, options) => {
         {files.map(file => (
           <Box key={`file-${file.path}`} flexDirection="column">
             <Box columnGap={1}>
-              <Text color={COLORS.text} wrap="truncate-start">
-                {file.path}
-              </Text>
-              {file.isNew && <Text color={COLORS.muted}>new</Text>}
-              {diffChips(Text, file.added, file.removed)}
+              {/* 파일 머리 줄을 누르면 그 파일의 diff 를 접고 편다 */}
+              {rowButton(
+                els,
+                rich,
+                { key: `fold-${file.path}`, onPress: () => toggle($, `fold:${file.path}`) },
+                clipStart(file.path, Math.max(12, columns - 34)),
+                file.isNew && <Text color={COLORS.muted}> new</Text>,
+                ' ',
+                diffChips(Text, file.added, file.removed),
+                <Text color={COLORS.muted}>{armed[`fold:${file.path}`] ? ' ›' : ' ⌄'}</Text>,
+              )}
               {!file.isNew && (
                 <Button
                   key={`revert-${file.path}`}
@@ -1357,7 +1418,7 @@ export const register: Register = (on, options) => {
                 />
               )}
             </Box>
-            {file.patch ? (
+            {armed[`fold:${file.path}`] ? null : file.patch ? (
               <Code source={file.patch} path={file.path} format="diff" />
             ) : (
               <Text color={COLORS.muted}>바이너리 또는 모드 변경</Text>

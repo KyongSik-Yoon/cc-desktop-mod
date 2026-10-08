@@ -948,3 +948,66 @@ for (const version of ['2.1.295', '2.1.294']) {
     await row.unmount()
   })
 }
+
+import { clipStart, matchDiffFile } from '../hooks/register'
+
+test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', () => {
+  const files = [{ path: 'a.txt' }, { path: 'src/a.txt' }, { path: 'b.txt' }]
+  expect(matchDiffFile(files, '/repo/src/a.txt')).toBe('src/a.txt')
+  expect(matchDiffFile(files, '/repo/a.txt')).toBe('a.txt')
+  expect(matchDiffFile(files, 'b.txt')).toBe('b.txt')
+  expect(matchDiffFile(files, '/repo/c.txt')).toBe(null)
+  expect(matchDiffFile([{ path: 'desk-look/hooks/register.tsx' }], 'register.tsx')).toBe('desk-look/hooks/register.tsx')
+  expect(matchDiffFile([{ path: 'desk-look/hooks/register.tsx' }], 'hooks/register.tsx')).toBe('desk-look/hooks/register.tsx')
+  expect(clipStart('desk-look/hooks/register.tsx', 14)).toBe('…/register.tsx')
+  expect(clipStart('a.txt', 14)).toBe('a.txt')
+})
+
+const DIFF_PATCH = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1,2 @@\n-a\n+b\n+c\n'
+const gitStub = ($: unknown, e: { argv: string[] }) => {
+  const stdout = e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? DIFF_PATCH : e.argv.includes('--abbrev-ref') ? 'main\n' : ''
+  return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+}
+
+test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 열린다', async ($, on) => {
+  const opened: string[] = []
+  on('process.run', gitStub as never)
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('clock.now', () => ({ value: 0 }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('turn.complete', () => ({ text: '고쳤어요' }) as never)
+  on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>Baked for 3s</Text>
+  })
+  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.txt', old_string: 'a', new_string: 'b\nc' } as never)
+  await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '고쳤어요', turnId: 't1' } as never)
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 3000 } })
+  expect(await row.find({ type: 'Text', text: /Edited 1 file/ })).toBeDefined()
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  // 접어 둔 파일이라도 카드에서 누르면 펼쳐서 연다(그 파일로 스크롤은 실화면에서 확인: 테스트 도구는 key 스크롤을 풀지 못한다)
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  await row.press({ key: 'diffat-3000-/repo/a.txt' })
+  expect(opened).toEqual(['desk-diff'])
+  expect(await pane.find({ type: 'Code' })).toBeDefined()
+  await pane.unmount()
+  await row.unmount()
+})
+
+test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편다', async ($, on) => {
+  on('process.run', gitStub as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  expect(await pane.find({ type: 'Code' })).toBeDefined()
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeDefined()
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await pane.find({ type: 'Code' })).toBeDefined()
+  await pane.unmount()
+})
