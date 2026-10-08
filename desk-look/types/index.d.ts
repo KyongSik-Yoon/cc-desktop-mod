@@ -43,6 +43,10 @@ declare module 'claude-code' {
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
       sessions: SessionEntry[]
+      // 지금 턴이 시작된 시각(ms), 턴 밖이면 null.
+      turnStartedAt: number | null
+      // 스피너를 다시 그리게 하는 시계(ms).
+      tick: number
     }
   }
 }

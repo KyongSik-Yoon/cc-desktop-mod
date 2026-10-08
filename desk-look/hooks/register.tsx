@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register, ToolGroupCall } from 'claude-code'
+import type { Elements, EngineInterface, Register, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
 import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, SessionEntry, Surface, TurnCard, TurnEdit } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
@@ -38,6 +38,15 @@ const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
+const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
+const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
+
+// 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
+// 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
+const SPINNER_TICK = 500
+let ticker: Timer | null = null
+let spinnerSeen = 0
+let spinnerFallbackStart = 0
 
 const FILE_EDITING = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
 const CARD_ROWS = 3
@@ -330,6 +339,13 @@ async function openSession($: EngineInterface, entry: SessionEntry) {
   $.ui.toast(copied?.exitCode === 0 ? `다른 폴더의 세션이에요. 명령을 복사했어요: ${shell}` : `다른 폴더의 세션이에요: ${shell}`)
 }
 
+// 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 멀티플렉서·SSH 안에서도 된다.
+async function copyCode($: EngineInterface, source: string, press: UiPressArgument) {
+  const copied = await $.ui.copy({ text: source, surface: press.surface })
+  const lines = source.split('\n').length
+  $.ui.toast(copied.isCopied ? `코드 ${lines}줄을 복사했어요` : `복사하지 못했어요: ${copied.reason}`)
+}
+
 async function refreshRuns($: EngineInterface) {
   const next = computeRuns(await $.session.messages())
   await update($, runs, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
@@ -487,6 +503,8 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     await update($, pendingEdits, () => [])
+    const now = await $.clock.now()
+    await update($, turnStartedAt, () => now)
     return next(e)
   })
 
@@ -498,6 +516,7 @@ export const register: Register = on => {
         await update($, turnCards, cards => [...cards, { durationMs: e.durationMs, files }].slice(-100))
       }
       await update($, pendingEdits, () => [])
+      await update($, turnStartedAt, () => null)
     }
     return done
   })
@@ -601,7 +620,7 @@ export const register: Register = on => {
 
     return (
       <els.Box flexDirection="column" marginTop={e.props.isFirstOfReply ? 1 : 0}>
-        {renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns)}
+        {renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns, { onCopy: (source, press) => void copyCode($, source, press) })}
       </els.Box>
     )
   })
@@ -642,6 +661,36 @@ export const register: Register = on => {
     return runLine(els, $, e.requestId, e.props.calls.map(asRunCall), openState)
   })
 
+  // 진행 표시: 데스크톱의 "··· Running… 2m 29s". 클레이색 점 셋이 돌고, 경과 시간은 흐리게.
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const { Text } = $.ui.resolve(e)
+    const [now, startedAt] = await Promise.all([$.clock.now(), read($, turnStartedAt), read($, tick)])
+    if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
+    spinnerSeen = now
+    if (ticker === null) {
+      ticker = $.clock.every(SPINNER_TICK, () => {
+        void (async () => {
+          const at = await $.clock.now()
+          if (at - spinnerSeen > 2000) {
+            ticker?.cancel()
+            ticker = null
+            return
+          }
+          await update($, tick, () => at)
+        })()
+      })
+    }
+    const elapsed = now - (startedAt ?? spinnerFallbackStart)
+    return (
+      <Text>
+        <Text color={COLORS.clay}>{spinnerDots(now)}</Text>
+        <Text color={COLORS.text}>{` ${spinnerWord(e.props.mode, e.props.message)}${e.props.suffix}`}</Text>
+        <Text color={COLORS.muted}>{`  ${formatElapsed(elapsed)}`}</Text>
+      </Text>
+    )
+  })
+
   // 입력창 위 칩: "저장소  브랜치  +63 −29". 다른 플러그인의 밴드는 위에 그대로 둔다.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) {
@@ -657,22 +706,37 @@ export const register: Register = on => {
     const files = await read($, diff)
     const added = files.reduce((sum, file) => sum + file.added, 0)
     const removed = files.reduce((sum, file) => sum + file.removed, 0)
-    const fill = face ? { backgroundColor: face.bubble } : {}
 
+    if (!face) {
+      return (
+        <Box flexDirection="column">
+          {below}
+          <Box columnGap={2} paddingX={1}>
+            <Text color={COLORS.muted}>{info.name}</Text>
+            {info.branch && <Text color={COLORS.muted}>{info.branch}</Text>}
+            {files.length > 0 && diffChips(Text, added, removed)}
+          </Box>
+        </Box>
+      )
+    }
+
+    // 데스크톱 입력창의 회색 아래턱: 폭을 채운 알약 띠, 왼쪽에 저장소·브랜치, 오른쪽에 diff 칩.
+    const left = chinLabel(info.name, info.branch)
+    const chips = files.length > 0 ? ` +${added}  −${removed} ` : ''
+    const gap = Math.max(1, e.props.bodyColumns - 2 - cellWidth(left) - cellWidth(chips) - 1)
     return (
       <Box flexDirection="column">
         {below}
-        <Box columnGap={2} paddingX={1} {...fill}>
-          <Text color={COLORS.muted} {...fill}>
-            {info.name}
+        <Text>
+          <Text color={face.bubble}>{EDGES.single[0]}</Text>
+          <Text color={COLORS.muted} backgroundColor={face.bubble}>
+            {left}
           </Text>
-          {info.branch && (
-            <Text color={COLORS.muted} {...fill}>
-              {info.branch}
-            </Text>
-          )}
+          <Text backgroundColor={face.bubble}>{' '.repeat(gap)}</Text>
           {files.length > 0 && diffChips(Text, added, removed)}
-        </Box>
+          <Text backgroundColor={face.bubble}> </Text>
+          <Text color={face.bubble}>{EDGES.single[1]}</Text>
+        </Text>
       </Box>
     )
   })
@@ -882,6 +946,40 @@ export function wrapText(text: string, width: number): string[] {
     out.push(line.trimEnd())
   }
   return out
+}
+
+// 스피너 글자: 엔진이 덮어쓴 문구가 있으면 그것, 없으면 하는 일에 맞춘 데스크톱 낱말.
+const SPINNER_WORDS = {
+  requesting: 'Working',
+  thinking: 'Thinking',
+  responding: 'Responding',
+  'tool-input': 'Preparing',
+  'tool-use': 'Running',
+} as const
+
+export function spinnerWord(mode: keyof typeof SPINNER_WORDS, message: string | null): string {
+  return message ?? SPINNER_WORDS[mode] ?? 'Working'
+}
+
+// 밝은 점 하나가 왼쪽에서 오른쪽으로 도는 세 칸.
+export function spinnerDots(now: number): string {
+  const frame = Math.floor(now / SPINNER_TICK) % 3
+  return ['●', '·', '·'].map((_, index) => (index === frame ? '●' : '·')).join('')
+}
+
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
+}
+
+// 아래턱 왼쪽 글자. 아이콘은 Nerd Font(폴더 U+F07B, 브랜치 U+E0A0). 폴더 아이콘은 두 칸으로 그려지니 뒤에 빈칸 두 개를 둔다.
+export function chinLabel(name: string, branch: string | null | undefined): string {
+  return branch ? ` \uf07b  ${name}   \ue0a0 ${branch}` : ` \uf07b  ${name}`
 }
 
 // 데스크톱의 초록·빨강 diff 칩.

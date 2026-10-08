@@ -1,4 +1,4 @@
-import type { Elements } from 'claude-code'
+import type { Elements, UiPressArgument } from 'claude-code'
 
 import { renderDiagram } from './diagram'
 
@@ -301,8 +301,11 @@ const ALERTS: Record<string, { title: string; color: string }> = {
   CAUTION: { title: '✕ Caution', color: 'error' },
 }
 
-export function renderMarkdown(markdown: string, els: Els, colors: Palette, columns: number) {
-  const { Box, Text, Code, Link } = els
+// onCopy 가 있으면 코드 블록 위 테두리 오른쪽에 마우스를 올렸을 때만 보이는 "⧉ copy" 버튼을 단다.
+export type MarkdownOptions = { onCopy?: (source: string, press: UiPressArgument) => void }
+
+export function renderMarkdown(markdown: string, els: Els, colors: Palette, columns: number, options: MarkdownOptions = {}) {
+  const { Box, Text, Code, Link, Button } = els
   const codePadding = colors.codeBg ? 1 : 0
 
   const inline = (nodes: Inline[], key: string): (string | ReturnType<typeof h>)[] =>
@@ -418,11 +421,23 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
               )
             }
           }
-          return (
-            <Box marginTop={gap} flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
-              <Code source={block.source} language={block.language} wrap="wrap" />
-            </Box>
-          )
+          {
+            const code = (
+              <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
+                <Code source={block.source} language={block.language} wrap="wrap" />
+              </Box>
+            )
+            const onCopy = options.onCopy
+            if (!onCopy) return <Box marginTop={gap}>{code}</Box>
+            return (
+              <Box key={`code${k}`} marginTop={gap} flexDirection="column">
+                {code}
+                <Box position="absolute" top={0} right={2} display="none" hover={{ display: 'flex' }}>
+                  <Button key={`copy${k}`} plain dimColor label=" ⧉ copy " onPress={press => onCopy(block.source, press)} />
+                </Box>
+              </Box>
+            )
+          }
         case 'table':
           return <Box marginTop={gap}>{table(block, k, room)}</Box>
         case 'quote':

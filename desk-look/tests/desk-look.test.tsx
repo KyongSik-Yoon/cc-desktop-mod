@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { bubbleEdges, bubbleRows, cardFor, describeCalls, lineChange, mergeEdit, diffStat, editHunk, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
+import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
 const VIEWPORT = { columns: 100, rows: 40 }
@@ -35,7 +35,12 @@ const REPLY = [
 ].join('\n')
 
 describe('응답 렌더링', () => {
-  test('답변은 서명 없이 데스크톱 산문 스타일로 그린다', async $ => {
+  test('답변은 서명 없이 데스크톱 산문 스타일로 그린다', async ($, on) => {
+    const copied: string[] = []
+    on('ui.copy', ($, e) => {
+      copied.push(e.text)
+      return { value: { isCopied: true } }
+    })
     const reply = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
@@ -55,6 +60,13 @@ describe('응답 렌더링', () => {
     expect(drawn).toContain('"href":"https://example.com/doc"')
     expect(drawn).toContain('"borderStyle":"quote"')
     expect(await reply.find({ type: 'Code' })).toBeDefined()
+    // 코드 블록 복사 버튼: 평소엔 숨고 마우스를 올리면 보인다
+    expect(drawn).toContain('"hover":{"display":"flex"}')
+    const copyKey = /"key":"(copymd\.\d+)"/.exec(drawn)?.[1]
+    expect(copyKey).toBeDefined()
+    await reply.press({ key: copyKey ?? '' })
+    expect(copied.length).toBe(1)
+    expect(REPLY).toContain(copied[0] ?? '∅')
     expect(await reply.find({ type: 'Text', text: '•' })).toBeDefined()
     await reply.unmount()
   })
@@ -434,4 +446,18 @@ test('세션 목록 읽기·묶기·표시', async () => {
   expect(ago(0, 3 * 3_600_000)).toBe('3시간')
   expect(clip('가나다라마바', 7)).toBe('가나다…')
   expect(clip('짧음', 10)).toBe('짧음')
+})
+
+test('입력창 아래턱 글자', () => {
+  expect(chinLabel('cc-desktop-mod', 'main')).toBe(' \uf07b  cc-desktop-mod   \ue0a0 main')
+  expect(chinLabel('scratch', null)).toBe(' \uf07b  scratch')
+})
+
+test('진행 표시 글자', () => {
+  expect(spinnerWord('tool-use', null)).toBe('Running')
+  expect(spinnerWord('thinking', 'Compacting conversation')).toBe('Compacting conversation')
+  expect(formatElapsed(12_400)).toBe('12s')
+  expect(formatElapsed(149_000)).toBe('2m 29s')
+  expect(formatElapsed(3_720_000)).toBe('1h 2m')
+  expect([0, 500, 1000, 1500].map(spinnerDots)).toEqual(['●··', '·●·', '··●', '●··'])
 })
