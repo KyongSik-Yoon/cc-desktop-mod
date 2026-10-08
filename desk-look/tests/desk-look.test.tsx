@@ -569,3 +569,34 @@ test('질문 도구 줄: 질문과 답', () => {
   expect(askAnswer('{"answers":{"q":"a"}}')).toBe('a')
   expect(askAnswer('oops')).toBeNull()
 })
+
+import { agentOf } from '../hooks/runs'
+import { formatTokens, textKey } from '../hooks/register'
+
+test('서브에이전트 카드 요약과 묶음', () => {
+  const raw = {
+    agentId: 'a1',
+    status: 'completed',
+    agentType: 'Explore',
+    content: [{ type: 'text', text: '찾았어요' }],
+    totalToolUseCount: 12,
+    totalDurationMs: 62_000,
+    totalTokens: 34_512,
+    toolStats: { linesAdded: 3, linesRemoved: 1 },
+  }
+  const summary = agentOf(raw)
+  expect(summary).toEqual({ status: 'completed', type: 'Explore', model: undefined, toolUses: 12, durationMs: 62_000, tokens: 34_512, added: 3, removed: 1, text: '찾았어요' })
+  expect(agentOf({ agent: summary })).toEqual(summary)
+  expect(agentOf('not json')).toBeNull()
+  expect(formatTokens(34_512)).toBe('34.5k')
+  expect(textKey('a')).toBe(textKey('a'))
+  expect(textKey('a')).not.toBe(textKey('b'))
+  // 에이전트는 다른 도구와 같은 묶음에 넣지 않고, 연달아 띄운 에이전트끼리 묶는다
+  const use = (id: string, tool: string) => ({ tool_use_id: id, tool, input: {} })
+  const runsOf = computeRuns([
+    { role: 'assistant', text: '', toolUses: [use('r', 'Read'), use('a', 'Agent'), use('b', 'Agent'), use('g', 'Grep')] },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'a', text: 'x', isError: false, result: raw }] },
+  ])
+  expect(runsOf.firstOf).toEqual({ r: 'r', a: 'a', b: 'a', g: 'g' })
+  expect(runsOf.calls.a?.[0]?.output).toEqual({ agent: summary })
+})

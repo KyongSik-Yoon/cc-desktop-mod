@@ -4,7 +4,7 @@ import type { Elements, EngineInterface, Register, Timer, ToolGroupCall, UiPress
 import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, renderMarkdown } from './markdown'
-import { computeRuns } from './runs'
+import { agentOf, computeRuns, isAgentTool } from './runs'
 import { LIST_SESSIONS, ago, clip, groupSessions, numbered, parseSessions } from './sessions'
 import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
@@ -448,8 +448,122 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall) {
   }
 }
 
+// 백그라운드 작업이 끝났다는 알림 한 줄: "✓ Find chin in README  completed · 5s".
+// 제목은 그 작업을 띄운 호출의 설명(에이전트) 또는 요약(명령), 모르면 알림 글의 첫 줄.
+const TASK_MARK: Record<string, { mark: string; color: string }> = {
+  completed: { mark: '✓', color: COLORS.success },
+  failed: { mark: '✕', color: COLORS.danger },
+  killed: { mark: '■', color: COLORS.muted },
+}
+
+function taskRow(els: Els, task: { status?: string; toolUseId?: string; durationMs?: number }, text: string, state: Runs) {
+  const { Box, Text } = els
+  const call = Object.values(state.calls)
+    .flat()
+    .find(item => item.tool_use_id === task.toolUseId)
+  const fields = fieldsOf(call?.input)
+  const title =
+    stringField(fields, 'description') ?? (call ? summarize(call.tool, call.input) : undefined) ?? text.split('\n')[0] ?? ''
+  const style = TASK_MARK[task.status ?? ''] ?? { mark: '◆', color: COLORS.clay }
+  const facts = [task.status, task.durationMs !== undefined ? formatElapsed(task.durationMs) : null].filter(Boolean).join(' · ')
+  return (
+    <Box columnGap={1}>
+      <Text color={style.color}>{style.mark}</Text>
+      <Text color={COLORS.text} wrap="truncate-end">
+        {title}
+      </Text>
+      {facts !== '' && <Text color={COLORS.muted}>{facts}</Text>}
+    </Box>
+  )
+}
+
+// 글을 짧은 키로(같은 메시지는 같은 키): 펼침 상태를 메시지마다 기억한다.
+export function textKey(text: string): string {
+  let hash = 5381
+  for (let index = 0; index < text.length; index++) hash = ((hash << 5) + hash + text.charCodeAt(index)) | 0
+  return (hash >>> 0).toString(36)
+}
+
+// 에이전트가 보낸 메시지: "◆ Explore  첫 줄 미리보기 ›", 누르면 본문을 마크다운으로.
+function peerRow(els: Els, $: EngineInterface, name: string, text: string, openState: Record<string, boolean>, columns: number) {
+  const { Box, Text, Button } = els
+  const key = `peer-${textKey(name + text)}`
+  const isOpen = openState[key] ?? false
+  const preview = text.split('\n').find(line => line.trim() !== '')?.trim() ?? ''
+  return (
+    <Box flexDirection="column">
+      <Box columnGap={1}>
+        <Text color={COLORS.clay}>◆</Text>
+        <Button key={key} plain label={name.replace(/^@/, '')} onPress={() => toggle($, key, isOpen)} />
+        {!isOpen && (
+          <Text color={COLORS.muted} wrap="truncate-end">
+            {preview}
+          </Text>
+        )}
+        <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>
+      </Box>
+      {isOpen && (
+        <Box marginLeft={2} paddingX={1} borderStyle="round" borderColor={COLORS.border} flexDirection="column">
+          {renderMarkdown(text, els, COLORS, Math.max(20, columns - 8))}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+// 서브에이전트 카드: 데스크톱처럼 에이전트마다 한 장. 종류·설명, 끝나면 도구 수·토큰·시간·바꾼 줄.
+// 설명을 누르면 결과 글을 마크다운으로 펼친다.
+export function formatTokens(count: number): string {
+  return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count)
+}
+
+function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>) {
+  const { Box, Text, Button } = els
+  const fields = fieldsOf(call.input)
+  const id = call.tool_use_id
+  const isOpen = openState[id] ?? false
+  const summary = agentOf(call.output)
+  const kind = stringField(fields, 'subagent_type') ?? summary?.type ?? 'agent'
+  const title = stringField(fields, 'description') ?? stringField(fields, 'name') ?? 'Agent'
+  const isBackground = summary?.status === 'async_launched'
+  const facts = [
+    summary?.toolUses !== undefined ? `${summary.toolUses} tool use${summary.toolUses === 1 ? '' : 's'}` : null,
+    summary?.tokens !== undefined ? `${formatTokens(summary.tokens)} tokens` : null,
+    summary?.durationMs !== undefined ? formatElapsed(summary.durationMs) : null,
+  ].filter((fact): fact is string => fact !== null)
+  const changed = (summary?.added ?? 0) + (summary?.removed ?? 0) > 0
+  const body = summary?.text ?? (isOpen ? cap(stringField(fields, 'prompt') ?? '', 12) : '')
+
+  return (
+    <Box flexDirection="column" alignSelf="flex-start" borderStyle="round" borderColor={call.isRunning ? COLORS.clay : COLORS.border} paddingX={1}>
+      <Box columnGap={1}>
+        <Text color={COLORS.clay}>{call.isRunning ? '···' : '◆'}</Text>
+        <Text color={COLORS.muted}>{kind}</Text>
+        <Button key={`agent-${id}`} plain label={title} onPress={() => toggle($, id, isOpen)} />
+        {call.isRunning && <Text color={COLORS.muted}>running</Text>}
+        {isBackground && <Text color={COLORS.muted}>in background</Text>}
+        {call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}>failed</Text>}
+        {call.isInterrupted && <Text color={COLORS.muted}>interrupted</Text>}
+        {body !== '' && <Text color={COLORS.muted}>{isOpen ? '⌄' : '›'}</Text>}
+      </Box>
+      {(facts.length > 0 || changed) && (
+        <Box columnGap={1}>
+          <Text color={COLORS.muted}>{facts.join(' · ')}</Text>
+          {changed && diffChips(Text, summary?.added ?? 0, summary?.removed ?? 0)}
+        </Box>
+      )}
+      {isOpen && body !== '' && (
+        <Box marginTop={1} flexDirection="column">
+          {summary?.text ? renderMarkdown(cap(summary.text, 40), els, COLORS, 76) : <Text color={COLORS.muted}>{body}</Text>}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 // 호출 한 줄: "Edited register.tsx +12 −3 ›", 누르면 아래로 펼친다.
 function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, indent = 0, openFirst = false) {
+  if (isAgentTool(call.tool)) return agentCard(els, $, call, openState)
   const { Box, Text, Button } = els
   const id = call.tool_use_id
   const isOpen = openState[id] ?? openFirst
@@ -481,6 +595,10 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
 // 묶음 한 줄: "Ran 2 commands, edited 3 files +54 −12 ›", 펼치면 호출마다 한 줄.
 // 데스크톱처럼 성공한 편집은 펼치자마자 diff 까지 보인다.
 function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], openState: Record<string, boolean>) {
+  // 에이전트만 모인 묶음은 접지 않고 카드를 쌓는다.
+  if (calls.length > 0 && calls.every(call => isAgentTool(call.tool))) {
+    return <els.Box flexDirection="column">{calls.map(call => agentCard(els, $, call, openState))}</els.Box>
+  }
   const { Box, Text, Button } = els
   const key = `run-${runId}`
   const isOpen = openState[key] ?? false
@@ -641,6 +759,13 @@ export const register: Register = on => {
   // 사용자 프롬프트: 오른쪽 정렬 말풍선. omarchy 테마를 읽었으면 데스크톱처럼 회색 면, 아니면 둥근 테두리.
   // [Image #N] 은 데스크톱처럼 말풍선 위 썸네일로 바꾼다(kitty 그래픽 프로토콜, 안 되는 터미널은 alt 글자).
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    // 백그라운드 작업 알림과 에이전트가 보낸 메시지: 데스크톱처럼 그 자리에서 펼치는 줄. ctrl+o 화면은 엔진 그대로.
+    if (e.surface === 'terminal' && !e.props.isExpanded && (e.props.from || e.props.task)) {
+      const els = $.ui.resolve(e)
+      const [openState, state] = await Promise.all([read($, open), read($, runs)])
+      if (e.props.task) return taskRow(els, e.props.task, e.props.text, state)
+      return peerRow(els, $, e.props.from?.name ?? 'agent', e.props.text, openState, e.viewport?.columns ?? 80)
+    }
     if (e.surface !== 'terminal' || e.props.origin.kind !== 'composer') {
       return next(e)
     }
