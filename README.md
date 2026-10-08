@@ -16,6 +16,7 @@ mod 는 Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두�
 | 턴 끝 | 소요 시간 줄 | 그 턴에 고친 파일 카드 `Edited N files +N −M` |
 | 입력창 위 | — | `저장소  브랜치  +N −M` 칩 |
 | `/desk-diff` | — | 오른쪽 패널에 커밋되지 않은 변경의 파일별 diff |
+| `/desk-sessions` | — | 오른쪽 패널에 최근 세션을 프로젝트별로. 줄을 누르거나 `/desk-sessions <번호>` 로 이동 |
 
 데스크톱 앱 Code 탭(`desktop` 화면)에서는 아무것도 바꾸지 않습니다.
 
@@ -36,6 +37,13 @@ claude plugin update desk-look
 ```
 
 그다음 세션에서 `/reload-plugins` 를 실행합니다.
+
+### 세션 이동
+
+`/desk-sessions` 패널의 줄을 누르거나 `/desk-sessions 3` 처럼 번호를 주면:
+
+- **같은 폴더의 세션**: 입력창에 `/resume <id>` 가 채워집니다. Enter 를 누르면 넘어갑니다. (플러그인은 `/resume` 같은 기본 명령을 대신 실행할 수 없습니다.)
+- **다른 폴더의 세션**: `cd <폴더> && claude --resume <id>` 명령을 클립보드에 복사합니다(`wl-copy`).
 
 ### 환경별 동작
 

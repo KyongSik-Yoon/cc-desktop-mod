@@ -407,3 +407,30 @@ test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', async ($, on)
   expect(await row.find({ type: 'Text', text: /Edited/ })).toBeUndefined()
   await row.unmount()
 })
+
+import { ago, clip, groupSessions, numbered, parseSessions } from '../hooks/sessions'
+
+test('세션 목록 읽기·묶기·표시', async () => {
+  const listing = [
+    'ab12bc38-9375-438b-b199-90724fcb83cd\t1791456080\t/home/u/repo\t\tClaude Code 모드 아이디어',
+    '83c92571-f2bb-4513-8111-da82e042ba8f\t1791455457\t/home/u/other\t직접 붙인 이름\t자동 제목',
+    '554bfb0b-ba79-4f30-bf0b-03fb9fcd7140\t1791455005\t/home/u/repo\t\t\t마지막 프롬프트',
+    'not-a-session\t1\t/x\t\t',
+  ].join('\n')
+  const list = parseSessions(listing)
+  expect(list.map(entry => entry.title)).toEqual(['Claude Code 모드 아이디어', '직접 붙인 이름', '마지막 프롬프트'])
+  // 번호는 패널에 그리는 순서(현재 폴더 묶음이 먼저)
+  expect(numbered(list, '/home/u/other', 8).map(entry => entry.title)).toEqual(['직접 붙인 이름', 'Claude Code 모드 아이디어', '마지막 프롬프트'])
+  // 현재 세션은 번호에서 뺀다
+  expect(numbered(list, '/home/u/other', 8, '83c92571-f2bb-4513-8111-da82e042ba8f').map(entry => entry.title)).toEqual(['Claude Code 모드 아이디어', '마지막 프롬프트'])
+  const groups = groupSessions(list, '/home/u/other')
+  expect(groups.map(group => [group.cwd, group.sessions.length])).toEqual([
+    ['/home/u/other', 1],
+    ['/home/u/repo', 2],
+  ])
+  expect(ago(0, 30_000)).toBe('방금')
+  expect(ago(0, 5 * 60_000)).toBe('5분')
+  expect(ago(0, 3 * 3_600_000)).toBe('3시간')
+  expect(clip('가나다라마바', 7)).toBe('가나다…')
+  expect(clip('짧음', 10)).toBe('짧음')
+})

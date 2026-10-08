@@ -26,6 +26,9 @@ export type TurnEdit = { path: string; added: number; removed: number }
 
 export type TurnCard = { durationMs: number; files: TurnEdit[] }
 
+// 세션 패널 한 줄: ~/.claude/projects 의 기록 파일 하나.
+export type SessionEntry = { id: string; updatedAt: number; cwd: string; title: string }
+
 declare module 'claude-code' {
   interface PluginState {
     'desk-look': {
@@ -39,6 +42,7 @@ declare module 'claude-code' {
       graphics: boolean
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
+      sessions: SessionEntry[]
     }
   }
 }

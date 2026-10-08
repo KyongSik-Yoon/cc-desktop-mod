@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, ToolGroupCall } from 'claude-code'
 
-import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, Surface, TurnCard, TurnEdit } from '../types'
+import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, SessionEntry, Surface, TurnCard, TurnEdit } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, renderMarkdown } from './markdown'
 import { computeRuns } from './runs'
+import { LIST_SESSIONS, ago, clip, groupSessions, numbered, parseSessions } from './sessions'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 
 export { cellWidth } from './markdown'
@@ -24,6 +25,8 @@ const COLORS = {
 } as const
 
 const PANE = 'desk-diff'
+const SESSIONS_PANE = 'desk-sessions'
+const PER_GROUP = 8
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
 const diff = atom({ plugin: 'desk-look', key: 'diff' } as const, [] as FileDiff[])
@@ -34,6 +37,7 @@ const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Recor
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
+const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 
 const FILE_EDITING = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
 const CARD_ROWS = 3
@@ -298,6 +302,28 @@ async function refreshImages($: EngineInterface) {
   await update($, images, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
 }
 
+async function refreshSessions($: EngineInterface) {
+  const ran = await $.process.run(['sh', '-c', LIST_SESSIONS, 'sh', '40'], { timeoutMs: 5000 })
+  const next = ran.exitCode === 0 ? parseSessions(ran.stdout) : []
+  await update($, sessions, () => next)
+}
+
+// 세션 줄을 눌렀을 때. 같은 폴더의 세션은 입력창에 /resume <id> 를 채워 Enter 한 번으로 넘어가게 한다.
+// ($.command.run 은 /resume 같은 기본 명령을 대신 실행하지 못한다 — 실제 세션에서 거부됨을 확인.)
+// 다른 폴더의 세션은 그 폴더에서 열어야 하므로 실행할 명령을 클립보드에 복사한다.
+async function openSession($: EngineInterface, entry: SessionEntry) {
+  const cwd = await $.session.cwd()
+  if (entry.id === (await $.session.id())) return
+  if (entry.cwd === cwd) {
+    await $.prompt.fill({ text: `/resume ${entry.id}` })
+    $.ui.toast(`Enter 를 누르면 "${entry.title}" 세션으로 넘어가요.`)
+    return
+  }
+  const shell = `cd '${entry.cwd.replace(/'/g, "'\\''")}' && claude --resume ${entry.id}`
+  const copied = await $.process.run(['wl-copy', '--', shell], { timeoutMs: 2000 }).catch(() => null)
+  $.ui.toast(copied?.exitCode === 0 ? `다른 폴더의 세션이에요. 명령을 복사했어요: ${shell}` : `다른 폴더의 세션이에요: ${shell}`)
+}
+
 async function refreshRuns($: EngineInterface) {
   const next = computeRuns(await $.session.messages())
   await update($, runs, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
@@ -407,6 +433,11 @@ const asRunCall = (call: ToolGroupCall | (Call & { tool_use_id: string })): RunC
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
+      name: 'desk-sessions',
+      description: '데스크톱 사이드바처럼 최근 세션 목록 패널을 연다 (번호를 주면 그 세션으로 이동)',
+      argumentHint: '[번호]',
+    })
+    await $.command.register({
       name: 'desk-diff',
       description: '데스크톱 앱처럼 우측에 변경 파일 diff 패널을 연다',
     })
@@ -463,6 +494,20 @@ export const register: Register = on => {
       await update($, pendingEdits, () => [])
     }
     return done
+  })
+
+  on('command.run', { command: 'desk-sessions' }, async ($, e) => {
+    const index = Number.parseInt(e.args.trim(), 10)
+    if (Number.isInteger(index) && index > 0) {
+      const list = numbered(await read($, sessions), await $.session.cwd(), PER_GROUP, await $.session.id())
+      const entry = list[index - 1]
+      if (!entry) return { text: `${index}번 세션이 없어요. /desk-sessions 로 목록을 다시 열어 주세요.` }
+      await openSession($, entry)
+      return { text: `${index}번 세션: ${entry.title}` }
+    }
+    await refreshSessions($)
+    await $.ui.open({ id: SESSIONS_PANE, title: '세션' })
+    return { text: '세션 패널을 열었습니다.' }
   })
 
   on('command.run', { command: 'desk-diff' }, async $ => {
@@ -670,6 +715,54 @@ export const register: Register = on => {
             />
           )}
         </Box>
+      </Box>
+    )
+  })
+
+  // 세션 패널: 프로젝트별로 묶은 최근 세션. 현재 세션은 클레이색 ●.
+  on('ui.render', { component: 'Pane', requestId: SESSIONS_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const [list, cwd, current, now, home] = await Promise.all([
+      read($, sessions),
+      $.session.cwd(),
+      $.session.id(),
+      $.clock.now(),
+      $.env.get('HOME'),
+    ])
+    const room = Math.max(16, e.props.bodyColumns - 12)
+    const label = (path: string) => (home && path.startsWith(home) ? `~${path.slice(home.length)}` : path)
+    const order = numbered(list, cwd, PER_GROUP, current).map(entry => entry.id)
+
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        <Box columnGap={1}>
+          <Text color={COLORS.text} bold>
+            {`최근 세션 ${list.length}개`}
+          </Text>
+          <Button key="sessions-refresh" plain dimColor label="↻" onPress={() => refreshSessions($)} />
+        </Box>
+        {groupSessions(list, cwd).map(group => (
+          <Box key={`group-${group.cwd}`} flexDirection="column">
+            <Text color={group.cwd === cwd ? COLORS.clay : COLORS.muted} bold wrap="truncate-start">
+              {label(group.cwd)}
+            </Text>
+            {group.sessions.slice(0, PER_GROUP).map(entry => (
+              <Box key={`session-${entry.id}`} columnGap={1}>
+                <Text color={entry.id === current ? COLORS.clay : COLORS.muted}>
+                  {entry.id === current ? ' ●' : String(order.indexOf(entry.id) + 1).padStart(2)}
+                </Text>
+                <Button
+                  key={`open-${entry.id}`}
+                  plain
+                  dimColor={entry.id !== current}
+                  label={clip(entry.title, room)}
+                  onPress={() => openSession($, entry)}
+                />
+                <Text color={COLORS.muted}>{ago(entry.updatedAt, now)}</Text>
+              </Box>
+            ))}
+          </Box>
+        ))}
       </Box>
     )
   })
