@@ -733,3 +733,21 @@ test('질문 카드 줄 수: 모자라면 간단한 모양', () => {
   expect(askRows({ ...two, multiSelect: true }, true)).toBe(6)
   expect(askRows({ ...two, options: [{ preview: 'x' }, {}] }, false)).toBe(11)
 })
+
+test('에이전트 메시지 줄: 누르면 그 자리에서 마크다운으로 펼침', async $ => {
+  const text = 'Two lines mention it:\n\n- L19 table row\n- L59 note'
+  const row = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'UserMessage',
+    viewport: VIEWPORT,
+    props: { text, origin: { kind: 'unclassified' }, isExpanded: false, from: { name: '@Explore' } } as never,
+  })
+  expect(await row.find({ type: 'Text', text: /Two lines mention it/ })).toBeDefined()
+  expect(await row.find({ type: 'Text', text: /L19 table row/ })).toBeUndefined()
+  const key = /"key":"(peer-[^"]+)"/.exec(JSON.stringify(await row.drawn()))?.[1]
+  expect(key).toBeDefined()
+  await row.press({ key: key ?? '' })
+  expect(await row.find({ type: 'Text', text: /L19 table row/ })).toBeDefined()
+  await row.unmount()
+})

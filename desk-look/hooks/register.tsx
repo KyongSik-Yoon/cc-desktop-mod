@@ -1406,7 +1406,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
         <Input
           key={`ask-text-${k}`}
           label={question.kind === 'choice' ? 'Other' : `답${unit}`}
-          placeholder={question.placeholder ?? (question.kind === 'number' ? '숫자' : '클릭해서 입력, 키보드로는 9 → Type something')}
+          placeholder={question.placeholder ?? (question.kind === 'number' ? '숫자' : '두 번 클릭해서 입력')}
           value={text}
           submitLabel={isLast ? '제출' : '다음'}
           onInput={value => void setText(value)}
