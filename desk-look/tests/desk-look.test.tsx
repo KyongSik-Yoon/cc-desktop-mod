@@ -571,7 +571,7 @@ test('질문 도구 줄: 질문과 답', () => {
 })
 
 import { agentOf } from '../hooks/runs'
-import { formatTokens, textKey } from '../hooks/register'
+import { askHint, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
 
 test('서브에이전트 카드 요약과 묶음', () => {
   const raw = {
@@ -599,4 +599,20 @@ test('서브에이전트 카드 요약과 묶음', () => {
   ])
   expect(runsOf.firstOf).toEqual({ r: 'r', a: 'a', b: 'a', g: 'g' })
   expect(runsOf.calls.a?.[0]?.output).toEqual({ agent: summary })
+})
+
+test('명령 출력 마크다운 판별과 질문 힌트', async $ => {
+  expect(looksLikeMarkdown('| a | b |\n|---|---|\n| 1 | 2 |')).toBe(true)
+  expect(looksLikeMarkdown('# 제목\n본문')).toBe(true)
+  expect(looksLikeMarkdown('Total cost: $0.12\nTotal duration: 3m')).toBe(false)
+  expect(askHint({ kind: 'choice', multiSelect: true })).toContain('0 제출')
+  const row = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'CommandOutput',
+    viewport: VIEWPORT,
+    props: { command: 'mine', args: '', text: '| a | b |\n|---|---|\n| 1 | 2 |', isErrored: false },
+  })
+  expect(JSON.stringify(await row.drawn())).toContain('"borderStyle":"round"')
+  await row.unmount()
 })

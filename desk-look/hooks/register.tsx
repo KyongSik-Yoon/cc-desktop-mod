@@ -3,7 +3,7 @@ import type { Elements, EngineInterface, Register, Timer, ToolGroupCall, UiPress
 
 import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
-import { cellWidth, renderMarkdown } from './markdown'
+import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool } from './runs'
 import { LIST_SESSIONS, ago, clip, groupSessions, numbered, parseSessions } from './sessions'
 import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
@@ -894,6 +894,23 @@ export const register: Register = on => {
     )
   })
 
+  // 명령 출력: 표·제목·코드·인용이 든 출력만 답변처럼 마크다운으로. 나머지(엔진 명령의 평문)는 그대로.
+  on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || e.props.isErrored || !looksLikeMarkdown(e.props.text)) return next(e)
+    const els = $.ui.resolve(e)
+    const face = await read($, surface)
+    return renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, (e.viewport?.columns ?? 80) - 4)
+  })
+
+  // 힌트 줄: 질문 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || e.props.isDraft) return next(e)
+    const state = await read($, asking)
+    const question = state?.questions[state.step]
+    if (!question) return next(e)
+    return next({ ...e, props: { ...e.props, tail: askHint(question) } })
+  })
+
   // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 위에 그대로 둔다.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) {
@@ -1068,6 +1085,16 @@ export const register: Register = on => {
       </Box>
     )
   })
+}
+
+// 명령 출력이 마크다운인지: 표·제목·코드 블록·인용이 하나라도 있으면.
+export function looksLikeMarkdown(text: string): boolean {
+  return parseBlocks(text).some(block => block.kind === 'table' || block.kind === 'heading' || block.kind === 'code' || block.kind === 'quote')
+}
+
+export function askHint(question: { kind: string; multiSelect: boolean }): string {
+  const how = question.kind !== 'choice' ? '입력칸을 클릭해 답하기' : question.multiSelect ? '숫자로 고르고 0 제출' : '숫자로 고르기'
+  return `  ${how} · 9 기본 창 · Esc 취소`
 }
 
 // 질문 카드(입력창 위 띠). 묻는 상태와 도구 호출 훅은 ask.tsx, 그리기와 버튼은 여기($ 는 파일을 넘지 못한다).
