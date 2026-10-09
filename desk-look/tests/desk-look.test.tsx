@@ -1118,3 +1118,267 @@ test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장�
   expect(drawn).not.toContain('승인 대기')
   await row.unmount()
 })
+
+import { checkState, checkSummary, fetchReview, jobState, prChipParts, prRepo, shortStat, toChecks, toDiscussions, toJobs, toMr, toPr, toThreads } from '../hooks/pr'
+import { baseCandidates, parseCommits, scopeOf } from '../hooks/gitview'
+
+const GH_PR = {
+  number: 12,
+  title: 'Add done command',
+  url: 'https://github.com/owner/repo/pull/12',
+  state: 'OPEN',
+  isDraft: false,
+  reviewDecision: 'REVIEW_REQUIRED',
+  mergeStateStatus: 'BLOCKED',
+  headRefName: 'feat/done',
+  baseRefName: 'main',
+  additions: 25,
+  deletions: 4,
+  statusCheckRollup: [
+    { __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
+    { __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/owner/repo/actions/runs/2' },
+    { __typename: 'CheckRun', name: 'deploy', status: 'IN_PROGRESS', conclusion: null },
+    { __typename: 'StatusContext', context: 'ci/legacy', state: 'SUCCESS', targetUrl: null },
+    { __typename: 'CheckRun', name: 'label', status: 'COMPLETED', conclusion: 'SKIPPED' },
+  ],
+}
+const GH_THREADS = {
+  data: {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          nodes: [
+            { isResolved: false, isOutdated: false, path: 'todo.py', line: 30, comments: { nodes: [{ author: { login: 'alice' }, body: 'Check the range\nplease', url: 'https://github.com/owner/repo/pull/12#r1' }] } },
+            { isResolved: true, isOutdated: false, path: 'README.md', line: 3, comments: { nodes: [{ author: { login: 'bob' }, body: 'ok' }] } },
+          ],
+        },
+      },
+    },
+  },
+}
+
+test('PR: 체크 상태·요약·칩·리뷰 스레드', () => {
+  expect(checkState({ status: 'COMPLETED', conclusion: 'TIMED_OUT' })).toBe('fail')
+  expect(checkState({ status: 'QUEUED' })).toBe('pending')
+  expect(checkState({ __typename: 'StatusContext', state: 'PENDING' })).toBe('pending')
+  const checks = toChecks(GH_PR.statusCheckRollup)
+  expect(checks.map(check => `${check.state}:${check.name}`)).toEqual(['fail:test', 'pending:deploy', 'pass:ci/legacy', 'pass:lint', 'skip:label'])
+  expect(checkSummary(checks)).toEqual({ passed: 2, failed: 1, pending: 1, total: 4 })
+  const threads = toThreads(GH_THREADS)
+  expect(threads).toEqual([{ path: 'todo.py', line: 30, author: 'alice', body: 'Check the range\nplease', url: 'https://github.com/owner/repo/pull/12#r1', isOutdated: false }])
+  const info = toPr(GH_PR, threads)
+  expect(prChipParts(info).map(part => part.text)).toEqual([' #12', '✗ 1', '◆ 1'])
+  expect(prChipParts({ ...info, checks: checks.filter(check => check.state !== 'fail') }).map(part => part.text)).toEqual([' #12', '● 2/3', '◆ 1'])
+  expect(prChipParts({ ...info, state: 'MERGED' }).map(part => part.text)).toEqual([' #12', 'merged'])
+  expect(prRepo('https://github.example.com/team/app/pull/3')).toEqual({ host: 'github.example.com', owner: 'team', name: 'app' })
+})
+
+const MR = {
+  iid: 7,
+  title: 'Fix sheet',
+  web_url: 'https://gitlab.example.com/group/app/-/merge_requests/7',
+  state: 'opened',
+  draft: false,
+  detailed_merge_status: 'not_approved',
+  has_conflicts: false,
+  source_branch: 'fix/sheet',
+  target_branch: 'develop',
+  project_id: 42,
+  head_pipeline: { id: 900, status: 'failed', web_url: 'https://gitlab.example.com/group/app/-/pipelines/900' },
+  diff_refs: { base_sha: 'aaa', head_sha: 'bbb' },
+}
+const MR_JOBS = [
+  { name: 'unit', stage: 'test', status: 'failed', allow_failure: false, web_url: 'https://gitlab.example.com/j/1' },
+  { name: 'lint', stage: 'test', status: 'success', allow_failure: false },
+  { name: 'deploy', stage: 'deploy', status: 'manual', allow_failure: true },
+  { name: 'flaky', stage: 'test', status: 'failed', allow_failure: true },
+]
+const MR_DISCUSSIONS = [
+  { id: 'd1', notes: [{ id: 5, body: 'rename this', system: false, resolvable: true, resolved: false, author: { username: 'carol' }, position: { new_path: 'src/a.ts', new_line: 8 } }] },
+  { id: 'd2', notes: [{ id: 6, body: 'done', system: false, resolvable: true, resolved: true, author: { username: 'dan' } }] },
+  { id: 'd3', notes: [{ id: 7, body: 'changed the description', system: true, resolvable: false }] },
+]
+
+test('MR(GitLab): job·토론·줄 수를 PR 모양으로', () => {
+  expect(jobState({ status: 'running' })).toBe('pending')
+  expect(jobState({ status: 'failed', allow_failure: true })).toBe('skip')
+  const checks = toJobs(MR_JOBS)
+  expect(checks.map(check => `${check.state}:${check.name}`)).toEqual(['fail:test / unit', 'pass:test / lint', 'skip:deploy / deploy', 'skip:test / flaky'])
+  const threads = toDiscussions(MR_DISCUSSIONS, MR.web_url)
+  expect(threads).toEqual([{ path: 'src/a.ts', line: 8, author: 'carol', body: 'rename this', url: `${MR.web_url}#note_5`, isOutdated: false }])
+  expect(shortStat(' 3 files changed, 25 insertions(+), 4 deletions(-)\n')).toEqual({ added: 25, removed: 4 })
+  expect(shortStat(' 1 file changed, 2 deletions(-)')).toEqual({ added: 0, removed: 2 })
+  const info = toMr(MR, checks, threads, { added: 25, removed: 4 })
+  expect(info.reviewDecision).toBe('REVIEW_REQUIRED')
+  expect(prChipParts(info).map(part => part.text)).toEqual([' !7', '✗ 1', '◆ 1'])
+})
+
+const run = (table: Array<[(argv: string[]) => boolean, { exitCode: number; stdout?: string; stderr?: string }]>) => async (argv: string[]) => {
+  const hit = table.find(([match]) => match(argv))?.[1] ?? { exitCode: 1, stderr: 'unexpected' }
+  return { exitCode: hit.exitCode, stdout: hit.stdout ?? '', stderr: hit.stderr ?? '' }
+}
+
+test('PR·MR 읽기: GitHub 이면 gh, 아니면 glab, 없으면 none', async () => {
+  const github = await fetchReview(
+    run([
+      [argv => argv[0] === 'gh' && argv[1] === 'pr', { exitCode: 0, stdout: JSON.stringify(GH_PR) }],
+      [argv => argv[0] === 'gh' && argv[1] === 'api', { exitCode: 0, stdout: JSON.stringify(GH_THREADS) }],
+    ]),
+    'feat/done',
+    1,
+  )
+  expect(github.status).toBe('ok')
+  expect(github.pr?.provider).toBe('github')
+  expect(github.pr?.threads?.length).toBe(1)
+
+  const gitlab = await fetchReview(
+    run([
+      [argv => argv[0] === 'gh', { exitCode: 1, stderr: 'none of the git remotes configured for this repository point to a known GitHub host' }],
+      [argv => argv.join(' ') === 'glab mr list --source-branch fix/sheet --output json', { exitCode: 0, stdout: JSON.stringify([{ iid: 7, state: 'opened' }]) }],
+      [argv => argv.join(' ') === 'glab mr view 7 --output json', { exitCode: 0, stdout: JSON.stringify(MR) }],
+      [argv => argv.at(-1)?.includes('/jobs') === true, { exitCode: 0, stdout: JSON.stringify(MR_JOBS) }],
+      [argv => argv.at(-1)?.includes('/discussions') === true, { exitCode: 0, stdout: JSON.stringify(MR_DISCUSSIONS) }],
+      [argv => argv[0] === 'git', { exitCode: 0, stdout: ' 2 files changed, 9 insertions(+), 1 deletion(-)\n' }],
+    ]),
+    'fix/sheet',
+    1,
+  )
+  expect(gitlab.status).toBe('ok')
+  expect(gitlab.pr?.provider).toBe('gitlab')
+  expect([gitlab.pr?.added, gitlab.pr?.removed]).toEqual([9, 1])
+  expect(gitlab.pr?.checks[0]?.name).toBe('test / unit')
+
+  const none = await fetchReview(
+    run([
+      [argv => argv[0] === 'gh', { exitCode: 1, stderr: 'none of the git remotes configured for this repository point to a known GitHub host' }],
+      [argv => argv[0] === 'glab', { exitCode: 0, stdout: '[]' }],
+    ]),
+    'develop',
+    1,
+  )
+  expect(none.status).toBe('none')
+
+  // 도구가 없으면(실행 실패) 다시 묻지 않고, 네트워크 오류는 다음에 다시 읽는다
+  const missing = await fetchReview(async () => Promise.reject(new Error('spawn gh ENOENT')), 'develop', 1)
+  expect([missing.status, missing.isSticky]).toEqual(['off', true])
+  const flaky = await fetchReview(
+    run([
+      [argv => argv[0] === 'gh', { exitCode: 1, stderr: 'error connecting to api.github.com' }],
+      [argv => argv[0] === 'glab', { exitCode: 1, stderr: 'dial tcp: i/o timeout' }],
+    ]),
+    'develop',
+    1,
+  )
+  expect([flaky.status, flaky.isSticky]).toEqual(['off', false])
+})
+
+const prStub = ($: unknown, e: { argv: string[] }) => {
+  const argv = e.argv
+  const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  if (argv[0] === 'git' && argv.includes('--abbrev-ref')) return out('feat/done\n')
+  if (argv[0] === 'gh' && argv[1] === 'pr') return out(JSON.stringify(GH_PR))
+  if (argv[0] === 'gh' && argv[1] === 'api') return out(JSON.stringify(GH_THREADS))
+  return out('', 1)
+}
+
+test('PR 칩과 /desk-pr 패널: 실패한 체크를 Claude에게 맡기면 입력창에 채운다', async ($, on) => {
+  const opened: string[] = []
+  const filled: Array<{ text: string; mode?: string }> = []
+  on('process.run', prStub as never)
+  on('clock.now', () => ({ value: 1000 }))
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+  on('ui.toast', () => ({ value: undefined as never }))
+  on('prompt.fill', ($, e) => {
+    filled.push(e as never)
+    return { isFilled: true } as never
+  })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  await $.command.run({ command: 'desk-pr', args: '' } as never)
+  expect(opened).toEqual(['desk-pr'])
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+  expect(await band.find({ type: 'Button', key: 'pr-chip' })).toBeDefined()
+  expect(JSON.stringify(await band.drawn())).toContain('✗ 1')
+  await band.unmount()
+
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-pr', viewport: VIEWPORT, props: { title: 'PR', isFocused: true } as never })
+  const drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('Add done command')
+  expect(drawn).toContain('리뷰 리뷰 필요')
+  expect(drawn).toContain('막힘')
+  expect(drawn).toContain('2/4 통과')
+  expect(drawn).toContain('todo.py:30')
+  // 통과한 체크는 접혀 있다가 펼친다
+  expect(drawn).not.toContain('ci/legacy')
+  await pane.press({ key: 'pr-passes' })
+  expect(JSON.stringify(await pane.drawn())).toContain('ci/legacy')
+  await pane.press({ key: 'fix-check-test' })
+  expect(filled[0]?.text).toContain('PR #12 의 CI 체크 "test"')
+  expect(filled[0]?.mode).toBe('replace')
+  await pane.press({ key: 'fix-thread-0' })
+  expect(filled[1]?.text).toContain('> Check the range')
+  await pane.unmount()
+})
+
+test('diff 범위: 기준 브랜치 후보, 커밋 목록, 범위 이름', () => {
+  expect(baseCandidates('develop', 'origin/main').slice(0, 3)).toEqual(['origin/develop', 'develop', 'origin/main'])
+  expect(baseCandidates(null, null)[0]).toBe('origin/main')
+  expect(parseCommits('abc123\x1fabc\x1fAdd done\x1falice\x1f2 hours ago\n')).toEqual([{ sha: 'abc123', short: 'abc', subject: 'Add done', author: 'alice', ago: '2 hours ago' }])
+  expect(scopeOf('branch')).toBe('branch')
+  expect(scopeOf('커밋별')).toBe('commits')
+  expect(scopeOf('a.txt')).toBe(null)
+})
+
+const BRANCH_PATCH = 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-x\n+y\n'
+const scopeStub = ($: unknown, e: { argv: string[] }) => {
+  const argv = e.argv
+  const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  if (argv[0] !== 'git') return out('', 1)
+  if (argv.includes('--show-toplevel')) return out('/repo\n')
+  if (argv.includes('--abbrev-ref')) return out('feat/done\n')
+  if (argv[1] === 'symbolic-ref') return out('origin/main\n')
+  if (argv[1] === 'rev-parse' && argv.includes('--verify')) return out(argv.at(-1) === 'origin/main^{commit}' ? 'base\n' : '', argv.at(-1) === 'origin/main^{commit}' ? 0 : 1)
+  if (argv[1] === 'merge-base') return out('base000\n')
+  if (argv[1] === 'diff' && argv[2] === 'HEAD') return out(DIFF_PATCH)
+  if (argv[1] === 'diff' && argv[2] === 'base000') return out(DIFF_PATCH + BRANCH_PATCH)
+  if (argv[1] === 'log') return out('c1sha\x1fc1\x1fAdd b\x1falice\x1f1 hour ago\nc2sha\x1fc2\x1fFix a\x1fbob\x1f2 hours ago\n')
+  if (argv[1] === 'show') return out(argv.at(-1) === 'c1sha' ? BRANCH_PATCH : '')
+  return out('')
+}
+
+test('diff 패널 범위: 브랜치 전체와 커밋별', async ($, on) => {
+  on('process.run', scopeStub as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  expect(JSON.stringify(await pane.drawn())).toContain('Edited 1 file')
+  expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeDefined()
+
+  await pane.press({ key: 'scope-branch' })
+  let drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('Edited 2 files')
+  expect(drawn).toContain('vs origin/main')
+  // 브랜치 전체에서는 되돌리기가 없다
+  expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeUndefined()
+
+  await pane.press({ key: 'scope-commits' })
+  drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('2 commits')
+  expect(drawn).toContain('Add b')
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  await pane.press({ key: 'commit-c1sha' })
+  expect(await pane.find({ type: 'Code' })).toBeDefined()
+  await pane.press({ key: 'commit-c1sha' })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+
+  // /desk-diff 파일 이름으로 열면 커밋 안 한 변경으로 돌아온다
+  await $.command.run({ command: 'desk-diff', args: 'a.txt' } as never)
+  expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeDefined()
+  await pane.unmount()
+})

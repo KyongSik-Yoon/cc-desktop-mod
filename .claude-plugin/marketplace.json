@@ -11,7 +11,7 @@
     {
       "name": "desk-look",
       "source": "./desk-look",
-      "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, diff and context panes",
+      "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff and context panes",
       "category": "productivity",
       "tags": [
         "mod",
@@ -22,7 +22,10 @@
         "markdown",
         "mermaid",
         "diff",
-        "context"
+        "context",
+        "pull-request",
+        "github",
+        "gitlab"
       ]
     }
   ]

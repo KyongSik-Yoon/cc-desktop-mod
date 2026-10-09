@@ -1,7 +1,7 @@
 {
   "name": "desk-look",
-  "version": "0.13.2",
-  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, diff and context panes",
+  "version": "0.14.0",
+  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff and context panes",
   "keywords": [
     "claude-code",
     "claude-code-mod",
@@ -13,7 +13,10 @@
     "markdown",
     "mermaid",
     "diff",
-    "context"
+    "context",
+    "pull-request",
+    "github",
+    "gitlab"
   ],
   "author": {
     "name": "KyongSik-Yoon",
@@ -50,6 +53,17 @@
       "type": "string",
       "title": "Question notification",
       "description": "Send a notification when a question card opens (the same channel the engine dialog uses, preferredNotifChannel). off turns it off",
+      "options": [
+        "on",
+        "off"
+      ],
+      "default": "on",
+      "required": false
+    },
+    "prBar": {
+      "type": "string",
+      "title": "PR bar",
+      "description": "The pull request chip next to the band above the prompt (click it for the /desk-pr pane). Reads GitHub with gh and GitLab with glab. off turns it off",
       "options": [
         "on",
         "off"

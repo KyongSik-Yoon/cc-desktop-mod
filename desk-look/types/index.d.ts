@@ -70,6 +70,37 @@ export type UsageBreakdown = {
   at: number
 }
 
+// PR 바: 지금 브랜치의 GitHub PR(gh) 또는 GitLab MR(glab). checks 는 체크(GitLab 은 파이프라인 job) 하나하나,
+// threads 는 안 풀린 리뷰 스레드(GitLab 은 토론). added·removed 는 모르면 null(GitLab 은 로컬 git 으로 센다).
+export type PrCheck = { name: string; state: 'pass' | 'fail' | 'pending' | 'skip'; url: string | null }
+export type PrThread = { path: string; line: number | null; author: string; body: string; url: string | null; isOutdated: boolean }
+export type PrInfo = {
+  provider: 'github' | 'gitlab'
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  isDraft: boolean
+  reviewDecision: string | null
+  mergeState: string | null
+  head: string
+  base: string
+  added: number | null
+  removed: number | null
+  checks: PrCheck[]
+  threads: PrThread[] | null
+}
+// status: none 은 PR 이 없는 브랜치, off 는 읽지 못한 경우. at 은 읽은 시각(ms).
+// isSticky: off 의 원인이 로컬이라(도구가 없음, 그 호스트의 저장소가 아님) 다시 물어도 같은 경우.
+// 네트워크·인증 오류는 false 라 다음 턴에 다시 읽는다.
+export type PrState = { status: 'loading' | 'ok' | 'none' | 'off'; branch: string | null; pr: PrInfo | null; at: number; error?: string; isSticky?: boolean }
+
+// diff 패널의 범위: 커밋 안 한 변경, 기본 브랜치에서 갈라진 뒤 전부, 커밋 하나씩.
+export type DiffScope = 'uncommitted' | 'branch' | 'commits'
+export type CommitInfo = { sha: string; short: string; subject: string; author: string; ago: string }
+// base: 비교 기준(브랜치 이름과 merge-base), 못 찾으면 null. commit: 커밋별에서 펼친 커밋.
+export type DiffView = { scope: DiffScope; base: { ref: string; sha: string } | null; files: FileDiff[]; commits: CommitInfo[]; commit: string | null; commitFiles: FileDiff[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'desk-look': {
@@ -99,6 +130,10 @@ declare module 'claude-code' {
       usageBreakdown: UsageBreakdown | null
       // Button 안에 글·Text 를 넣을 수 있는 엔진(2.1.295+)인지.
       richButtons: boolean
+      // 지금 브랜치의 PR(PR 바·/desk-pr 패널).
+      pr: PrState | null
+      // /desk-diff 패널이 보여 주는 범위와 그 diff.
+      diffView: DiffView
     }
   }
 }

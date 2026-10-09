@@ -2,7 +2,7 @@
 
 **English** | [한국어](README.ko.md)
 
-**desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look like the Code tab of the Claude desktop app: prompt bubbles, full-width markdown tables, mermaid diagrams, folded tool calls, subagent cards, a plan card, a checklist, a diff pane and a context usage meter.
+**desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look like the Code tab of the Claude desktop app: prompt bubbles, full-width markdown tables, mermaid diagrams, folded tool calls, subagent cards, a plan card, a checklist, a diff pane, a pull request bar for GitHub and GitLab, and a context usage meter.
 It is a Claude Code function-hook plugin: the engine stays as it is, and only the way things are drawn on screen changes.
 
 ![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)
@@ -28,11 +28,13 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | Command output | Plain text | Output with tables, headings, code or quotes renders as markdown, like an answer |
 | Mode indicator | Dim text at the bottom right of the prompt | A pill chip (with the omarchy theme) |
 | Hint line | `? for shortcuts` | While a question card is open, ends with the keys that answer it (`숫자로 고르기 · 9 기본 창 · Esc 취소`: pick by number, 9 for the default dialog, Esc to cancel) |
-| `/desk-diff [file]` | — | A right-side pane with per-file diffs of uncommitted changes. Give a file name (the end of the path is enough) to scroll to it. Click a file's header row to fold or unfold its diff. Each file has `되돌리기` (revert): press it twice within 5 seconds to `git restore` (not offered for new files) |
+| PR bar | — | A chip next to the band for the current branch's pull request: `#12 ✓ 5/5`, `✗ 1` failing, `● 3/5` running, `◆ 2` unresolved review threads. GitHub PRs through `gh`, GitLab merge requests (`!7`, pipeline jobs, unresolved discussions) through `glab`. Click it for the `/desk-pr` pane |
+| `/desk-pr` | — | A right-side pane with the PR or MR: state, `base ← head`, `+N −M`, review decision and merge state, failing and running checks (passing ones folded), unresolved review threads. `Claude에게 맡기기` (hand to Claude) next to a failing check or a review thread fills the prompt with it. Read-only: nothing is merged, approved or posted |
+| `/desk-diff [file]` | — | A right-side pane with per-file diffs and three scopes, like the desktop diff panel: `커밋 안 한 변경` (uncommitted), `브랜치 전체` (the whole branch since it left the base branch, via `merge-base`) and `커밋별` (per commit: click a commit to expand its diff). Give a file name (the end of the path is enough) to scroll to it, or `branch` / `commits` to open in that scope. Click a file's header row to fold or unfold its diff. Uncommitted files have `되돌리기` (revert): press it twice within 5 seconds to `git restore` (not offered for new files) |
 | `/desk-sessions` | — | A right-side pane with recent sessions grouped by project. A search box at the top (title and folder; Enter opens the first result). Click a row or run `/desk-sessions <number>` to switch |
 | `/desk-context` | The `/context` grid | A right-side pane with a context bar (tokens / window, auto-compact point), a per-category breakdown (the same categories as `/context`; a local estimate, so no API requests), 5-hour and 7-day usage limits with time until reset, and the session cost. `↻` recalculates |
 
-Tool lines, agent cards, agent messages, session rows, question options, the context chip, and file rows in the end-of-turn card and the diff pane are buttons across the whole row, so clicking the description or the `›` works too (Claude Code 2.1.295+; older versions only take the leading part).
+Tool lines, agent cards, agent messages, session rows, question options, the context and PR chips, commit rows, and file rows in the end-of-turn card and the diff pane are buttons across the whole row, so clicking the description or the `›` works too (Claude Code 2.1.295+; older versions only take the leading part).
 
 The mod's own labels (`승인됨`, `되돌리기`, the hint line and so on) are in Korean.
 
@@ -56,6 +58,7 @@ Search for `desk-look` in `/config` to find these options.
 |---|---|---|
 | `bubbleSide` | `left` (default), `right` | Where your prompt bubble sits. The attachment lines the engine draws under the bubble (`└ 1 skill available` and so on) can't be moved by a plugin and always sit on the left, so `left` keeps them aligned. `right` is like the desktop app |
 | `askNotify` | `on` (default), `off` | Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself (2.1.295+) |
+| `prBar` | `on` (default), `off` | The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds; without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting |
 | `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
 
 ### Update

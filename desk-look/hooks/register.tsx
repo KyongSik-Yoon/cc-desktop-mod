@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
@@ -12,6 +12,8 @@ import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 import { LIMIT_NAMES, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
 import type { ContextChipMode } from './usage'
+import { MERGE_NAMES, REVIEW_NAMES, checkPrompt, checkSummary, fetchReview, mergeLevel, prChipParts, prNumber, threadPrompt } from './pr'
+import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeOf } from './gitview'
 
 export { cellWidth } from './markdown'
 
@@ -33,6 +35,7 @@ const COLORS = {
 const PANE = 'desk-diff'
 const SESSIONS_PANE = 'desk-sessions'
 const CONTEXT_PANE = 'desk-context'
+const PR_PANE = 'desk-pr'
 const PER_GROUP = 8
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
@@ -55,6 +58,15 @@ const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as Usage
 // Button 안에 글·Text 를 넣을 수 있는 엔진(2.1.295+)인지. 모르는 동안은 옛 모양.
 const richButtons = atom({ plugin: 'desk-look', key: 'richButtons' } as const, false)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
+const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
+const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
+  scope: 'uncommitted',
+  base: null,
+  files: [],
+  commits: [],
+  commit: null,
+  commitFiles: [],
+} as DiffView)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
@@ -409,6 +421,32 @@ function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode
   }
 }
 
+// 아래턱 오른쪽의 PR 칩 "#12 ✓ 5/5": 누르면 /desk-pr 패널.
+function prChip(els: Els, $: EngineInterface, state: PrState | null, rich: boolean) {
+  const info = state?.pr
+  if (!info) return null
+  const { Box, Text, Button } = els
+  const parts = prChipParts(info)
+  const text = parts.map(part => part.text).join(' ')
+  const colored = parts.slice(1).map((part, index) => (
+    <Text key={`pr-part-${index}`} color={COLORS[part.color]}>{` ${part.text}`}</Text>
+  ))
+  return {
+    width: cellWidth(text),
+    node: rich ? (
+      <Button key="pr-chip" plain dimColor onPress={() => void openPr($)}>
+        {parts[0]!.text}
+        {colored as never}
+      </Button>
+    ) : (
+      <Box>
+        <Button key="pr-chip" plain dimColor label={parts[0]!.text} onPress={() => void openPr($)} />
+        {colored as never}
+      </Box>
+    ),
+  }
+}
+
 async function refreshDiff($: EngineInterface) {
   const git = (args: string[]) => $.process.run(['git', ...args], { timeoutMs: 5000 })
   const inside = await git(['rev-parse', '--is-inside-work-tree'])
@@ -485,7 +523,7 @@ export function clipStart(text: string, width: number): string {
 
 // 데스크톱처럼 턴 끝 카드의 파일을 누르면 diff 패널을 그 파일에서 연다(접혀 있으면 펼쳐서).
 async function openDiffAt($: EngineInterface, path: string) {
-  await refreshDiff($)
+  await refreshDiffView($, 'uncommitted')
   const target = matchDiffFile(await read($, diff), path)
   await $.ui.open({ id: PANE, title: '변경 사항', focus: true })
   if (target === null) {
@@ -499,6 +537,98 @@ async function openDiffAt($: EngineInterface, path: string) {
     if (!moved.deny) return
     await $.clock.sleep(100).catch(() => undefined)
   }
+}
+
+// PR 바: 턴이 끝날 때마다 다시 읽되 30초 안에는 건너뛴다(gh·glab 은 네트워크를 탄다). 도구가 없거나 어느
+// 호스트의 저장소도 아니면(isSticky) 같은 브랜치에서는 다시 묻지 않는다. 패널을 열거나 ↻ 를 누르면 바로 읽는다.
+const PR_TTL = 30_000
+let prFetch: Promise<void> | null = null
+
+async function refreshPr($: EngineInterface, force: boolean) {
+  if (prFetch) return prFetch
+  prFetch = (async () => {
+    const [branchRan, now] = await Promise.all([
+      $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 }).catch(() => null),
+      $.clock.now(),
+    ])
+    const branch = branchRan?.exitCode === 0 ? branchRan.stdout.trim() : null
+    const last = await read($, pr)
+    if (branch === null || branch === 'HEAD') {
+      await update($, pr, (): PrState => ({ status: 'none', branch, pr: null, at: now }))
+      return
+    }
+    if (!force && last && last.branch === branch && ((last.status === 'off' && last.isSticky) || now - last.at < PR_TTL)) return
+    if (force || last?.branch !== branch) await update($, pr, (previous): PrState => ({ status: 'loading', branch, pr: previous?.branch === branch ? previous.pr : null, at: now }))
+    const next = await fetchReview(argv => $.process.run(argv, { timeoutMs: 15_000 }), branch, now)
+    await update($, pr, () => next)
+  })().finally(() => {
+    prFetch = null
+  })
+  return prFetch
+}
+
+async function openPr($: EngineInterface) {
+  const shown = refreshPr($, true).catch(() => undefined)
+  await $.ui.open({ id: PR_PANE, title: 'PR', focus: true })
+  await shown
+}
+
+// "Claude에게 맡기기": 입력창이 비어 있으면 채우고, 쓰던 글이 있으면 뒤에 붙인다.
+async function fillPrompt($: EngineInterface, text: string) {
+  const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
+  const isEmpty = box.text.trim() === ''
+  const filled = await $.prompt.fill({ text: isEmpty ? text : `\n\n${text}`, mode: isEmpty ? 'replace' : 'append' }).catch(() => null)
+  $.ui.toast(filled?.isFilled ? '입력창에 채웠어요. 고쳐서 Enter 로 보내세요.' : '입력창에 채우지 못했어요.')
+}
+
+// diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
+async function findBase($: EngineInterface, git: (args: string[]) => Promise<{ exitCode: number; stdout: string }>) {
+  const [originHead, state] = await Promise.all([git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']), read($, pr)])
+  const candidates = baseCandidates(state?.pr?.base ?? null, originHead.exitCode === 0 ? originHead.stdout.trim() : null)
+  for (const ref of candidates) {
+    const found = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+    if (found.exitCode !== 0) continue
+    const base = await git(['merge-base', 'HEAD', ref])
+    if (base.exitCode === 0 && base.stdout.trim() !== '') return { ref, sha: base.stdout.trim() }
+  }
+  return null
+}
+
+async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
+  const view = await read($, diffView)
+  const next = scope ?? view.scope
+  if (next === 'uncommitted') {
+    await refreshDiff($)
+    await update($, diffView, previous => ({ ...previous, scope: next }))
+    return
+  }
+  const git = (args: string[]) => $.process.run(['git', ...args], { timeoutMs: 8000 })
+  const base = await findBase($, git)
+  if (next === 'branch') {
+    await refreshDiff($)
+    const ran = base ? await git(['diff', base.sha, ...GIT_DIFF]) : null
+    // 브랜치 전체에도 아직 git 에 없는 새 파일을 넣는다(커밋 안 한 변경 쪽에서 이미 읽었다)
+    const fresh = (await read($, diff)).filter(file => file.isNew)
+    const files = ran && ran.exitCode === 0 ? [...parseDiff(ran.stdout), ...fresh] : []
+    await update($, diffView, previous => ({ ...previous, scope: next, base, files }))
+    return
+  }
+  const log = await git(['log', LOG_FORMAT, `-n${MAX_COMMITS}`, ...(base ? [`${base.sha}..HEAD`] : [])])
+  const commits = log.exitCode === 0 ? parseCommits(log.stdout) : []
+  const keep = commits.some(commit => commit.sha === view.commit) ? view.commit : null
+  await update($, diffView, previous => ({ ...previous, scope: next, base, commits, commit: keep, commitFiles: keep ? previous.commitFiles : [] }))
+}
+
+// 커밋 줄을 누르면 그 커밋의 diff 를 펼치고, 다시 누르면 접는다.
+async function pickCommit($: EngineInterface, sha: string) {
+  const view = await read($, diffView)
+  if (view.commit === sha) {
+    await update($, diffView, previous => ({ ...previous, commit: null, commitFiles: [] }))
+    return
+  }
+  const ran = await $.process.run(['git', 'show', '--format=', ...GIT_DIFF, sha], { timeoutMs: 8000 })
+  const files = ran.exitCode === 0 ? parseDiff(ran.stdout) : []
+  await update($, diffView, previous => ({ ...previous, commit: sha, commitFiles: files }))
 }
 
 async function refreshSurface($: EngineInterface) {
@@ -860,6 +990,7 @@ export const register: Register = (on, options) => {
   const side = bubbleSide(options)
   const edge = side === 'right' ? 'flex-end' : 'flex-start'
   const chipMode = contextChipMode(options)
+  const showPr = options.prBar !== 'off'
   registerAsk(on, options.askNotify !== 'off')
 
   on('session.start', async ($, e, next) => {
@@ -870,8 +1001,12 @@ export const register: Register = (on, options) => {
     })
     await $.command.register({
       name: 'desk-diff',
-      description: '데스크톱 앱처럼 우측에 변경 파일 diff 패널을 연다 (파일 이름을 주면 그 파일에서)',
-      argumentHint: '[파일]',
+      description: '데스크톱 앱처럼 우측에 변경 파일 diff 패널을 연다 (파일 이름을 주면 그 파일에서, branch·commits 면 그 범위로)',
+      argumentHint: '[파일|branch|commits]',
+    })
+    await $.command.register({
+      name: 'desk-pr',
+      description: '지금 브랜치의 GitHub PR 상태·체크·안 풀린 리뷰를 패널로 연다 (gh 필요)',
     })
     await $.command.register({
       name: 'desk-context',
@@ -879,6 +1014,7 @@ export const register: Register = (on, options) => {
     })
     void refreshDiff($).catch(() => undefined)
     void refreshUsage($).catch(() => undefined)
+    if (showPr) void refreshPr($, false).catch(() => undefined)
     void $.session
       .version()
       .then(engine => update($, richButtons, () => supportsRichButtons(engine.base ?? engine.version)))
@@ -941,6 +1077,7 @@ export const register: Register = (on, options) => {
       await update($, pendingEdits, () => [])
       await update($, turnStartedAt, () => null)
       void refreshUsage($).catch(() => undefined)
+      if (showPr) void refreshPr($, false).catch(() => undefined)
     }
     return done
   })
@@ -966,13 +1103,20 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'desk-diff' }, async ($, e) => {
     const name = e.args.trim()
-    if (name !== '') {
+    const scope = scopeOf(name)
+    if (name !== '' && scope === null) {
       await openDiffAt($, name)
       return { text: `변경 사항 패널을 ${name} 에서 열었습니다.` }
     }
-    await refreshDiff($)
+    await refreshDiffView($, scope ?? undefined)
     await $.ui.open({ id: PANE, title: '변경 사항', focus: true })
     return { text: '변경 사항 패널을 열었습니다.' }
+  })
+
+  on('command.run', { command: 'desk-pr' }, async $ => {
+    await openPr($)
+    const state = await read($, pr)
+    return { text: state?.pr ? `PR #${state.pr.number} 패널을 열었습니다.` : 'PR 패널을 열었습니다.' }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -1189,15 +1333,18 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
     const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
-    const meter = contextMeter(els, $, await read($, usage), chipMode, await read($, richButtons))
-    const reserve = meter === null ? 0 : meter.width + 1
+    const rich = await read($, richButtons)
+    const meter = contextMeter(els, $, await read($, usage), chipMode, rich)
+    const prState = showPr ? prChip(els, $, await read($, pr), rich) : null
+    const extras = [prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
+    const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
     const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
-    // 컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
+    // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
     const chin =
-      meter === null ? repoChin : (
+      extras.length === 0 ? repoChin : (
         <els.Box columnGap={1} paddingX={repoChin === null ? 1 : 0}>
           {repoChin}
-          {meter.node}
+          {extras.map(chip => chip.node) as never}
         </els.Box>
       )
     // 질문 중에는 질문이 띠를 차지한다(엔진 설문처럼): 다른 밴드·할 일 카드는 숨기고, 남는 줄이 있을 때만 아래턱.
@@ -1435,56 +1582,242 @@ export const register: Register = (on, options) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
     const { Box, Text, Button, Code } = els
-    const files = await read($, diff)
-    const armed = await read($, open)
-    const rich = await read($, richButtons)
+    const [uncommitted, view, armed, rich, info] = await Promise.all([read($, diff), read($, diffView), read($, open), read($, richButtons), read($, repo)])
     const columns = e.viewport?.columns ?? 80
-    const info = await read($, repo)
+    const files = view.scope === 'branch' ? view.files : uncommitted
     const added = files.reduce((sum, file) => sum + file.added, 0)
     const removed = files.reduce((sum, file) => sum + file.removed, 0)
-    const empty = info?.isRepo === false ? 'git 저장소가 아니라서 보여 줄 diff가 없어요.' : '커밋되지 않은 변경이 없어요.'
+    const noBase = '기준 브랜치(origin 의 기본 브랜치, main·master·develop)를 찾지 못했어요.'
+    const empty =
+      info?.isRepo === false
+        ? 'git 저장소가 아니라서 보여 줄 diff가 없어요.'
+        : view.scope === 'branch'
+          ? view.base
+            ? `${view.base.ref} 에서 갈라진 뒤 바뀐 것이 없어요.`
+            : noBase
+          : '커밋되지 않은 변경이 없어요.'
+
+    // 파일 하나: 머리 줄(누르면 접고 폄)과 diff. 되돌리기는 커밋 안 한 변경에서만.
+    const fileBlock = (file: FileDiff, prefix: string, canRevert: boolean) => (
+      <Box key={`${prefix}${file.path}`} flexDirection="column">
+        <Box columnGap={1}>
+          {rowButton(
+            els,
+            rich,
+            { key: `fold-${prefix}${file.path}`, onPress: () => toggle($, `fold:${prefix}${file.path}`) },
+            clipStart(file.path, Math.max(12, columns - 34)),
+            file.isNew && <Text color={COLORS.muted}> new</Text>,
+            ' ',
+            diffChips(Text, file.added, file.removed),
+            <Text color={COLORS.muted}>{armed[`fold:${prefix}${file.path}`] ? ' ›' : ' ⌄'}</Text>,
+          )}
+          {canRevert && !file.isNew && (
+            <Button
+              key={`revert-${file.path}`}
+              plain
+              dimColor={!armed[`revert:${file.path}`]}
+              label={armed[`revert:${file.path}`] ? '다시 누르면 되돌려요' : '되돌리기'}
+              onPress={() => void revertFile($, file.path, armed[`revert:${file.path}`] ?? false)}
+            />
+          )}
+        </Box>
+        {armed[`fold:${prefix}${file.path}`] ? null : file.patch ? (
+          <Code source={file.patch} path={file.path} format="diff" />
+        ) : (
+          <Text color={COLORS.muted}>바이너리 또는 모드 변경</Text>
+        )}
+      </Box>
+    )
+
+    const title =
+      view.scope === 'commits'
+        ? view.commits.length > 0
+          ? `${view.commits.length} commit${view.commits.length === 1 ? '' : 's'}`
+          : '커밋'
+        : files.length > 0
+          ? `Edited ${files.length} file${files.length === 1 ? '' : 's'}`
+          : '변경 사항'
 
     return (
       <Box flexDirection="column" rowGap={1}>
+        <Box columnGap={2}>
+          {SCOPES.map(item => (
+            <Button
+              key={`scope-${item.scope}`}
+              plain
+              dimColor={item.scope !== view.scope}
+              label={item.scope === view.scope ? `● ${item.label}` : `○ ${item.label}`}
+              onPress={() => void refreshDiffView($, item.scope)}
+            />
+          ))}
+        </Box>
         <Box columnGap={1}>
           <Text color={COLORS.text} bold>
-            {files.length > 0 ? `Edited ${files.length} file${files.length === 1 ? '' : 's'}` : '변경 사항'}
+            {title}
           </Text>
-          {files.length > 0 && diffChips(Text, added, removed)}
-          <Button key="refresh" plain dimColor label="↻" onPress={() => refreshDiff($)} />
+          {view.scope !== 'commits' && files.length > 0 && diffChips(Text, added, removed)}
+          {view.scope !== 'uncommitted' && view.base && <Text color={COLORS.muted}>{`vs ${view.base.ref}`}</Text>}
+          <Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />
         </Box>
-        {files.length === 0 && <Text color={COLORS.muted}>{empty}</Text>}
-        {files.map(file => (
-          <Box key={`file-${file.path}`} flexDirection="column">
-            <Box columnGap={1}>
-              {/* 파일 머리 줄을 누르면 그 파일의 diff 를 접고 편다 */}
+        {view.scope !== 'commits' && files.length === 0 && <Text color={COLORS.muted}>{empty}</Text>}
+        {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
+        {view.scope === 'commits' && view.commits.length === 0 && (
+          <Text color={COLORS.muted}>{info?.isRepo === false ? 'git 저장소가 아니에요.' : view.base ? `${view.base.ref} 이후 커밋이 없어요.` : '커밋이 없어요.'}</Text>
+        )}
+        {view.scope === 'commits' &&
+          view.commits.map(commit => (
+            <Box key={`commit-${commit.sha}`} flexDirection="column">
               {rowButton(
                 els,
                 rich,
-                { key: `fold-${file.path}`, onPress: () => toggle($, `fold:${file.path}`) },
-                clipStart(file.path, Math.max(12, columns - 34)),
-                file.isNew && <Text color={COLORS.muted}> new</Text>,
+                { key: `commit-${commit.sha}`, onPress: () => void pickCommit($, commit.sha) },
+                commit.short,
                 ' ',
-                diffChips(Text, file.added, file.removed),
-                <Text color={COLORS.muted}>{armed[`fold:${file.path}`] ? ' ›' : ' ⌄'}</Text>,
+                <Text color={COLORS.text}>{clip(commit.subject, Math.max(10, columns - cellWidth(commit.ago) - 16))}</Text>,
+                <Text color={COLORS.muted}>{` · ${commit.ago}`}</Text>,
+                <Text color={COLORS.muted}>{view.commit === commit.sha ? ' ⌄' : ' ›'}</Text>,
               )}
-              {!file.isNew && (
-                <Button
-                  key={`revert-${file.path}`}
-                  plain
-                  dimColor={!armed[`revert:${file.path}`]}
-                  label={armed[`revert:${file.path}`] ? '다시 누르면 되돌려요' : '되돌리기'}
-                  onPress={() => void revertFile($, file.path, armed[`revert:${file.path}`] ?? false)}
-                />
+              {view.commit === commit.sha && (
+                <Box flexDirection="column" rowGap={1} paddingLeft={2}>
+                  {view.commitFiles.length === 0 && <Text color={COLORS.muted}>보여 줄 diff 가 없어요(병합 커밋이거나 빈 커밋).</Text>}
+                  {view.commitFiles.map(file => fileBlock(file, `c:${commit.short}:`, false))}
+                </Box>
               )}
             </Box>
-            {armed[`fold:${file.path}`] ? null : file.patch ? (
-              <Code source={file.patch} path={file.path} format="diff" />
-            ) : (
-              <Text color={COLORS.muted}>바이너리 또는 모드 변경</Text>
-            )}
+          ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PR_PANE }, async ($, e) => {
+    const els = $.ui.resolve(e) as Els
+    const { Box, Text, Button, Link } = els
+    const [state, armed, rich] = await Promise.all([read($, pr), read($, open), read($, richButtons)])
+    const columns = e.viewport?.columns ?? 80
+    const refresh = <Button key="pr-refresh" plain dimColor label="↻" onPress={() => void refreshPr($, true).catch(() => undefined)} />
+    const info = state?.pr ?? null
+
+    if (!info) {
+      const message =
+        state === null || state.status === 'loading'
+          ? 'PR 을 읽는 중이에요…'
+          : state.status === 'none'
+            ? state.branch
+              ? `${state.branch} 브랜치에는 열린 PR·MR 이 없어요.`
+              : '브랜치가 아니라서(detached HEAD) PR 을 찾을 수 없어요.'
+            : `PR·MR 을 읽지 못했어요${state.error ? `: ${state.error}` : ''}. GitHub 은 gh, GitLab 은 glab 이 설치·로그인되어 있는지 확인해 주세요.`
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          <Box columnGap={1}>
+            <Text color={COLORS.text} bold>
+              PR
+            </Text>
+            {refresh}
           </Box>
-        ))}
+          <Text color={COLORS.muted}>{message}</Text>
+        </Box>
+      )
+    }
+
+    const summary = checkSummary(info.checks)
+    const stateWord = info.state === 'MERGED' ? 'Merged' : info.state === 'CLOSED' ? 'Closed' : info.isDraft ? 'Draft' : 'Open'
+    const stateColor = info.state === 'OPEN' ? (info.isDraft ? COLORS.muted : COLORS.success) : COLORS.muted
+    const passes = info.checks.filter(check => check.state === 'pass' || check.state === 'skip')
+    const showPasses = armed['pr:passes'] ?? false
+    const nameWidth = Math.max(12, columns - 30)
+
+    const checkRow = (check: PrCheck) => {
+      const mark = check.state === 'fail' ? '✗' : check.state === 'pending' ? '●' : check.state === 'skip' ? '–' : '✓'
+      const color = check.state === 'fail' ? COLORS.danger : check.state === 'pending' ? COLORS.warning : check.state === 'skip' ? COLORS.muted : COLORS.success
+      return (
+        <Box key={`check-${check.name}`} columnGap={1}>
+          <Text color={color}>{mark}</Text>
+          {check.url ? (
+            <Link href={check.url}>{clip(check.name, nameWidth)}</Link>
+          ) : (
+            <Text color={check.state === 'pass' || check.state === 'skip' ? COLORS.muted : COLORS.text}>{clip(check.name, nameWidth)}</Text>
+          )}
+          {check.state === 'fail' && (
+            <Button key={`fix-check-${check.name}`} plain label="Claude에게 맡기기" onPress={() => void fillPrompt($, checkPrompt(info, check))} />
+          )}
+        </Box>
+      )
+    }
+
+    const threadRow = (thread: PrThread, index: number) => (
+      <Box key={`thread-${index}`} flexDirection="column">
+        <Box columnGap={1}>
+          <Text color={COLORS.warning}>◆</Text>
+          <Text color={COLORS.text}>{clip(thread.line === null ? thread.path : `${thread.path}:${thread.line}`, Math.max(12, columns - 40))}</Text>
+          <Text color={COLORS.muted}>{thread.author}</Text>
+          {thread.isOutdated && <Text color={COLORS.muted}>outdated</Text>}
+          <Button key={`fix-thread-${index}`} plain label="Claude에게 맡기기" onPress={() => void fillPrompt($, threadPrompt(info, thread))} />
+        </Box>
+        <Box paddingLeft={2}>
+          <Text color={COLORS.muted}>{clip(thread.body.split('\n').find(line => line.trim() !== '') ?? '', Math.max(10, columns - 4))}</Text>
+        </Box>
+      </Box>
+    )
+
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        <Box flexDirection="column">
+          <Box columnGap={1}>
+            <Text color={COLORS.muted}>{`\uf407 ${prNumber(info)}`}</Text>
+            <Text color={COLORS.text} bold>
+              {clip(info.title, Math.max(10, columns - 14))}
+            </Text>
+            {refresh}
+          </Box>
+          <Box columnGap={1}>
+            <Text color={stateColor}>{stateWord}</Text>
+            <Text color={COLORS.muted}>{`· ${clip(`${info.base} ← ${info.head}`, Math.max(10, columns - 30))} ·`}</Text>
+            {info.added !== null && info.removed !== null && diffChips(els.Text, info.added, info.removed)}
+          </Box>
+          {(info.reviewDecision || (info.state === 'OPEN' && info.mergeState)) && (
+            <Box columnGap={1}>
+              {info.reviewDecision && (
+                <Text color={info.reviewDecision === 'APPROVED' ? COLORS.success : info.reviewDecision === 'CHANGES_REQUESTED' ? COLORS.danger : COLORS.muted}>
+                  {`리뷰 ${REVIEW_NAMES[info.reviewDecision] ?? info.reviewDecision}`}
+                </Text>
+              )}
+              {info.reviewDecision && info.state === 'OPEN' && info.mergeState && <Text color={COLORS.muted}>·</Text>}
+              {info.state === 'OPEN' && info.mergeState && <Text color={COLORS[mergeLevel(info.mergeState)]}>{MERGE_NAMES[info.mergeState] ?? info.mergeState}</Text>}
+            </Box>
+          )}
+          <Link href={info.url}>{info.provider === 'gitlab' ? 'GitLab에서 열기' : 'GitHub에서 열기'}</Link>
+        </Box>
+        <Box flexDirection="column">
+          <Box columnGap={1}>
+            <Text color={COLORS.text} bold>
+              {info.provider === 'gitlab' ? 'Pipeline' : 'Checks'}
+            </Text>
+            <Text color={COLORS.muted}>
+              {summary.total === 0
+                ? '없음'
+                : [`${summary.passed}/${summary.total} 통과`, summary.failed > 0 ? `${summary.failed} 실패` : null, summary.pending > 0 ? `${summary.pending} 진행 중` : null].filter(Boolean).join(' · ')}
+            </Text>
+          </Box>
+          {info.checks.filter(check => check.state === 'fail' || check.state === 'pending').map(checkRow)}
+          {passes.length > 0 &&
+            rowButton(
+              els,
+              rich,
+              { key: 'pr-passes', dimColor: true, onPress: () => toggle($, 'pr:passes') },
+              showPasses ? `통과·건너뜀 ${passes.length}개 접기` : `통과·건너뜀 ${passes.length}개`,
+              showPasses ? ' ⌄' : ' ›',
+            )}
+          {showPasses && passes.map(checkRow)}
+        </Box>
+        <Box flexDirection="column">
+          <Box columnGap={1}>
+            <Text color={COLORS.text} bold>
+              안 풀린 리뷰
+            </Text>
+            <Text color={COLORS.muted}>{info.threads === null ? '읽지 못함' : `${info.threads.length}개`}</Text>
+          </Box>
+          {(info.threads ?? []).map(threadRow)}
+        </Box>
       </Box>
     )
   })
