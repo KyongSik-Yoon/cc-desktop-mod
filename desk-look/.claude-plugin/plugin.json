@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff and context panes",
   "keywords": [
     "claude-code",
@@ -26,6 +26,18 @@
   "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of desk-look's own labels. auto follows Claude Code's language setting in /config (Korean when it names Korean, English otherwise)",
+      "options": [
+        "auto",
+        "en",
+        "ko"
+      ],
+      "default": "auto",
+      "required": false
+    },
     "bubbleSide": {
       "type": "string",
       "title": "Prompt bubble side",

@@ -1,6 +1,7 @@
 import type { SessionUsage } from 'claude-code'
 
 import type { UsageBreakdown, UsageInfo } from '../types'
+import { T } from './i18n'
 
 // 컨텍스트 칩: 데스크톱 입력창 옆의 컨텍스트 표시. 설정(contextChip)으로 언제 보일지 고른다.
 // auto 는 반을 넘겼을 때만 보인다: 상태 줄이나 다른 플러그인이 이미 늘 보여 주는 경우가 많아서다.
@@ -32,7 +33,9 @@ export function meterBar(percent: number, width: number): string {
   return '▰'.repeat(filled) + '▱'.repeat(width - filled)
 }
 
-export const LIMIT_NAMES: Record<string, string> = { five_hour: '5시간', seven_day: '7일', spend_limit: '지출 한도' }
+export function limitName(kind: string): string {
+  return T.limitNames[kind] ?? kind
+}
 
 // 초기화까지 남은 시간: "1일 5시간", "4시간 7분", "12분". 모르거나 지났으면 null.
 export function resetIn(resetsAt: string | null, now: number): string | null {
@@ -42,9 +45,7 @@ export function resetIn(resetsAt: string | null, now: number): string | null {
   const days = Math.floor(left / 1440)
   const hours = Math.floor((left % 1440) / 60)
   const minutes = left % 60
-  if (days > 0) return hours > 0 ? `${days}일 ${hours}시간` : `${days}일`
-  if (hours > 0) return minutes > 0 ? `${hours}시간 ${minutes}분` : `${hours}시간`
-  return `${minutes}분`
+  return T.duration(days, hours, minutes)
 }
 
 export function toUsage(raw: SessionUsage, at: number): UsageInfo {

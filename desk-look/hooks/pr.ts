@@ -1,4 +1,5 @@
 import type { PrCheck, PrInfo, PrState, PrThread } from '../types'
+import { T } from './i18n'
 
 // 데스크톱 Code 탭의 PR 바: 지금 브랜치의 PR 상태·체크·안 풀린 리뷰. 데스크톱도 gh 로 읽는다
 // (같은 필드: state isDraft reviewDecision mergeStateStatus additions deletions statusCheckRollup).
@@ -120,42 +121,19 @@ export function prChipParts(pr: PrInfo): ChipPart[] {
   if (failed > 0) parts.push({ text: `✗ ${failed}`, color: 'danger' })
   else if (pending > 0) parts.push({ text: `● ${passed}/${total}`, color: 'warning' })
   else if (total > 0) parts.push({ text: `✓ ${passed}/${total}`, color: 'success' })
-  if (pr.reviewDecision === 'CHANGES_REQUESTED') parts.push({ text: '변경 요청', color: 'danger' })
+  if (pr.reviewDecision === 'CHANGES_REQUESTED') parts.push({ text: T.chipChangesRequested, color: 'danger' })
   const open = pr.threads?.length ?? 0
   if (open > 0) parts.push({ text: `◆ ${open}`, color: 'warning' })
   return parts
 }
 
-export const REVIEW_NAMES: Record<string, string> = {
-  APPROVED: '승인됨',
-  CHANGES_REQUESTED: '변경 요청됨',
-  REVIEW_REQUIRED: '리뷰 필요',
+export function reviewName(decision: string): string {
+  return T.reviewNames[decision] ?? decision
 }
 
 // GitHub mergeStateStatus(대문자)와 GitLab detailed_merge_status(소문자).
-export const MERGE_NAMES: Record<string, string> = {
-  CLEAN: '병합 가능',
-  HAS_HOOKS: '병합 가능',
-  BLOCKED: '막힘 (필수 체크·리뷰)',
-  BEHIND: '기본 브랜치보다 뒤처짐',
-  DIRTY: '충돌 있음',
-  UNSTABLE: '통과 못 한 체크 있음',
-  DRAFT: '초안',
-  UNKNOWN: '계산 중',
-  mergeable: '병합 가능',
-  conflict: '충돌 있음',
-  not_approved: '승인 필요',
-  requested_changes: '변경 요청됨',
-  ci_must_pass: '파이프라인 통과 필요',
-  ci_still_running: '파이프라인 진행 중',
-  discussions_not_resolved: '안 풀린 토론 있음',
-  draft_status: '초안',
-  need_rebase: '리베이스 필요',
-  blocked_status: '막힘',
-  not_open: '열려 있지 않음',
-  checking: '계산 중',
-  unchecked: '계산 중',
-  approvals_syncing: '승인 확인 중',
+export function mergeName(state: string): string {
+  return T.mergeNames[state] ?? state
 }
 
 export function mergeLevel(state: string): 'success' | 'danger' | 'muted' {
@@ -173,9 +151,7 @@ export function prRef(pr: Pick<PrInfo, 'provider' | 'number'>): string {
 
 // "Claude에게 맡기기" 가 입력창에 채우는 글.
 export function checkPrompt(pr: PrInfo, check: PrCheck): string {
-  const where = check.url ? ` (${check.url})` : ''
-  const what = pr.provider === 'gitlab' ? '파이프라인 job' : 'CI 체크'
-  return `${prRef(pr)} 의 ${what} "${check.name}" 이(가) 실패했어요${where}. 로그를 확인해서 원인을 찾아 고쳐 주세요.`
+  return T.checkPrompt(prRef(pr), pr.provider === 'gitlab', check.name, check.url)
 }
 
 export function threadPrompt(pr: PrInfo, thread: PrThread): string {
@@ -185,7 +161,7 @@ export function threadPrompt(pr: PrInfo, thread: PrThread): string {
     .split('\n')
     .map(line => `> ${line}`)
     .join('\n')
-  return `${prRef(pr)} 리뷰 코멘트를 반영해 주세요. ${where} (${thread.author})\n${quoted}`
+  return `${T.threadPrompt(prRef(pr), where, thread.author)}\n${quoted}`
 }
 
 type Ran = { exitCode: number; stdout: string; stderr: string }
@@ -209,7 +185,7 @@ export async function fetchPr(run: Run, branch: string | null, at: number): Prom
   try {
     raw = JSON.parse(view.stdout) as Record<string, unknown>
   } catch {
-    return { status: 'off', branch, pr: null, at, error: 'gh 출력을 읽지 못했어요' }
+    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('gh') }
   }
   const where = prRepo(String(raw.url ?? ''))
   let threads: PrThread[] | null = null
@@ -339,7 +315,7 @@ export async function fetchMr(run: Run, branch: string | null, at: number): Prom
   try {
     iid = (JSON.parse(list.stdout) as Array<{ iid?: number }>)[0]?.iid
   } catch {
-    return { status: 'off', branch, pr: null, at, error: 'glab 출력을 읽지 못했어요' }
+    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('glab') }
   }
   if (iid === undefined) return { status: 'none', branch, pr: null, at }
   const view = await run(['glab', 'mr', 'view', String(iid), '--output', 'json']).catch(failed)
@@ -348,7 +324,7 @@ export async function fetchMr(run: Run, branch: string | null, at: number): Prom
   try {
     raw = JSON.parse(view.stdout) as Record<string, unknown>
   } catch {
-    return { status: 'off', branch, pr: null, at, error: 'glab 출력을 읽지 못했어요' }
+    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('glab') }
   }
   const webUrl = String(raw.web_url ?? '')
   const host = /^https?:\/\/([^/]+)\//.exec(webUrl)?.[1]

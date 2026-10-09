@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AskQuestion, AskState } from '../types'
+import { T } from './i18n'
 
 // 질문 카드: AskUserQuestion 을 엔진 창 대신 입력창 위 띠의 카드로 묻는다(데스크톱과 같은 자리).
 // 도구 호출 훅이 답을 기다리며 결과를 직접 돌려주고, 엔진은 그 결과를 도구의 원래 변환기로 모델에게 넘긴다.
@@ -71,9 +72,9 @@ export function answerOf(question: AskQuestion, picks: readonly string[], text: 
 export function numberProblem(question: AskQuestion, text: string): string | null {
   if (question.kind !== 'number') return null
   const value = Number(text.trim())
-  if (text.trim() === '' || !Number.isFinite(value)) return '숫자를 입력해 주세요'
-  if (question.min !== undefined && value < question.min) return `${question.min} 이상이어야 해요`
-  if (question.max !== undefined && value > question.max) return `${question.max} 이하여야 해요`
+  if (text.trim() === '' || !Number.isFinite(value)) return T.needNumber
+  if (question.min !== undefined && value < question.min) return T.atLeast(question.min)
+  if (question.max !== undefined && value > question.max) return T.atMost(question.max)
   return null
 }
 
@@ -84,7 +85,7 @@ async function reply($: EngineInterface, dir: string, payload: AskReply) {
 // 알림 본문: 첫 질문, 여러 개면 "외 N개".
 export function askNotice(questions: readonly AskQuestion[]): string {
   const first = questions[0]?.question ?? ''
-  return questions.length > 1 ? `${first} (외 ${questions.length - 1}개)` : first
+  return questions.length > 1 ? T.moreQuestions(first, questions.length - 1) : first
 }
 
 export function registerAsk(on: On, notify: boolean) {
@@ -104,7 +105,7 @@ export function registerAsk(on: On, notify: boolean) {
     if (notify) {
       // 2.1.294 이하 엔진에는 notify 가 없다: 알림만 빠지고 카드는 그대로 뜬다.
       try {
-        void $.ui.notify(askNotice(questions), { title: 'Claude 질문' }).catch(() => undefined)
+        void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
       } catch {}
     }
 

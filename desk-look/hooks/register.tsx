@@ -10,10 +10,11 @@ import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
-import { LIMIT_NAMES, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
+import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
 import type { ContextChipMode } from './usage'
-import { MERGE_NAMES, REVIEW_NAMES, checkPrompt, checkSummary, fetchReview, mergeLevel, prChipParts, prNumber, threadPrompt } from './pr'
-import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeOf } from './gitview'
+import { checkPrompt, checkSummary, fetchReview, mergeLevel, mergeName, prChipParts, prNumber, prRef, reviewName, threadPrompt } from './pr'
+import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
+import { T, langFromConfig, langSetting, setLang } from './i18n'
 
 export { cellWidth } from './markdown'
 
@@ -294,7 +295,7 @@ export function outputText(output: unknown): string {
 
 function cap(text: string, lines: number): string {
   const all = text.replace(/\s+$/, '').split('\n')
-  return all.length <= lines ? all.join('\n') : `${all.slice(0, lines).join('\n')}\n… ${all.length - lines}줄 더`
+  return all.length <= lines ? all.join('\n') : `${all.slice(0, lines).join('\n')}\n${T.moreLines(all.length - lines)}`
 }
 
 // Edit·MultiEdit 결과의 structuredPatch: 파일 기준 줄 번호와 앞뒤 문맥이 붙은 헌크. 없으면 null.
@@ -367,7 +368,7 @@ async function refreshBreakdown($: EngineInterface) {
 
 async function openContext($: EngineInterface) {
   await refreshBreakdown($).catch(() => undefined)
-  await $.ui.open({ id: CONTEXT_PANE, title: '컨텍스트', focus: true })
+  await $.ui.open({ id: CONTEXT_PANE, title: T.paneContext, focus: true })
 }
 
 // 줄 전체가 눌리는 버튼. 2.1.295 부터 Button 안에 글·Text 를 넣을 수 있다. 그 전 엔진은 그런 그림을
@@ -494,7 +495,7 @@ async function revertFile($: EngineInterface, path: string, isArmed: boolean) {
     cwd: top.stdout.trim() || undefined,
     timeoutMs: 5000,
   })
-  $.ui.toast(ran.exitCode === 0 ? `${path} 을(를) 되돌렸어요` : `되돌리지 못했어요: ${ran.stderr.trim().split('\n')[0] ?? ''}`)
+  $.ui.toast(ran.exitCode === 0 ? T.reverted(path) : T.revertFailed(ran.stderr.trim().split('\n')[0] ?? ''))
   await refreshDiff($)
 }
 
@@ -525,9 +526,9 @@ export function clipStart(text: string, width: number): string {
 async function openDiffAt($: EngineInterface, path: string) {
   await refreshDiffView($, 'uncommitted')
   const target = matchDiffFile(await read($, diff), path)
-  await $.ui.open({ id: PANE, title: '변경 사항', focus: true })
+  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
   if (target === null) {
-    $.ui.toast('이 파일은 지금 커밋되지 않은 변경에 없어요(커밋했거나 저장소 밖).')
+    $.ui.toast(T.notInDiff)
     return
   }
   await update($, open, state => ({ ...state, [`fold:${target}`]: false }))
@@ -578,7 +579,7 @@ async function fillPrompt($: EngineInterface, text: string) {
   const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
   const isEmpty = box.text.trim() === ''
   const filled = await $.prompt.fill({ text: isEmpty ? text : `\n\n${text}`, mode: isEmpty ? 'replace' : 'append' }).catch(() => null)
-  $.ui.toast(filled?.isFilled ? '입력창에 채웠어요. 고쳐서 Enter 로 보내세요.' : '입력창에 채우지 못했어요.')
+  $.ui.toast(filled?.isFilled ? T.filled : T.fillFailed)
 }
 
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
@@ -662,21 +663,21 @@ async function openSession($: EngineInterface, entry: SessionEntry) {
     $.clock.after(50, () => {
       void $.command.run({ command: 'resume', args: entry.id }).catch(async () => {
         await $.prompt.fill({ text: `/resume ${entry.id}` })
-        $.ui.toast(`Enter 를 누르면 "${entry.title}" 세션으로 넘어가요.`)
+        $.ui.toast(T.resumeHint(entry.title))
       })
     })
     return
   }
   const shell = `cd '${entry.cwd.replace(/'/g, "'\\''")}' && claude --resume ${entry.id}`
   const copied = await $.process.run(['wl-copy', '--', shell], { timeoutMs: 2000 }).catch(() => null)
-  $.ui.toast(copied?.exitCode === 0 ? `다른 폴더의 세션이에요. 명령을 복사했어요: ${shell}` : `다른 폴더의 세션이에요: ${shell}`)
+  $.ui.toast(copied?.exitCode === 0 ? T.otherFolderCopied(shell) : T.otherFolder(shell))
 }
 
 // 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 멀티플렉서·SSH 안에서도 된다.
-async function copyText($: EngineInterface, text: string, press: UiPressArgument, what: string) {
+async function copyText($: EngineInterface, text: string, press: UiPressArgument, what: 'code' | 'answer') {
   const copied = await $.ui.copy({ text, surface: press.surface })
   const lines = text.split('\n').length
-  $.ui.toast(copied.isCopied ? `${what} ${lines}줄을 복사했어요` : `복사하지 못했어요: ${copied.reason}`)
+  $.ui.toast(copied.isCopied ? T.copied(what, lines) : T.copyFailed(copied.reason))
 }
 
 async function refreshRuns($: EngineInterface) {
@@ -862,15 +863,15 @@ function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record
   // 승인 창이 떠 있는 동안 엔진은 이 호출을 아직 시작 전으로 넘긴다(isRunning false, 결과·오류 없음).
   const isWaiting = call.isRunning || (call.output === undefined && !call.isErrored)
   const status = isWaiting
-    ? { label: '승인 대기', color: COLORS.muted }
+    ? { label: T.planWaiting, color: COLORS.muted }
     : call.isInterrupted
-      ? { label: '중단됨', color: COLORS.muted }
+      ? { label: T.planInterrupted, color: COLORS.muted }
       : call.isErrored
-        ? { label: '거절됨', color: COLORS.danger }
-        : { label: '승인됨', color: COLORS.success }
+        ? { label: T.planRejected, color: COLORS.danger }
+        : { label: T.planApproved, color: COLORS.success }
   const width = Math.max(30, Math.min(columns - 2, 100))
   const { head, hidden } = splitPlan(plan, PLAN_ROWS)
-  const empty = isWaiting ? '승인 창에서 계획을 보여 주고 있어요.' : '기록에 계획 내용이 없어요.'
+  const empty = isWaiting ? T.planInDialog : T.planMissing
   return (
     <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
       <Box columnGap={1}>
@@ -991,26 +992,33 @@ export const register: Register = (on, options) => {
   const edge = side === 'right' ? 'flex-end' : 'flex-start'
   const chipMode = contextChipMode(options)
   const showPr = options.prBar !== 'off'
+  // 화면 언어: 설정이 en·ko 면 그것, auto 면 세션이 시작될 때 Claude Code /config 의 language 를 따른다.
+  const language = langSetting(options)
+  setLang(language === 'auto' ? 'en' : language)
   registerAsk(on, options.askNotify !== 'off')
 
   on('session.start', async ($, e, next) => {
+    if (language === 'auto') {
+      const row = (await $.config.list().catch(() => [])).find(item => item.key === 'language')
+      if (setLang(langFromConfig(row?.value))) $.ui.invalidate('ui.render')
+    }
     await $.command.register({
       name: 'desk-sessions',
-      description: '데스크톱 사이드바처럼 최근 세션 목록 패널을 연다 (번호를 주면 그 세션으로 이동)',
-      argumentHint: '[번호]',
+      description: T.cmdSessions,
+      argumentHint: T.cmdSessionsHint,
     })
     await $.command.register({
       name: 'desk-diff',
-      description: '데스크톱 앱처럼 우측에 변경 파일 diff 패널을 연다 (파일 이름을 주면 그 파일에서, branch·commits 면 그 범위로)',
-      argumentHint: '[파일|branch|commits]',
+      description: T.cmdDiff,
+      argumentHint: T.cmdDiffHint,
     })
     await $.command.register({
       name: 'desk-pr',
-      description: '지금 브랜치의 GitHub PR 상태·체크·안 풀린 리뷰를 패널로 연다 (gh 필요)',
+      description: T.cmdPr,
     })
     await $.command.register({
       name: 'desk-context',
-      description: '컨텍스트 사용량을 항목별로, 사용 한도·비용과 함께 패널로 연다',
+      description: T.cmdContext,
     })
     void refreshDiff($).catch(() => undefined)
     void refreshUsage($).catch(() => undefined)
@@ -1087,18 +1095,18 @@ export const register: Register = (on, options) => {
     if (Number.isInteger(index) && index > 0) {
       const list = numbered(await read($, sessions), await $.session.cwd(), PER_GROUP, await $.session.id())
       const entry = list[index - 1]
-      if (!entry) return { text: `${index}번 세션이 없어요. /desk-sessions 로 목록을 다시 열어 주세요.` }
+      if (!entry) return { text: T.noSession(index) }
       await openSession($, entry)
-      return { text: `${index}번 세션: ${entry.title}` }
+      return { text: T.sessionPicked(index, entry.title) }
     }
     await refreshSessions($)
-    await $.ui.open({ id: SESSIONS_PANE, title: '세션', focus: true })
-    return { text: '세션 패널을 열었습니다.' }
+    await $.ui.open({ id: SESSIONS_PANE, title: T.paneSessions, focus: true })
+    return { text: T.sessionsOpened }
   })
 
   on('command.run', { command: 'desk-context' }, async $ => {
     await openContext($)
-    return { text: '컨텍스트 패널을 열었습니다.' }
+    return { text: T.contextOpened }
   })
 
   on('command.run', { command: 'desk-diff' }, async ($, e) => {
@@ -1106,17 +1114,17 @@ export const register: Register = (on, options) => {
     const scope = scopeOf(name)
     if (name !== '' && scope === null) {
       await openDiffAt($, name)
-      return { text: `변경 사항 패널을 ${name} 에서 열었습니다.` }
+      return { text: T.diffOpenedAt(name) }
     }
     await refreshDiffView($, scope ?? undefined)
-    await $.ui.open({ id: PANE, title: '변경 사항', focus: true })
-    return { text: '변경 사항 패널을 열었습니다.' }
+    await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+    return { text: T.diffOpened }
   })
 
   on('command.run', { command: 'desk-pr' }, async $ => {
     await openPr($)
     const state = await read($, pr)
-    return { text: state?.pr ? `PR #${state.pr.number} 패널을 열었습니다.` : 'PR 패널을 열었습니다.' }
+    return { text: T.prOpened(state?.pr ? prRef(state.pr) : null) }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -1205,7 +1213,7 @@ export const register: Register = (on, options) => {
 
     return (
       <els.Box flexDirection="column" marginTop={e.props.isFirstOfReply ? 1 : 0}>
-        {renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns, { onCopy: (source, press) => void copyText($, source, press, '코드') })}
+        {renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns, { onCopy: (source, press) => void copyText($, source, press, 'code') })}
       </els.Box>
     )
   })
@@ -1385,7 +1393,7 @@ export const register: Register = (on, options) => {
             plain
             dimColor
             label="⧉ copy"
-            onPress={press => void copyText($, answer, press, '답변')}
+            onPress={press => void copyText($, answer, press, 'answer')}
           />
         )}
       </Box>
@@ -1464,16 +1472,16 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1}>
           <Text color={COLORS.text} bold>
-            {`최근 세션 ${list.length}개`}
+            {T.recentSessions(list.length)}
           </Text>
           <Button key="sessions-refresh" plain dimColor label="↻" onPress={() => refreshSessions($)} />
         </Box>
         <Input
           key="sessions-search"
-          label="검색"
-          placeholder="제목이나 폴더"
+          label={T.search}
+          placeholder={T.searchPlaceholder}
           value={query}
-          submitLabel="첫 결과 열기"
+          submitLabel={T.openFirst}
           autoFocus
           onInput={value => void update($, sessionQuery, () => value)}
           onSubmit={value => {
@@ -1481,7 +1489,7 @@ export const register: Register = (on, options) => {
             if (first) void openSession($, first)
           }}
         />
-        {query.trim() !== '' && shown.length === 0 && <Text color={COLORS.muted}>맞는 세션이 없어요.</Text>}
+        {query.trim() !== '' && shown.length === 0 && <Text color={COLORS.muted}>{T.noMatch}</Text>}
         {groupSessions(shown, cwd).map(group => (
           <Box key={`group-${group.cwd}`} flexDirection="column">
             <Text color={group.cwd === cwd ? COLORS.clay : COLORS.muted} bold wrap="truncate-start">
@@ -1522,20 +1530,20 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1}>
           <Text color={COLORS.text} bold>
-            컨텍스트
+            {T.contextTitle}
           </Text>
           {percent !== null && <Text color={COLORS[meterLevel(percent)]}>{`${ring(percent)} ${percent}%`}</Text>}
           <Button key="context-refresh" plain dimColor label="↻" onPress={() => void refreshBreakdown($).catch(() => undefined)} />
         </Box>
         {percent === null ? (
-          <Text color={COLORS.muted}>아직 모델 응답이 없어서 사용량을 몰라요.</Text>
+          <Text color={COLORS.muted}>{T.noUsage}</Text>
         ) : (
           <Box flexDirection="column">
             <Text color={COLORS[meterLevel(percent)]}>{meterBar(percent, width)}</Text>
             <Text color={COLORS.muted}>
               {[
-                live?.tokens != null ? `${formatTokens(live.tokens)} / ${formatTokens(live.window)} 토큰` : `창 ${formatTokens(live?.window ?? 0)} 토큰`,
-                detail?.compactAt != null ? `자동 압축 ${formatTokens(detail.compactAt)}` : null,
+                live?.tokens != null ? T.tokensOf(formatTokens(live.tokens), formatTokens(live.window)) : T.windowTokens(formatTokens(live?.window ?? 0)),
+                detail?.compactAt != null ? T.autoCompact(formatTokens(detail.compactAt)) : null,
               ]
                 .filter(Boolean)
                 .join(' · ')}
@@ -1544,7 +1552,7 @@ export const register: Register = (on, options) => {
         )}
         {detail && (
           <Box flexDirection="column">
-            <Text color={COLORS.muted}>{`항목별 · ${detail.model} · 추정`}</Text>
+            <Text color={COLORS.muted}>{T.breakdown(detail.model)}</Text>
             {[...used, ...(free ? [free] : [])].map(category => (
               <Box key={`cat-${category.name}`} columnGap={1}>
                 <Text color={(category.kind === 'free' ? COLORS.muted : category.color) as never}>{category.kind === 'free' ? '□' : '■'}</Text>
@@ -1557,23 +1565,23 @@ export const register: Register = (on, options) => {
         )}
         {live && live.limits.length > 0 && (
           <Box flexDirection="column">
-            <Text color={COLORS.muted}>사용 한도</Text>
+            <Text color={COLORS.muted}>{T.limits}</Text>
             {live.limits.map(limit => {
               const left = resetIn(limit.resetsAt, live.at)
-              const name = LIMIT_NAMES[limit.kind] ?? limit.kind
-              const limitWidth = Math.max(...live.limits.map(item => cellWidth(LIMIT_NAMES[item.kind] ?? item.kind)))
+              const name = limitName(limit.kind)
+              const limitWidth = Math.max(...live.limits.map(item => cellWidth(limitName(item.kind))))
               return (
                 <Box key={`limit-${limit.kind}`} columnGap={1}>
                   <Text color={COLORS.text}>{name + ' '.repeat(Math.max(0, limitWidth - cellWidth(name)))}</Text>
                   <Text color={COLORS[meterLevel(limit.percentUsed)]}>{meterBar(limit.percentUsed, 10)}</Text>
                   <Text color={COLORS.text}>{`${limit.percentUsed}%`.padStart(4)}</Text>
-                  {left && <Text color={COLORS.muted}>{`${left} 뒤 초기화`}</Text>}
+                  {left && <Text color={COLORS.muted}>{T.resetsIn(left)}</Text>}
                 </Box>
               )
             })}
           </Box>
         )}
-        {live?.costUsd != null && <Text color={COLORS.muted}>{`이 세션 비용 $${live.costUsd.toFixed(2)}`}</Text>}
+        {live?.costUsd != null && <Text color={COLORS.muted}>{T.sessionCost(live.costUsd.toFixed(2))}</Text>}
       </Box>
     )
   })
@@ -1587,15 +1595,14 @@ export const register: Register = (on, options) => {
     const files = view.scope === 'branch' ? view.files : uncommitted
     const added = files.reduce((sum, file) => sum + file.added, 0)
     const removed = files.reduce((sum, file) => sum + file.removed, 0)
-    const noBase = '기준 브랜치(origin 의 기본 브랜치, main·master·develop)를 찾지 못했어요.'
     const empty =
       info?.isRepo === false
-        ? 'git 저장소가 아니라서 보여 줄 diff가 없어요.'
+        ? T.notRepoDiff
         : view.scope === 'branch'
           ? view.base
-            ? `${view.base.ref} 에서 갈라진 뒤 바뀐 것이 없어요.`
-            : noBase
-          : '커밋되지 않은 변경이 없어요.'
+            ? T.noChangesSince(view.base.ref)
+            : T.noBase
+          : T.noUncommitted
 
     // 파일 하나: 머리 줄(누르면 접고 폄)과 diff. 되돌리기는 커밋 안 한 변경에서만.
     const fileBlock = (file: FileDiff, prefix: string, canRevert: boolean) => (
@@ -1616,7 +1623,7 @@ export const register: Register = (on, options) => {
               key={`revert-${file.path}`}
               plain
               dimColor={!armed[`revert:${file.path}`]}
-              label={armed[`revert:${file.path}`] ? '다시 누르면 되돌려요' : '되돌리기'}
+              label={armed[`revert:${file.path}`] ? T.revertConfirm : T.revert}
               onPress={() => void revertFile($, file.path, armed[`revert:${file.path}`] ?? false)}
             />
           )}
@@ -1624,7 +1631,7 @@ export const register: Register = (on, options) => {
         {armed[`fold:${prefix}${file.path}`] ? null : file.patch ? (
           <Code source={file.patch} path={file.path} format="diff" />
         ) : (
-          <Text color={COLORS.muted}>바이너리 또는 모드 변경</Text>
+          <Text color={COLORS.muted}>{T.binary}</Text>
         )}
       </Box>
     )
@@ -1633,21 +1640,21 @@ export const register: Register = (on, options) => {
       view.scope === 'commits'
         ? view.commits.length > 0
           ? `${view.commits.length} commit${view.commits.length === 1 ? '' : 's'}`
-          : '커밋'
+          : T.commitsTitle
         : files.length > 0
           ? `Edited ${files.length} file${files.length === 1 ? '' : 's'}`
-          : '변경 사항'
+          : T.changesTitle
 
     return (
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={2}>
-          {SCOPES.map(item => (
+          {SCOPES.map(scope => (
             <Button
-              key={`scope-${item.scope}`}
+              key={`scope-${scope}`}
               plain
-              dimColor={item.scope !== view.scope}
-              label={item.scope === view.scope ? `● ${item.label}` : `○ ${item.label}`}
-              onPress={() => void refreshDiffView($, item.scope)}
+              dimColor={scope !== view.scope}
+              label={`${scope === view.scope ? '●' : '○'} ${scopeLabel(scope)}`}
+              onPress={() => void refreshDiffView($, scope)}
             />
           ))}
         </Box>
@@ -1662,7 +1669,7 @@ export const register: Register = (on, options) => {
         {view.scope !== 'commits' && files.length === 0 && <Text color={COLORS.muted}>{empty}</Text>}
         {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
         {view.scope === 'commits' && view.commits.length === 0 && (
-          <Text color={COLORS.muted}>{info?.isRepo === false ? 'git 저장소가 아니에요.' : view.base ? `${view.base.ref} 이후 커밋이 없어요.` : '커밋이 없어요.'}</Text>
+          <Text color={COLORS.muted}>{info?.isRepo === false ? T.notRepo : view.base ? T.noCommitsSince(view.base.ref) : T.noCommits}</Text>
         )}
         {view.scope === 'commits' &&
           view.commits.map(commit => (
@@ -1679,7 +1686,7 @@ export const register: Register = (on, options) => {
               )}
               {view.commit === commit.sha && (
                 <Box flexDirection="column" rowGap={1} paddingLeft={2}>
-                  {view.commitFiles.length === 0 && <Text color={COLORS.muted}>보여 줄 diff 가 없어요(병합 커밋이거나 빈 커밋).</Text>}
+                  {view.commitFiles.length === 0 && <Text color={COLORS.muted}>{T.emptyCommit}</Text>}
                   {view.commitFiles.map(file => fileBlock(file, `c:${commit.short}:`, false))}
                 </Box>
               )}
@@ -1700,12 +1707,12 @@ export const register: Register = (on, options) => {
     if (!info) {
       const message =
         state === null || state.status === 'loading'
-          ? 'PR 을 읽는 중이에요…'
+          ? T.prLoading
           : state.status === 'none'
             ? state.branch
-              ? `${state.branch} 브랜치에는 열린 PR·MR 이 없어요.`
-              : '브랜치가 아니라서(detached HEAD) PR 을 찾을 수 없어요.'
-            : `PR·MR 을 읽지 못했어요${state.error ? `: ${state.error}` : ''}. GitHub 은 gh, GitLab 은 glab 이 설치·로그인되어 있는지 확인해 주세요.`
+              ? T.prNone(state.branch)
+              : T.prDetached
+            : T.prFailed(state.error)
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
@@ -1738,7 +1745,7 @@ export const register: Register = (on, options) => {
             <Text color={check.state === 'pass' || check.state === 'skip' ? COLORS.muted : COLORS.text}>{clip(check.name, nameWidth)}</Text>
           )}
           {check.state === 'fail' && (
-            <Button key={`fix-check-${check.name}`} plain label="Claude에게 맡기기" onPress={() => void fillPrompt($, checkPrompt(info, check))} />
+            <Button key={`fix-check-${check.name}`} plain label={T.handToClaude} onPress={() => void fillPrompt($, checkPrompt(info, check))} />
           )}
         </Box>
       )
@@ -1751,7 +1758,7 @@ export const register: Register = (on, options) => {
           <Text color={COLORS.text}>{clip(thread.line === null ? thread.path : `${thread.path}:${thread.line}`, Math.max(12, columns - 40))}</Text>
           <Text color={COLORS.muted}>{thread.author}</Text>
           {thread.isOutdated && <Text color={COLORS.muted}>outdated</Text>}
-          <Button key={`fix-thread-${index}`} plain label="Claude에게 맡기기" onPress={() => void fillPrompt($, threadPrompt(info, thread))} />
+          <Button key={`fix-thread-${index}`} plain label={T.handToClaude} onPress={() => void fillPrompt($, threadPrompt(info, thread))} />
         </Box>
         <Box paddingLeft={2}>
           <Text color={COLORS.muted}>{clip(thread.body.split('\n').find(line => line.trim() !== '') ?? '', Math.max(10, columns - 4))}</Text>
@@ -1778,14 +1785,14 @@ export const register: Register = (on, options) => {
             <Box columnGap={1}>
               {info.reviewDecision && (
                 <Text color={info.reviewDecision === 'APPROVED' ? COLORS.success : info.reviewDecision === 'CHANGES_REQUESTED' ? COLORS.danger : COLORS.muted}>
-                  {`리뷰 ${REVIEW_NAMES[info.reviewDecision] ?? info.reviewDecision}`}
+                  {T.review(reviewName(info.reviewDecision))}
                 </Text>
               )}
               {info.reviewDecision && info.state === 'OPEN' && info.mergeState && <Text color={COLORS.muted}>·</Text>}
-              {info.state === 'OPEN' && info.mergeState && <Text color={COLORS[mergeLevel(info.mergeState)]}>{MERGE_NAMES[info.mergeState] ?? info.mergeState}</Text>}
+              {info.state === 'OPEN' && info.mergeState && <Text color={COLORS[mergeLevel(info.mergeState)]}>{mergeName(info.mergeState)}</Text>}
             </Box>
           )}
-          <Link href={info.url}>{info.provider === 'gitlab' ? 'GitLab에서 열기' : 'GitHub에서 열기'}</Link>
+          <Link href={info.url}>{T.openOn(info.provider)}</Link>
         </Box>
         <Box flexDirection="column">
           <Box columnGap={1}>
@@ -1794,8 +1801,8 @@ export const register: Register = (on, options) => {
             </Text>
             <Text color={COLORS.muted}>
               {summary.total === 0
-                ? '없음'
-                : [`${summary.passed}/${summary.total} 통과`, summary.failed > 0 ? `${summary.failed} 실패` : null, summary.pending > 0 ? `${summary.pending} 진행 중` : null].filter(Boolean).join(' · ')}
+                ? T.checksNone
+                : [T.passedOf(summary.passed, summary.total), summary.failed > 0 ? T.failedCount(summary.failed) : null, summary.pending > 0 ? T.runningCount(summary.pending) : null].filter(Boolean).join(' · ')}
             </Text>
           </Box>
           {info.checks.filter(check => check.state === 'fail' || check.state === 'pending').map(checkRow)}
@@ -1804,7 +1811,7 @@ export const register: Register = (on, options) => {
               els,
               rich,
               { key: 'pr-passes', dimColor: true, onPress: () => toggle($, 'pr:passes') },
-              showPasses ? `통과·건너뜀 ${passes.length}개 접기` : `통과·건너뜀 ${passes.length}개`,
+              showPasses ? T.passesShown(passes.length) : T.passesFolded(passes.length),
               showPasses ? ' ⌄' : ' ›',
             )}
           {showPasses && passes.map(checkRow)}
@@ -1812,9 +1819,9 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
           <Box columnGap={1}>
             <Text color={COLORS.text} bold>
-              안 풀린 리뷰
+              {T.unresolved}
             </Text>
-            <Text color={COLORS.muted}>{info.threads === null ? '읽지 못함' : `${info.threads.length}개`}</Text>
+            <Text color={COLORS.muted}>{info.threads === null ? T.unreadable : T.count(info.threads.length)}</Text>
           </Box>
           {(info.threads ?? []).map(threadRow)}
         </Box>
@@ -1829,8 +1836,8 @@ export function looksLikeMarkdown(text: string): boolean {
 }
 
 export function askHint(question: { kind: string; multiSelect: boolean }): string {
-  const how = question.kind !== 'choice' ? '입력칸을 클릭해 답하기' : question.multiSelect ? '숫자로 고르고 0 제출' : '숫자로 고르기'
-  return `  ${how} · 9 기본 창 · Esc 취소`
+  const how = question.kind !== 'choice' ? T.askHowText : question.multiSelect ? T.askHowMulti : T.askHowPick
+  return `  ${how} · ${T.askHintTail}`
 }
 
 // 질문 카드(입력창 위 띠). 묻는 상태와 도구 호출 훅은 ask.tsx, 그리기와 버튼은 여기($ 는 파일을 넘지 못한다).
@@ -1948,10 +1955,10 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
               )
             })
           ) : (
-            <Button key={`ask-engine-${k}`} plain hotkey="9" label="기본 창에서 답하기" onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
+            <Button key={`ask-engine-${k}`} plain hotkey="9" label={T.answerInDefault} onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
           )}
           {question.multiSelect && (
-            <Button key={`ask-next-${k}`} plain hotkey="0" label={isLast ? '제출' : '다음 →'} onPress={() => void advanceAsk($, state, picks, text)} />
+            <Button key={`ask-next-${k}`} plain hotkey="0" label={isLast ? T.submit : T.nextArrow} onPress={() => void advanceAsk($, state, picks, text)} />
           )}
         </Box>
       </Box>
@@ -1986,10 +1993,10 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
             )
           })
         ) : (
-          <Button key={`ask-engine-${k}`} plain hotkey="9" label="기본 창에서 답하기" onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
+          <Button key={`ask-engine-${k}`} plain hotkey="9" label={T.answerInDefault} onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
         )}
         {question.multiSelect && (
-          <Button key={`ask-next-${k}`} hotkey="0" label={isLast ? '제출' : '다음 →'} onPress={() => void advanceAsk($, state, picks, text)} />
+          <Button key={`ask-next-${k}`} hotkey="0" label={isLast ? T.submit : T.nextArrow} onPress={() => void advanceAsk($, state, picks, text)} />
         )}
       </Box>
     )
@@ -2033,7 +2040,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
               </Box>
             )
           })}
-          {question.options.some(option => option.preview) && <Text color={COLORS.muted}>선택지에 마우스를 올리면 미리보기</Text>}
+          {question.options.some(option => option.preview) && <Text color={COLORS.muted}>{T.hoverPreview}</Text>}
           {question.options.map((option, index) => {
             if (!option.preview) return null
             // 카드 오른쪽, 제목 줄 높이부터 겹쳐 그린다(카드가 커지면 띠가 위로 자라 선택지가 커서 밑에서 밀려나므로).
@@ -2063,20 +2070,20 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
       <Box marginTop={1}>
         <Input
           key={`ask-text-${k}`}
-          label={question.kind === 'choice' ? 'Other' : `답${unit}`}
-          placeholder={question.placeholder ?? (question.kind === 'number' ? '숫자' : '두 번 클릭해서 입력')}
+          label={question.kind === 'choice' ? 'Other' : T.answerLabel(unit)}
+          placeholder={question.placeholder ?? (question.kind === 'number' ? T.numberPlaceholder : T.otherPlaceholder)}
           value={text}
-          submitLabel={isLast ? '제출' : '다음'}
+          submitLabel={isLast ? T.submit : T.next}
           onInput={value => void setText(value)}
           onSubmit={value => void advanceAsk($, state, question.multiSelect ? picks : [], value)}
         />
       </Box>
       <Box columnGap={2}>
         {question.multiSelect && (
-          <Button key={`ask-next-${k}`} hotkey="0" label={isLast ? '제출' : '다음 →'} onPress={() => void advanceAsk($, state, picks, text)} />
+          <Button key={`ask-next-${k}`} hotkey="0" label={isLast ? T.submit : T.nextArrow} onPress={() => void advanceAsk($, state, picks, text)} />
         )}
-        <Button key={`ask-engine-${k}`} plain dimColor hotkey="9" label="기본 창으로" onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
-        <Button key={`ask-close-${k}`} plain dimColor label="닫기" onPress={() => void replyAsk($, state.dir, { kind: 'dismiss' })} />
+        <Button key={`ask-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
+        <Button key={`ask-close-${k}`} plain dimColor label={T.close} onPress={() => void replyAsk($, state.dir, { kind: 'dismiss' })} />
       </Box>
     </Box>
   )

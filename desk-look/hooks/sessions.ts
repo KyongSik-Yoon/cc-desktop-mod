@@ -1,5 +1,6 @@
 import type { SessionEntry } from '../types'
 import { cellWidth } from './markdown'
+import { T } from './i18n'
 
 // ~/.claude/projects/<프로젝트>/<세션>.jsonl 에서 최근 세션을 뽑는다.
 // 한 줄에 세션 id, 마지막 활동(초), 작업 폴더, 사용자가 붙인 제목, 자동 제목, 마지막 프롬프트를 탭으로 나눠 출력한다.
@@ -39,7 +40,7 @@ export function numbered(list: SessionEntry[], currentCwd: string, perGroup: num
 export function groupSessions(list: SessionEntry[], currentCwd: string): Array<{ cwd: string; sessions: SessionEntry[] }> {
   const groups = new Map<string, SessionEntry[]>()
   for (const entry of list) {
-    const key = entry.cwd || '(알 수 없음)'
+    const key = entry.cwd || T.unknownFolder
     groups.set(key, [...(groups.get(key) ?? []), entry])
   }
   return [...groups]
@@ -49,11 +50,11 @@ export function groupSessions(list: SessionEntry[], currentCwd: string): Array<{
 
 export function ago(at: number, now: number): string {
   const minutes = Math.max(0, Math.floor((now - at) / 60_000))
-  if (minutes < 1) return '방금'
-  if (minutes < 60) return `${minutes}분`
+  if (minutes < 1) return T.justNow
+  if (minutes < 60) return T.minutesShort(minutes)
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}시간`
-  return `${Math.floor(hours / 24)}일`
+  if (hours < 24) return T.hoursShort(hours)
+  return T.daysShort(Math.floor(hours / 24))
 }
 
 // 칸 수 기준으로 자르고 말줄임표를 붙인다.

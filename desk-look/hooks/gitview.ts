@@ -1,16 +1,19 @@
 import type { CommitInfo, DiffScope } from '../types'
+import { T, allScopeLabels } from './i18n'
 
 // 데스크톱 diff 패널의 범위: 커밋 안 한 변경 / 브랜치 전체(기본 브랜치에서 갈라진 뒤) / 커밋별.
 // 데스크톱도 기본 브랜치와의 기준점을 merge-base 로 잡는다.
-export const SCOPES: ReadonlyArray<{ scope: DiffScope; label: string }> = [
-  { scope: 'uncommitted', label: '커밋 안 한 변경' },
-  { scope: 'branch', label: '브랜치 전체' },
-  { scope: 'commits', label: '커밋별' },
-]
+export const SCOPES: ReadonlyArray<DiffScope> = ['uncommitted', 'branch', 'commits']
 
+export function scopeLabel(scope: DiffScope): string {
+  return scope === 'branch' ? T.scopeBranch : scope === 'commits' ? T.scopeCommits : T.scopeUncommitted
+}
+
+// /desk-diff 의 인자: 범위 키(branch …)나 어느 언어의 탭 이름이든.
 export function scopeOf(word: string): DiffScope | null {
-  const found = SCOPES.find(item => item.scope === word || item.label === word)
-  return found?.scope ?? null
+  if ((SCOPES as readonly string[]).includes(word)) return word as DiffScope
+  const found = allScopeLabels().find(([label]) => label.toLowerCase() === word.toLowerCase())
+  return (found?.[1] as DiffScope | undefined) ?? null
 }
 
 export const LOG_FORMAT = '--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar'

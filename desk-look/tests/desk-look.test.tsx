@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { setLang } from '../hooks/i18n'
+
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
+// 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
+const KO = { options: { language: 'ko' } }
 const VIEWPORT = { columns: 100, rows: 40 }
 const call = (tool: string, input: unknown, extra: Partial<{ isErrored: boolean; output: string }> = {}) => ({
   tool,
@@ -35,7 +39,7 @@ const REPLY = [
 ].join('\n')
 
 describe('응답 렌더링', () => {
-  test('답변은 서명 없이 데스크톱 산문 스타일로 그린다', async ($, on) => {
+  test('답변은 서명 없이 데스크톱 산문 스타일로 그린다', KO, async ($, on) => {
     const copied: string[] = []
     on('ui.copy', ($, e) => {
       copied.push(e.text)
@@ -71,7 +75,7 @@ describe('응답 렌더링', () => {
     await reply.unmount()
   })
 
-  test('mermaid 는 박스 문자 그림으로, 한글 폭을 맞춰 그린다', async $ => {
+  test('mermaid 는 박스 문자 그림으로, 한글 폭을 맞춰 그린다', KO, async $ => {
     const reply = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
@@ -91,7 +95,7 @@ describe('응답 렌더링', () => {
     await reply.unmount()
   })
 
-  test('속성 붙은 펜스, 알림 박스, 코드 바탕 폭', async $ => {
+  test('속성 붙은 펜스, 알림 박스, 코드 바탕 폭', KO, async $ => {
     const blocks = parseBlocks('```ts title="a.ts"\nconst a = 1\n```\n\n## 다음\n\n````md\n```\n안쪽\n```\n````\n\n끝')
     expect(blocks.map(block => block.kind)).toEqual(['code', 'heading', 'code', 'paragraph'])
     expect(blocks[0]?.kind === 'code' && blocks[0].language).toBe('ts')
@@ -110,7 +114,7 @@ describe('응답 렌더링', () => {
     await reply.unmount()
   })
 
-  test('데스크톱 화면에서는 엔진 그림을 그대로 둔다', async ($, on) => {
+  test('데스크톱 화면에서는 엔진 그림을 그대로 둔다', KO, async ($, on) => {
     on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
       return <Text>engine-drawn</Text>
@@ -125,7 +129,7 @@ describe('응답 렌더링', () => {
     await desktop.unmount()
   })
 
-  test('사용자 프롬프트는 둥근 말풍선', async $ => {
+  test('사용자 프롬프트는 둥근 말풍선', KO, async $ => {
     const bubble = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
@@ -139,7 +143,7 @@ describe('응답 렌더링', () => {
 })
 
 describe('도구 활동', () => {
-  test('편집 한 줄: 동사·파일명·칩, 누르면 diff 로 펼친다', async $ => {
+  test('편집 한 줄: 동사·파일명·칩, 누르면 diff 로 펼친다', KO, async $ => {
     const row = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
@@ -163,7 +167,7 @@ describe('도구 활동', () => {
     await row.unmount()
   })
 
-  test('결과 블록은 숨긴다', async $ => {
+  test('결과 블록은 숨긴다', KO, async $ => {
     const result = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
@@ -175,7 +179,7 @@ describe('도구 활동', () => {
     await result.unmount()
   })
 
-  test('묶음 한 줄 요약, 누르면 호출별 줄', async $ => {
+  test('묶음 한 줄 요약, 누르면 호출별 줄', KO, async $ => {
     const group = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
@@ -199,7 +203,7 @@ describe('도구 활동', () => {
     await group.unmount()
   })
 
-  test('묶음을 펼치면 편집 diff 가 바로, 다시 누르면 접힌다', async $ => {
+  test('묶음을 펼치면 편집 diff 가 바로, 다시 누르면 접힌다', KO, async $ => {
     const group = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
@@ -224,7 +228,7 @@ describe('도구 활동', () => {
     await group.unmount()
   })
 
-  test('입력창 위 밴드는 다른 플러그인의 밴드를 지우지 않는다', async ($, on) => {
+  test('입력창 위 밴드는 다른 플러그인의 밴드를 지우지 않는다', KO, async ($, on) => {
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
       return <Text>other-band</Text>
@@ -248,7 +252,7 @@ describe('도구 활동', () => {
   })
 })
 
-test('순수 함수', async () => {
+test('순수 함수', KO, async () => {
   expect(cellWidth('ab한글')).toBe(6)
   expect(summarize('Edit', { file_path: '/a/b/c.ts' })).toBe('c.ts')
   expect(describeCalls([call('Bash', {}), call('Bash', {}), call('Write', {}), call('Edit', {}), call('Read', {}), call('WebFetch', {})])).toBe(
@@ -290,7 +294,7 @@ import { computeRuns } from '../hooks/runs'
 import { mix, parseSurface } from '../hooks/theme'
 
 describe('v3: 테마 면과 도구 묶음', () => {
-  test('omarchy colors.toml 에서 말풍선 색을 계산한다', async () => {
+  test('omarchy colors.toml 에서 말풍선 색을 계산한다', KO, async () => {
     const light = parseSurface('mode = "light"\nbackground = "#fafafa"\nforeground = "#212121"\n')
     expect(light?.mode).toBe('light')
     expect(light?.bubble).toBe(mix('#fafafa', '#000000', 0.055))
@@ -301,7 +305,7 @@ describe('v3: 테마 면과 도구 묶음', () => {
     expect(mix('#000000', '#ffffff', 0.5)).toBe('#808080')
   })
 
-  test('텍스트가 끼기 전까지의 도구 호출을 한 묶음으로 계산한다', async () => {
+  test('텍스트가 끼기 전까지의 도구 호출을 한 묶음으로 계산한다', KO, async () => {
     const use = (id: string, tool: string) => ({ tool_use_id: id, tool, input: {} })
     const result = (id: string, isError = false) => ({ tool_use_id: id, text: isError ? 'boom' : 'ok', isError })
     const result_ = computeRuns([
@@ -321,7 +325,7 @@ describe('v3: 테마 면과 도구 묶음', () => {
     ])
   })
 
-  test('묶음의 첫 행은 묶음 한 줄, 나머지 행은 비운다', async () => {
+  test('묶음의 첫 행은 묶음 한 줄, 나머지 행은 비운다', KO, async () => {
     const runCall = (id: string) => ({ tool_use_id: id, tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false })
     const state = { firstOf: { a: 'a', b: 'a', c: 'a', z: 'z' }, calls: { a: [runCall('a'), runCall('b'), runCall('c')], z: [runCall('z')] } }
     expect(planRow(['a'], state).kind).toBe('run')
@@ -338,7 +342,7 @@ describe('v3: 테마 면과 도구 묶음', () => {
 import { parseImages, supportsGraphics, thumbnailSize } from '../hooks/images'
 import { renderDiagram } from '../hooks/diagram'
 
-test('붙여 넣은 이미지 목록과 썸네일 크기', async () => {
+test('붙여 넣은 이미지 목록과 썸네일 크기', KO, async () => {
   const listing = '/tmp/claude-1000/p/s/images/8.png  137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 1 234 0 0 1 42 \n/tmp/x/images/notes.txt 1 2\n'
   const images = parseImages(listing)
   expect(images).toEqual({ '8': { path: '/tmp/claude-1000/p/s/images/8.png', width: 490, height: 298 } })
@@ -347,7 +351,7 @@ test('붙여 넣은 이미지 목록과 썸네일 크기', async () => {
   expect(thumbnailSize({ path: '', width: 300, height: 1200 }, 36)).toEqual({ columns: 6, rows: 12 })
 })
 
-test('말풍선 줄바꿈과 다이어그램 색 나누기', async () => {
+test('말풍선 줄바꿈과 다이어그램 색 나누기', KO, async () => {
   expect(wrapText('가나다 라마바 사아', 8)).toEqual(['가나다', '라마바', '사아'])
   expect(wrapText('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
   expect(wrapText('첫 줄\n둘째 줄', 20)).toEqual(['첫 줄', '둘째 줄'])
@@ -355,7 +359,7 @@ test('말풍선 줄바꿈과 다이어그램 색 나누기', async () => {
   expect([...kinds].sort()).toEqual(['arrow', 'border', 'label', 'line', 'text'])
 })
 
-test('그래픽 지원 판정과 그림 못 그릴 때 [Image #N] 지우기', async $ => {
+test('그래픽 지원 판정과 그림 못 그릴 때 [Image #N] 지우기', KO, async $ => {
   expect(supportsGraphics({ TERM: 'xterm-ghostty' })).toBe(true)
   expect(supportsGraphics({ TERM: 'xterm-256color', TERM_PROGRAM: 'ghostty' })).toBe(true)
   expect(supportsGraphics({ TERM: 'xterm-ghostty', HERDR_ENV: '1' })).toBe(false)
@@ -375,7 +379,7 @@ test('그래픽 지원 판정과 그림 못 그릴 때 [Image #N] 지우기', as
   await bubble.unmount()
 })
 
-test('분기 노드는 이중선 상자, 일반 노드는 둥근 상자', async () => {
+test('분기 노드는 이중선 상자, 일반 노드는 둥근 상자', KO, async () => {
   const text = (renderDiagram('flowchart LR\n  A[답변] --> B{종류} --> C[그림]')?.rows ?? [])
     .map(row => row.map(seg => seg.text).join(''))
     .join('\n')
@@ -384,13 +388,13 @@ test('분기 노드는 이중선 상자, 일반 노드는 둥근 상자', async 
   expect(text).not.toContain('┌')
 })
 
-test('말풍선 줄은 칸 수를 맞춰 같은 폭으로 채운다', async () => {
+test('말풍선 줄은 칸 수를 맞춰 같은 폭으로 채운다', KO, async () => {
   const rows = bubbleRows(['첫 줄', 'second line'])
   expect(rows.map(cellWidth)).toEqual([15, 15])
   expect(rows[0]).toBe('  첫 줄      ' + '  ')
 })
 
-test('말풍선 끝 칸은 줄 위치로 고른다', async () => {
+test('말풍선 끝 칸은 줄 위치로 고른다', KO, async () => {
   expect(bubbleEdges(1)).toEqual([['\ue0b6', '\ue0b4']])
   const three = bubbleEdges(3)
   expect(three[0]).toEqual(['\u{1FB41}', '\u{1FB4C}'])
@@ -401,7 +405,7 @@ test('말풍선 끝 칸은 줄 위치로 고른다', async () => {
   expect(cellWidth('\u{1FB41}')).toBe(1)
 })
 
-test('화살촉은 상자 테두리에 꽂고 그 앞 칸은 선으로 잇는다', async () => {
+test('화살촉은 상자 테두리에 꽂고 그 앞 칸은 선으로 잇는다', KO, async () => {
   const rows = (renderDiagram('flowchart TD\n  A[답변] --> B[그림]')?.rows ?? []).map(row => row.map(seg => seg.text).join(''))
   const text = rows.join('\n')
   expect(text).not.toContain('▼')
@@ -415,7 +419,7 @@ test('화살촉은 상자 테두리에 꽂고 그 앞 칸은 선으로 잇는다
   expect(lr).not.toContain('▶')
 })
 
-test('턴 끝 카드: 파일 합치기와 소요 시간 짝짓기', async () => {
+test('턴 끝 카드: 파일 합치기와 소요 시간 짝짓기', KO, async () => {
   let list = mergeEdit([], { path: '/r/a.ts', added: 2, removed: 1 })
   list = mergeEdit(list, { path: '/r/b.ts', added: 1, removed: 0 })
   list = mergeEdit(list, { path: '/r/a.ts', added: 3, removed: 2 })
@@ -433,7 +437,7 @@ test('턴 끝 카드: 파일 합치기와 소요 시간 짝짓기', async () => 
   expect(cardFor(cards, 50_000)).toBeUndefined()
 })
 
-test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', async ($, on) => {
+test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', KO, async ($, on) => {
   on('ui.render', { component: 'TurnDuration' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>Baked for 3s</Text>
@@ -452,7 +456,8 @@ test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', async ($, on)
 
 import { ago, clip, filterSessions, groupSessions, numbered, parseSessions } from '../hooks/sessions'
 
-test('세션 목록 읽기·묶기·표시', async () => {
+test('세션 목록 읽기·묶기·표시', KO, async () => {
+  setLang('ko')
   const listing = [
     'ab12bc38-9375-438b-b199-90724fcb83cd\t1791456080\t/home/u/repo\t\tClaude Code 모드 아이디어',
     '83c92571-f2bb-4513-8111-da82e042ba8f\t1791455457\t/home/u/other\t직접 붙인 이름\t자동 제목',
@@ -478,12 +483,12 @@ test('세션 목록 읽기·묶기·표시', async () => {
   expect(clip('짧음', 10)).toBe('짧음')
 })
 
-test('입력창 아래턱 글자', () => {
+test('입력창 아래턱 글자', KO, () => {
   expect(chinLabel('cc-desktop-mod', 'main')).toBe(' \uf07b  cc-desktop-mod   \ue0a0 main')
   expect(chinLabel('scratch', null)).toBe(' \uf07b  scratch')
 })
 
-test('진행 표시 글자', () => {
+test('진행 표시 글자', KO, () => {
   expect(spinnerWord('tool-use', null)).toBe('Running')
   expect(spinnerWord('thinking', 'Compacting conversation')).toBe('Compacting conversation')
   expect(formatElapsed(12_400)).toBe('12s')
@@ -494,7 +499,7 @@ test('진행 표시 글자', () => {
 
 import { computeTasks, visibleTasks } from '../hooks/tasks'
 
-test('할 일 목록 다시 세우기와 보일 줄', () => {
+test('할 일 목록 다시 세우기와 보일 줄', KO, () => {
   const ok = (id: string, result: unknown) => ({ tool_use_id: id, text: 'ok', isError: false, result })
   const list = computeTasks([
     {
@@ -541,7 +546,8 @@ test('할 일 목록 다시 세우기와 보일 줄', () => {
 
 import { answerOf, askNotice, numberProblem, parseQuestions } from '../hooks/ask'
 
-test('질문 카드: 그릴 수 있는 질문과 답 모양', () => {
+test('질문 카드: 그릴 수 있는 질문과 답 모양', KO, () => {
+  setLang('ko')
   const questions = parseQuestions([
     { question: '어디에?', header: '위치', multiSelect: false, options: [{ label: '왼쪽' }, { label: '오른쪽', description: '넓음' }] },
     { question: '무엇을?', header: '기능', multiSelect: true, options: [{ label: '가' }, { label: '나' }] },
@@ -562,7 +568,7 @@ test('질문 카드: 그릴 수 있는 질문과 답 모양', () => {
   expect(answerOf(count, [], '3')).toBe('3')
 })
 
-test('질문 도구 줄: 질문과 답', () => {
+test('질문 도구 줄: 질문과 답', KO, () => {
   expect(summarize('AskUserQuestion', { questions: [{ question: 'Which color?' }] })).toBe('Which color?')
   expect(describeCalls([{ tool: 'AskUserQuestion', input: {}, isRunning: false, isErrored: false, isInterrupted: false }])).toBe('Asked a question')
   expect(askAnswer({ answers: { 'Which color?': 'Blue', 'Pet?': 'Dogs' } })).toBe('Blue · Dogs')
@@ -573,7 +579,7 @@ test('질문 도구 줄: 질문과 답', () => {
 import { agentOf } from '../hooks/runs'
 import { askHint, askRows, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
 
-test('서브에이전트 카드 요약과 묶음', () => {
+test('서브에이전트 카드 요약과 묶음', KO, () => {
   const raw = {
     agentId: 'a1',
     status: 'completed',
@@ -601,7 +607,8 @@ test('서브에이전트 카드 요약과 묶음', () => {
   expect(runsOf.calls.a?.[0]?.output).toEqual({ agent: summary })
 })
 
-test('명령 출력 마크다운 판별과 질문 힌트', async $ => {
+test('명령 출력 마크다운 판별과 질문 힌트', KO, async $ => {
+  setLang('ko')
   expect(looksLikeMarkdown('| a | b |\n|---|---|\n| 1 | 2 |')).toBe(true)
   expect(looksLikeMarkdown('# 제목\n본문')).toBe(true)
   expect(looksLikeMarkdown('Total cost: $0.12\nTotal duration: 3m')).toBe(false)
@@ -617,7 +624,7 @@ test('명령 출력 마크다운 판별과 질문 힌트', async $ => {
   await row.unmount()
 })
 
-test('모드 칩: 테마를 모르면 엔진 그림 그대로', async ($, on) => {
+test('모드 칩: 테마를 모르면 엔진 그림 그대로', KO, async ($, on) => {
   on('ui.render', { component: 'SessionMode' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>{e.props.modes.join(' & ')}</Text>
@@ -627,7 +634,7 @@ test('모드 칩: 테마를 모르면 엔진 그림 그대로', async ($, on) =>
   await row.unmount()
 })
 
-test('diff 패널 되돌리기는 두 번 눌러야 git restore', async ($, on) => {
+test('diff 패널 되돌리기는 두 번 눌러야 git restore', KO, async ($, on) => {
   const ran: string[][] = []
   const PATCH = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n'
   on('process.run', ($, e) => {
@@ -647,7 +654,7 @@ test('diff 패널 되돌리기는 두 번 눌러야 git restore', async ($, on) 
   await pane.unmount()
 })
 
-test('세션 검색', () => {
+test('세션 검색', KO, () => {
   const entry = (id: string, title: string, cwd: string) => ({ id, title, cwd, updatedAt: 0 })
   const list = [entry('1', 'desk-look 아래턱', '/home/u/cc-desktop-mod'), entry('2', 'Fix login bug', '/home/u/app')]
   expect(filterSessions(list, '').length).toBe(2)
@@ -660,7 +667,7 @@ test('세션 검색', () => {
 const wait = (ms: number) =>
   new Promise<void>(resolve => (globalThis as unknown as { setTimeout: (fn: () => void, ms: number) => void }).setTimeout(resolve, ms))
 
-test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결과', async ($, on) => {
+test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결과', KO, async ($, on) => {
   let answer: (stdout: string) => void = () => undefined
   const waiting = new Promise<string>(resolve => (answer = resolve))
   const notified: unknown[] = []
@@ -714,7 +721,7 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
   await band.unmount()
 })
 
-test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', async ($, on) => {
+test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', KO, async ($, on) => {
   const PATCH = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1,2 @@\n-a\n+b\n+c\n'
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('process.run', ($, e) => {
@@ -735,7 +742,7 @@ test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', asy
   await band.unmount()
 })
 
-test('질문 카드 줄 수: 모자라면 간단한 모양', () => {
+test('질문 카드 줄 수: 모자라면 간단한 모양', KO, () => {
   const two = { kind: 'choice', multiSelect: false, options: [{}, {}] }
   expect(askRows(two, false)).toBe(2 + 2 + 1 + 2 + 3)
   expect(askRows(two, true)).toBe(2 + 1 + 2)
@@ -743,7 +750,7 @@ test('질문 카드 줄 수: 모자라면 간단한 모양', () => {
   expect(askRows({ ...two, options: [{ preview: 'x' }, {}] }, false)).toBe(11)
 })
 
-test('에이전트 메시지 줄: 누르면 그 자리에서 마크다운으로 펼침', async $ => {
+test('에이전트 메시지 줄: 누르면 그 자리에서 마크다운으로 펼침', KO, async $ => {
   const text = 'Two lines mention it:\n\n- L19 table row\n- L59 note'
   const row = await $.ui.mount({
     plugin: 'desk-look',
@@ -763,7 +770,7 @@ test('에이전트 메시지 줄: 누르면 그 자리에서 마크다운으로 
 
 import { bubbleSide } from '../hooks/register'
 
-test('말풍선 위치 설정: 기본 왼쪽', () => {
+test('말풍선 위치 설정: 기본 왼쪽', KO, () => {
   expect(bubbleSide({})).toBe('left')
   expect(bubbleSide({ bubbleSide: 'right' })).toBe('right')
   expect(bubbleSide({ bubbleSide: 'weird' })).toBe('left')
@@ -771,13 +778,13 @@ test('말풍선 위치 설정: 기본 왼쪽', () => {
 
 const PROMPT = { text: '안녕', origin: { kind: 'composer' }, isExpanded: false } as never
 
-test('말풍선 왼쪽(기본)', async $ => {
+test('말풍선 왼쪽(기본)', KO, async $ => {
   const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: VIEWPORT, props: PROMPT })
   expect(JSON.stringify(await row.drawn())).toContain('"alignItems":"flex-start"')
   await row.unmount()
 })
 
-test('말풍선 오른쪽 설정', { options: { bubbleSide: 'right' } }, async $ => {
+test('말풍선 오른쪽 설정', { options: { bubbleSide: 'right', language: 'ko' } }, async $ => {
   const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: VIEWPORT, props: PROMPT })
   expect(JSON.stringify(await row.drawn())).toContain('"alignItems":"flex-end"')
   await row.unmount()
@@ -815,7 +822,8 @@ const USAGE = (percent: number) => ({
   cost: { usd: 1.5 },
 })
 
-test('컨텍스트 칩 판정과 글자', () => {
+test('컨텍스트 칩 판정과 글자', KO, () => {
+  setLang('ko')
   expect(contextChipMode({})).toBe('auto')
   expect(contextChipMode({ contextChip: 'off' })).toBe('off')
   expect(contextChipMode({ contextChip: 'weird' })).toBe('auto')
@@ -834,7 +842,7 @@ test('컨텍스트 칩 판정과 글자', () => {
   expect([950, 62100, 1_000_000, 1_250_000].map(formatTokens)).toEqual(['950', '62.1k', '1M', '1.3M'])
 })
 
-test('컨텍스트 칩: 반을 넘기면 아래턱 옆에, 누르면 패널', async ($, on) => {
+test('컨텍스트 칩: 반을 넘기면 아래턱 옆에, 누르면 패널', KO, async ($, on) => {
   const opened: string[] = []
   const asked: unknown[] = []
   on('session.usage', ($, e) => {
@@ -872,7 +880,7 @@ test('컨텍스트 칩: 반을 넘기면 아래턱 옆에, 누르면 패널', as
   await pane.unmount()
 })
 
-test('컨텍스트 칩: 반이 안 되면 auto 는 숨김, always 는 보임', async ($, on) => {
+test('컨텍스트 칩: 반이 안 되면 auto 는 숨김, always 는 보임', KO, async ($, on) => {
   on('session.usage', () => ({ value: USAGE(30) as never }))
   on('clock.now', () => ({ value: 0 }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
@@ -886,7 +894,7 @@ test('컨텍스트 칩: 반이 안 되면 auto 는 숨김, always 는 보임', a
   await band.unmount()
 })
 
-test('컨텍스트 칩 always 설정', { options: { contextChip: 'always' } }, async ($, on) => {
+test('컨텍스트 칩 always 설정', { options: { contextChip: 'always', language: 'ko' } }, async ($, on) => {
   on('session.usage', () => ({ value: USAGE(30) as never }))
   on('clock.now', () => ({ value: 0 }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
@@ -900,7 +908,8 @@ test('컨텍스트 칩 always 설정', { options: { contextChip: 'always' } }, a
   await band.unmount()
 })
 
-test('질문 알림 본문: 첫 질문, 여러 개면 외 N개', () => {
+test('질문 알림 본문: 첫 질문, 여러 개면 외 N개', KO, () => {
+  setLang('ko')
   const q = (question: string) => ({ question, header: '', kind: 'choice' as const, options: [{ label: 'a' }], multiSelect: false })
   expect(askNotice([q('어느 쪽?')])).toBe('어느 쪽?')
   expect(askNotice([q('어느 쪽?'), q('몇 개?'), q('언제?')])).toBe('어느 쪽? (외 2개)')
@@ -908,7 +917,7 @@ test('질문 알림 본문: 첫 질문, 여러 개면 외 N개', () => {
 
 import { supportsRichButtons } from '../hooks/register'
 
-test('줄 전체 버튼은 2.1.295 부터', () => {
+test('줄 전체 버튼은 2.1.295 부터', KO, () => {
   expect(supportsRichButtons('2.1.294')).toBe(false)
   expect(supportsRichButtons('2.1.295')).toBe(true)
   expect(supportsRichButtons('2.1.295-dev')).toBe(true)
@@ -919,7 +928,7 @@ test('줄 전체 버튼은 2.1.295 부터', () => {
 
 for (const version of ['2.1.295', '2.1.294']) {
   const rich = version !== '2.1.294'
-  test(`에이전트 메시지 줄 버튼 모양 (${version}: ${rich ? '줄 전체' : '이름만'})`, async ($, on) => {
+  test(`에이전트 메시지 줄 버튼 모양 (${version}: ${rich ? '줄 전체' : '이름만'})`, KO, async ($, on) => {
     on('session.version', () => ({ value: { version, base: version } }))
     on('command.register', () => ({ value: undefined as never }))
     on('clock.every', () => ({ value: undefined }))
@@ -951,7 +960,7 @@ for (const version of ['2.1.295', '2.1.294']) {
 
 import { clipStart, matchDiffFile } from '../hooks/register'
 
-test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', () => {
+test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', KO, () => {
   const files = [{ path: 'a.txt' }, { path: 'src/a.txt' }, { path: 'b.txt' }]
   expect(matchDiffFile(files, '/repo/src/a.txt')).toBe('src/a.txt')
   expect(matchDiffFile(files, '/repo/a.txt')).toBe('a.txt')
@@ -969,7 +978,7 @@ const gitStub = ($: unknown, e: { argv: string[] }) => {
   return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
 }
 
-test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 열린다', async ($, on) => {
+test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 열린다', KO, async ($, on) => {
   const opened: string[] = []
   on('process.run', gitStub as never)
   on('ui.open', ($, e) => {
@@ -998,7 +1007,7 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   await row.unmount()
 })
 
-test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편다', async ($, on) => {
+test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편다', KO, async ($, on) => {
   on('process.run', gitStub as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
   await $.command.run({ command: 'desk-diff', args: '' } as never)
@@ -1017,7 +1026,7 @@ import { splitPlan } from '../hooks/register'
 
 const PLAN = ['# 빼기 추가', '', '- math.ts 에 subtract', '- 테스트 추가', '', '| 파일 | 변경 |', '|---|---|', '| math.ts | subtract |'].join('\n')
 
-test('계획 읽기: 엔진 결과, 저장한 요약, 결과 글', () => {
+test('계획 읽기: 엔진 결과, 저장한 요약, 결과 글', KO, () => {
   expect(planOf({ plan: PLAN, isAgent: false, filePath: '/h/.claude/plans/p.md' })).toEqual({ plan: PLAN, filePath: '/h/.claude/plans/p.md' })
   expect(planOf({ plan: null, isAgent: false })).toEqual({ plan: null })
   expect(planOf(JSON.stringify({ plan: PLAN, isAgent: false }))?.plan).toBe(PLAN)
@@ -1026,7 +1035,7 @@ test('계획 읽기: 엔진 결과, 저장한 요약, 결과 글', () => {
   expect(planOf({ stdout: 'x' })).toBe(null)
 })
 
-test('계획 접기: 줄 수를 넘긴 뒤 첫 빈 줄에서, 코드 울타리 안은 자르지 않는다', () => {
+test('계획 접기: 줄 수를 넘긴 뒤 첫 빈 줄에서, 코드 울타리 안은 자르지 않는다', KO, () => {
   const long = Array.from({ length: 6 }, (_, index) => `문단 ${index}\n줄`).join('\n\n')
   expect(splitPlan(long, 4)).toEqual({ head: '문단 0\n줄\n\n문단 1\n줄', hidden: 8 })
   expect(splitPlan('짧음', 4)).toEqual({ head: '짧음', hidden: 0 })
@@ -1034,7 +1043,7 @@ test('계획 접기: 줄 수를 넘긴 뒤 첫 빈 줄에서, 코드 울타리 �
   expect(splitPlan(fenced, 4).head).toBe(['a', 'b', 'c', '```', 'x', '', 'y', '```'].join('\n'))
 })
 
-test('계획은 묶음에 섞지 않고 혼자 카드 하나', () => {
+test('계획은 묶음에 섞지 않고 혼자 카드 하나', KO, () => {
   const use = (id: string, tool: string) => ({ tool_use_id: id, tool, input: {} })
   const runsOf = computeRuns([
     { role: 'assistant', text: '', toolUses: [use('r', 'Read'), use('w', 'Write'), use('p', 'ExitPlanMode'), use('b', 'Bash')] },
@@ -1044,7 +1053,7 @@ test('계획은 묶음에 섞지 않고 혼자 카드 하나', () => {
   expect(planOf(runsOf.calls.p?.[0]?.output)?.plan).toBe(PLAN)
 })
 
-test('계획 카드: 상태와 마크다운 본문, 길면 Show all', async $ => {
+test('계획 카드: 상태와 마크다운 본문, 길면 Show all', KO, async $ => {
   const long = `${PLAN}\n\n${Array.from({ length: 12 }, (_, index) => `- 단계 ${index}`).join('\n')}\n\n마지막 문단`
   const row = await $.ui.mount({
     plugin: 'desk-look',
@@ -1089,7 +1098,7 @@ test('계획 카드: 상태와 마크다운 본문, 길면 Show all', async $ =>
   await asking.unmount()
 })
 
-test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장한 결과로 승인됨', async ($, on) => {
+test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장한 결과로 승인됨', KO, async ($, on) => {
   on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
   on('command.register', () => ({ value: undefined as never }))
   on('clock.every', () => ({ value: undefined }))
@@ -1157,7 +1166,7 @@ const GH_THREADS = {
   },
 }
 
-test('PR: 체크 상태·요약·칩·리뷰 스레드', () => {
+test('PR: 체크 상태·요약·칩·리뷰 스레드', KO, () => {
   expect(checkState({ status: 'COMPLETED', conclusion: 'TIMED_OUT' })).toBe('fail')
   expect(checkState({ status: 'QUEUED' })).toBe('pending')
   expect(checkState({ __typename: 'StatusContext', state: 'PENDING' })).toBe('pending')
@@ -1199,7 +1208,7 @@ const MR_DISCUSSIONS = [
   { id: 'd3', notes: [{ id: 7, body: 'changed the description', system: true, resolvable: false }] },
 ]
 
-test('MR(GitLab): job·토론·줄 수를 PR 모양으로', () => {
+test('MR(GitLab): job·토론·줄 수를 PR 모양으로', KO, () => {
   expect(jobState({ status: 'running' })).toBe('pending')
   expect(jobState({ status: 'failed', allow_failure: true })).toBe('skip')
   const checks = toJobs(MR_JOBS)
@@ -1218,7 +1227,7 @@ const run = (table: Array<[(argv: string[]) => boolean, { exitCode: number; stdo
   return { exitCode: hit.exitCode, stdout: hit.stdout ?? '', stderr: hit.stderr ?? '' }
 }
 
-test('PR·MR 읽기: GitHub 이면 gh, 아니면 glab, 없으면 none', async () => {
+test('PR·MR 읽기: GitHub 이면 gh, 아니면 glab, 없으면 none', KO, async () => {
   const github = await fetchReview(
     run([
       [argv => argv[0] === 'gh' && argv[1] === 'pr', { exitCode: 0, stdout: JSON.stringify(GH_PR) }],
@@ -1281,7 +1290,7 @@ const prStub = ($: unknown, e: { argv: string[] }) => {
   return out('', 1)
 }
 
-test('PR 칩과 /desk-pr 패널: 실패한 체크를 Claude에게 맡기면 입력창에 채운다', async ($, on) => {
+test('PR 칩과 /desk-pr 패널: 실패한 체크를 Claude에게 맡기면 입력창에 채운다', KO, async ($, on) => {
   const opened: string[] = []
   const filled: Array<{ text: string; mode?: string }> = []
   on('process.run', prStub as never)
@@ -1326,7 +1335,7 @@ test('PR 칩과 /desk-pr 패널: 실패한 체크를 Claude에게 맡기면 입�
   await pane.unmount()
 })
 
-test('diff 범위: 기준 브랜치 후보, 커밋 목록, 범위 이름', () => {
+test('diff 범위: 기준 브랜치 후보, 커밋 목록, 범위 이름', KO, () => {
   expect(baseCandidates('develop', 'origin/main').slice(0, 3)).toEqual(['origin/develop', 'develop', 'origin/main'])
   expect(baseCandidates(null, null)[0]).toBe('origin/main')
   expect(parseCommits('abc123\x1fabc\x1fAdd done\x1falice\x1f2 hours ago\n')).toEqual([{ sha: 'abc123', short: 'abc', subject: 'Add done', author: 'alice', ago: '2 hours ago' }])
@@ -1352,7 +1361,7 @@ const scopeStub = ($: unknown, e: { argv: string[] }) => {
   return out('')
 }
 
-test('diff 패널 범위: 브랜치 전체와 커밋별', async ($, on) => {
+test('diff 패널 범위: 브랜치 전체와 커밋별', KO, async ($, on) => {
   on('process.run', scopeStub as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
   await $.command.run({ command: 'desk-diff', args: '' } as never)
@@ -1380,5 +1389,69 @@ test('diff 패널 범위: 브랜치 전체와 커밋별', async ($, on) => {
   // /desk-diff 파일 이름으로 열면 커밋 안 한 변경으로 돌아온다
   await $.command.run({ command: 'desk-diff', args: 'a.txt' } as never)
   expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeDefined()
+  await pane.unmount()
+})
+
+import { T, langFromConfig, langSetting } from '../hooks/i18n'
+
+test('언어: 설정 읽기와 Claude Code language 값 판정', () => {
+  expect(langSetting({})).toBe('auto')
+  expect(langSetting({ language: 'ko' })).toBe('ko')
+  expect(langSetting({ language: 'fr' })).toBe('auto')
+  expect(langFromConfig('Default (English)')).toBe('en')
+  expect(langFromConfig('Korean')).toBe('ko')
+  expect(langFromConfig('한국어')).toBe('ko')
+  expect(langFromConfig('ko-KR')).toBe('ko')
+  expect(langFromConfig('Japanese')).toBe('en')
+  expect(langFromConfig(undefined)).toBe('en')
+})
+
+test('영어 문구: 시간·한도·질문 검사', () => {
+  setLang('en')
+  expect(ago(0, 5 * 60_000)).toBe('5m')
+  expect(ago(0, 30_000)).toBe('now')
+  expect(resetIn(new Date(4 * 3600_000 + 7 * 60_000 + 30_000).toISOString(), 0)).toBe('4h 7m')
+  expect(T.limitNames.five_hour).toBe('5-hour')
+  setLang('ko')
+  expect(ago(0, 5 * 60_000)).toBe('5분')
+})
+
+test('기본(auto, Claude Code 언어 미설정)은 영어: diff 탭·PR 패널', async ($, on) => {
+  on('process.run', (($: unknown, e: { argv: string[] }) => (e.argv[0] === 'gh' ? prStub($, e) : gitStub($, e))) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.now', () => ({ value: 1000 }))
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const diffPane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: 'Changes', isFocused: true } as never })
+  const drawnDiff = JSON.stringify(await diffPane.drawn())
+  expect(drawnDiff).toContain('○ Branch')
+  expect(drawnDiff).not.toContain('브랜치 전체')
+  await diffPane.unmount()
+  await $.command.run({ command: 'desk-pr', args: '' } as never)
+  const prPane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-pr', viewport: VIEWPORT, props: { title: 'PR', isFocused: true } as never })
+  const drawn = JSON.stringify(await prPane.drawn())
+  expect(drawn).toContain('Hand to Claude')
+  expect(drawn).toContain('Review: review required')
+  expect(drawn).toContain('2/4 passed')
+  expect(drawn).toContain('Unresolved reviews')
+  await prPane.unmount()
+})
+
+test('auto 는 Claude Code /config 의 language 를 따른다 (Korean → 한국어)', async ($, on) => {
+  const descriptions: string[] = []
+  on('config.list', () => ({ value: [{ key: 'language', label: 'Language', kind: 'text', value: 'Korean', provider: { kind: 'user' }, isLocked: false }] as never }))
+  on('command.register', ($, e) => {
+    descriptions.push(String((e as { description?: string }).description))
+    return { value: undefined as never }
+  })
+  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('process.run', gitStub as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  expect(descriptions.some(text => text.includes('최근 세션'))).toBe(true)
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  expect(JSON.stringify(await pane.drawn())).toContain('● 커밋 안 한 변경')
   await pane.unmount()
 })
