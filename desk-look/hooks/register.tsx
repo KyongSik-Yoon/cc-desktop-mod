@@ -729,7 +729,9 @@ function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record
   const plan = planOf(call.output)?.plan ?? ''
   const key = `plan-${call.tool_use_id}`
   const isOpen = openState[key] ?? false
-  const status = call.isRunning
+  // 승인 창이 떠 있는 동안 엔진은 이 호출을 아직 시작 전으로 넘긴다(isRunning false, 결과·오류 없음).
+  const isWaiting = call.isRunning || (call.output === undefined && !call.isErrored)
+  const status = isWaiting
     ? { label: '승인 대기', color: COLORS.muted }
     : call.isInterrupted
       ? { label: '중단됨', color: COLORS.muted }
@@ -738,7 +740,7 @@ function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record
         : { label: '승인됨', color: COLORS.success }
   const width = Math.max(30, Math.min(columns - 2, 100))
   const { head, hidden } = splitPlan(plan, PLAN_ROWS)
-  const empty = call.isRunning ? '승인 창에서 계획을 보여 주고 있어요.' : '기록에 계획 내용이 없어요.'
+  const empty = isWaiting ? '승인 창에서 계획을 보여 주고 있어요.' : '기록에 계획 내용이 없어요.'
   return (
     <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
       <Box columnGap={1}>
@@ -1076,8 +1078,12 @@ export const register: Register = (on, options) => {
     if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80, await read($, richButtons))
     const own = asRunCall(e.props)
     // 계획은 엔진이 준 결과에 계획 글이 없을 수 있어(결과 글만 남은 기록) 저장해 둔 요약을 먼저 쓴다.
+    // 승인 직후엔 저장한 결과가 먼저 오고 이 행의 props 는 아직 실행 중일 수 있어, 상태도 저장한 쪽을 따른다.
     const saved = isPlanTool(own.tool) ? state.calls[state.firstOf[own.tool_use_id] ?? '']?.find(item => item.tool_use_id === own.tool_use_id) : undefined
-    const call = saved && planOf(saved.output) ? { ...own, output: saved.output } : own
+    const call =
+      saved && planOf(saved.output)
+        ? { ...own, output: saved.output, isRunning: false, isErrored: own.isErrored || saved.isErrored, isInterrupted: own.isInterrupted || saved.isInterrupted }
+        : own
     return callLine(els, $, call, openState, e.viewport?.columns ?? 80, await read($, richButtons))
   })
 

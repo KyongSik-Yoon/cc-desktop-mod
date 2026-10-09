@@ -1074,4 +1074,47 @@ test('계획 카드: 상태와 마크다운 본문, 길면 Show all', async $ =>
   })
   expect(JSON.stringify(await waiting.drawn())).toContain('승인 대기')
   await waiting.unmount()
+
+  // 실제 승인 창이 떠 있는 동안의 모양: 시작 전이라 isRunning 도 false, 결과도 없다
+  const asking = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'ToolUse',
+    viewport: VIEWPORT,
+    props: { tool_use_id: 'p3', tool: 'ExitPlanMode', input: {}, isRunning: false, isErrored: false, isInterrupted: false } as never,
+  })
+  const shown = JSON.stringify(await asking.drawn())
+  expect(shown).toContain('승인 대기')
+  expect(shown).toContain('승인 창에서 계획을 보여 주고 있어요')
+  await asking.unmount()
+})
+
+test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장한 결과로 승인됨', async ($, on) => {
+  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('session.messages', () => ({
+    value: [
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'p9', tool: 'ExitPlanMode', input: {} }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'p9', text: 'approved', isError: false, result: { plan: PLAN, isAgent: false } }] },
+    ] as never,
+  }))
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const row = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'ToolUse',
+    viewport: VIEWPORT,
+    // 실제 2.1.295: 결과(plan)를 넘기면서도 isRunning 이 true 로 남아 있었다
+    props: { tool_use_id: 'p9', tool: 'ExitPlanMode', input: {}, isRunning: true, isErrored: false, isInterrupted: false, output: { plan: PLAN, isAgent: false } } as never,
+  })
+  let drawn = JSON.stringify(await row.drawn())
+  for (let tries = 0; tries < 50 && !drawn.includes('승인됨'); tries++) {
+    await wait(10)
+    drawn = JSON.stringify(await row.drawn())
+  }
+  expect(drawn).toContain('승인됨')
+  expect(drawn).not.toContain('승인 대기')
+  await row.unmount()
 })
