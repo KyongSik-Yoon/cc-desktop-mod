@@ -7,7 +7,12 @@ const LIMIT = 4000
 
 const clip = (text: string) => (text.length > LIMIT ? `${text.slice(0, LIMIT)}\n…` : text)
 
-function outputOf(value: unknown): string | { structuredPatch: unknown[] } | { answers: object } | { agent: AgentSummary } | undefined {
+// 계획(ExitPlanMode)은 길어도 카드에서 펼쳐 읽으므로 넉넉히 둔다.
+const PLAN_LIMIT = 20000
+
+export type PlanSummary = { plan: string | null; filePath?: string }
+
+function outputOf(value: unknown): string | { structuredPatch: unknown[] } | { answers: object } | { agent: AgentSummary } | PlanSummary | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value === 'string') return clip(value)
   const fields = value as Record<string, unknown>
@@ -19,6 +24,9 @@ function outputOf(value: unknown): string | { structuredPatch: unknown[] } | { a
   // 서브에이전트 결과: 카드에 쓸 요약만(결과 글은 앞부분만).
   const agent = agentOf(fields)
   if (agent) return { agent }
+  // 계획 결과: 계획 글과 저장된 파일 경로만.
+  const plan = planOf(fields)
+  if (plan) return plan
   // 질문 결과: 질문 전문은 입력에 있으니 답만 둔다.
   if (typeof fields.answers === 'object' && fields.answers !== null) return { answers: fields.answers }
   const file = (fields.file ?? {}) as Record<string, unknown>
@@ -84,9 +92,34 @@ export function agentOf(output: unknown): AgentSummary | null {
 
 export const isAgentTool = (tool: string) => tool === 'Agent' || tool === 'Task'
 
+export const isPlanTool = (tool: string) => tool === 'ExitPlanMode'
+
+// ExitPlanMode 결과(엔진이 준 그대로, 저장해 둔 요약, JSON 글, 모델이 받은 결과 글 어느 것이든)에서 계획을 읽는다.
+export function planOf(output: unknown): PlanSummary | null {
+  if (typeof output === 'string') {
+    try {
+      return planOf(JSON.parse(output))
+    } catch {
+      const approved = /##\s*Approved Plan[^\n]*\n([\s\S]+)$/.exec(output)
+      return approved?.[1] ? { plan: approved[1].trim() } : null
+    }
+  }
+  if (typeof output !== 'object' || output === null || !('plan' in output)) return null
+  const fields = output as Record<string, unknown>
+  const plan = typeof fields.plan === 'string' ? fields.plan : null
+  return {
+    plan: plan !== null && plan.length > PLAN_LIMIT ? `${plan.slice(0, PLAN_LIMIT)}\n…` : plan,
+    ...(typeof fields.filePath === 'string' ? { filePath: fields.filePath } : {}),
+  }
+}
+
+type RunKind = 'agent' | 'plan' | 'tool'
+const kindOf = (tool: string): RunKind => (isAgentTool(tool) ? 'agent' : isPlanTool(tool) ? 'plan' : 'tool')
+
 // 답변 텍스트나 사용자 프롬프트가 끼기 전까지 이어진 도구 호출을 한 묶음으로 본다.
 // 데스크톱이 "Ran 2 commands, edited 3 files" 한 줄로 접는 단위와 같다.
 // 서브에이전트는 따로 카드로 그리므로 다른 도구와 섞지 않는다(연달아 띄운 에이전트끼리만 묶는다).
+// 계획(ExitPlanMode)은 늘 혼자 카드 하나다.
 export function computeRuns(messages: ReadonlyArray<SessionMessage>): Runs {
   const results = new Map<string, { isError: boolean; result: unknown; text: string }>()
   for (const message of messages) {
@@ -98,7 +131,7 @@ export function computeRuns(messages: ReadonlyArray<SessionMessage>): Runs {
   const firstOf: Record<string, string> = {}
   const calls: Record<string, RunCall[]> = {}
   let current: string | null = null
-  let currentIsAgent = false
+  let currentKind: RunKind = 'tool'
 
   for (const message of messages) {
     const isPrompt = message.role === 'user' && (message.toolResults ?? []).length === 0 && message.text.trim() !== ''
@@ -120,10 +153,11 @@ export function computeRuns(messages: ReadonlyArray<SessionMessage>): Runs {
         isInterrupted: isErrored && /interrupt/i.test(text),
         output,
       }
-      if (current !== null && currentIsAgent !== isAgentTool(use.tool)) current = null
+      const kind = kindOf(use.tool)
+      if (current !== null && (currentKind !== kind || kind === 'plan')) current = null
       if (current === null) {
         current = use.tool_use_id
-        currentIsAgent = isAgentTool(use.tool)
+        currentKind = kind
         calls[current] = []
       }
       calls[current]?.push(call)

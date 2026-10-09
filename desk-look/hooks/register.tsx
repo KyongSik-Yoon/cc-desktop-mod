@@ -4,7 +4,7 @@ import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGr
 import type { FileDiff, ImageInfo, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
-import { agentOf, computeRuns, isAgentTool } from './runs'
+import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
 import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
@@ -706,9 +706,59 @@ function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Recor
   )
 }
 
+// 계획 카드에서 접힌 채 보일 만큼: 줄 수가 넘으면 그다음 빈 줄(코드 울타리 밖)에서 자른다.
+const PLAN_ROWS = 14
+
+export function splitPlan(plan: string, rows: number): { head: string; hidden: number } {
+  const lines = plan.split('\n')
+  let fenced = false
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? ''
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced
+    if (index >= rows && !fenced && line.trim() === '') {
+      const hidden = lines.slice(index).filter(rest => rest.trim() !== '').length
+      return hidden > 0 ? { head: lines.slice(0, index).join('\n'), hidden } : { head: plan, hidden: 0 }
+    }
+  }
+  return { head: plan, hidden: 0 }
+}
+
+// 계획(ExitPlanMode): 데스크톱처럼 묶음에 섞지 않고 카드로. 승인 창은 엔진 것이고 이건 기록에 남는 모습.
+function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, columns: number, rich: boolean) {
+  const { Box, Text } = els
+  const plan = planOf(call.output)?.plan ?? ''
+  const key = `plan-${call.tool_use_id}`
+  const isOpen = openState[key] ?? false
+  const status = call.isRunning
+    ? { label: '승인 대기', color: COLORS.muted }
+    : call.isInterrupted
+      ? { label: '중단됨', color: COLORS.muted }
+      : call.isErrored
+        ? { label: '거절됨', color: COLORS.danger }
+        : { label: '승인됨', color: COLORS.success }
+  const width = Math.max(30, Math.min(columns - 2, 100))
+  const { head, hidden } = splitPlan(plan, PLAN_ROWS)
+  const empty = call.isRunning ? '승인 창에서 계획을 보여 주고 있어요.' : '기록에 계획 내용이 없어요.'
+  return (
+    <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
+      <Box columnGap={1}>
+        <Text color={COLORS.clay}>◇</Text>
+        <Text color={COLORS.text} bold>
+          Plan
+        </Text>
+        <Text color={status.color}>{status.label}</Text>
+      </Box>
+      {plan === '' ? <Text color={COLORS.muted}>{empty}</Text> : renderMarkdown(isOpen ? plan : head, els, COLORS, width - 4)}
+      {hidden > 0 &&
+        rowButton(els, rich, { key, dimColor: true, onPress: () => toggle($, key) }, isOpen ? 'Show less' : `Show all · ${hidden} more lines`)}
+    </Box>
+  )
+}
+
 // 호출 한 줄: "Edited register.tsx +12 −3 ›", 누르면 아래로 펼친다.
 function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, columns: number, rich: boolean, indent = 0, openFirst = false) {
   if (isAgentTool(call.tool)) return agentCard(els, $, call, openState, rich)
+  if (isPlanTool(call.tool)) return planCard(els, $, call, openState, columns, rich)
   const { Box, Text, Button } = els
   const id = call.tool_use_id
   const isOpen = openState[id] ?? openFirst
@@ -1024,7 +1074,11 @@ export const register: Register = (on, options) => {
     const plan = planRow([e.props.tool_use_id], state)
     if (plan.kind === 'hide') return <els.Box display="none" />
     if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80, await read($, richButtons))
-    return callLine(els, $, asRunCall(e.props), openState, e.viewport?.columns ?? 80, await read($, richButtons))
+    const own = asRunCall(e.props)
+    // 계획은 엔진이 준 결과에 계획 글이 없을 수 있어(결과 글만 남은 기록) 저장해 둔 요약을 먼저 쓴다.
+    const saved = isPlanTool(own.tool) ? state.calls[state.firstOf[own.tool_use_id] ?? '']?.find(item => item.tool_use_id === own.tool_use_id) : undefined
+    const call = saved && planOf(saved.output) ? { ...own, output: saved.output } : own
+    return callLine(els, $, call, openState, e.viewport?.columns ?? 80, await read($, richButtons))
   })
 
   // 데스크톱은 결과를 따로 그리지 않는다. 펼친 행 안에서 보여 준다.

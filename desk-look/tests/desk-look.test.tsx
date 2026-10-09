@@ -1011,3 +1011,67 @@ test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편
   expect(await pane.find({ type: 'Code' })).toBeDefined()
   await pane.unmount()
 })
+
+import { planOf } from '../hooks/runs'
+import { splitPlan } from '../hooks/register'
+
+const PLAN = ['# 빼기 추가', '', '- math.ts 에 subtract', '- 테스트 추가', '', '| 파일 | 변경 |', '|---|---|', '| math.ts | subtract |'].join('\n')
+
+test('계획 읽기: 엔진 결과, 저장한 요약, 결과 글', () => {
+  expect(planOf({ plan: PLAN, isAgent: false, filePath: '/h/.claude/plans/p.md' })).toEqual({ plan: PLAN, filePath: '/h/.claude/plans/p.md' })
+  expect(planOf({ plan: null, isAgent: false })).toEqual({ plan: null })
+  expect(planOf(JSON.stringify({ plan: PLAN, isAgent: false }))?.plan).toBe(PLAN)
+  expect(planOf(`User has approved your plan. You can now start coding.\n\n## Approved Plan:\n${PLAN}`)?.plan).toBe(PLAN)
+  expect(planOf('그냥 글')).toBe(null)
+  expect(planOf({ stdout: 'x' })).toBe(null)
+})
+
+test('계획 접기: 줄 수를 넘긴 뒤 첫 빈 줄에서, 코드 울타리 안은 자르지 않는다', () => {
+  const long = Array.from({ length: 6 }, (_, index) => `문단 ${index}\n줄`).join('\n\n')
+  expect(splitPlan(long, 4)).toEqual({ head: '문단 0\n줄\n\n문단 1\n줄', hidden: 8 })
+  expect(splitPlan('짧음', 4)).toEqual({ head: '짧음', hidden: 0 })
+  const fenced = ['a', 'b', 'c', '```', 'x', '', 'y', '```', '', 'z'].join('\n')
+  expect(splitPlan(fenced, 4).head).toBe(['a', 'b', 'c', '```', 'x', '', 'y', '```'].join('\n'))
+})
+
+test('계획은 묶음에 섞지 않고 혼자 카드 하나', () => {
+  const use = (id: string, tool: string) => ({ tool_use_id: id, tool, input: {} })
+  const runsOf = computeRuns([
+    { role: 'assistant', text: '', toolUses: [use('r', 'Read'), use('w', 'Write'), use('p', 'ExitPlanMode'), use('b', 'Bash')] },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'p', text: 'ok', isError: false, result: { plan: PLAN, isAgent: false } }] },
+  ] as never)
+  expect(runsOf.firstOf).toEqual({ r: 'r', w: 'r', p: 'p', b: 'b' })
+  expect(planOf(runsOf.calls.p?.[0]?.output)?.plan).toBe(PLAN)
+})
+
+test('계획 카드: 상태와 마크다운 본문, 길면 Show all', async $ => {
+  const long = `${PLAN}\n\n${Array.from({ length: 12 }, (_, index) => `- 단계 ${index}`).join('\n')}\n\n마지막 문단`
+  const row = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'ToolUse',
+    viewport: VIEWPORT,
+    props: { tool_use_id: 'p1', tool: 'ExitPlanMode', input: {}, isRunning: false, isErrored: false, isInterrupted: false, output: { plan: long, isAgent: false } } as never,
+  })
+  let drawn = JSON.stringify(await row.drawn())
+  expect(drawn).toContain('Plan')
+  expect(drawn).toContain('승인됨')
+  expect(drawn).toContain('빼기 추가')
+  expect(drawn).not.toContain('마지막 문단')
+  expect(drawn).toContain('Show all · 1 more lines')
+  await row.press({ key: 'plan-p1' })
+  drawn = JSON.stringify(await row.drawn())
+  expect(drawn).toContain('마지막 문단')
+  expect(drawn).toContain('Show less')
+  await row.unmount()
+
+  const waiting = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'ToolUse',
+    viewport: VIEWPORT,
+    props: { tool_use_id: 'p2', tool: 'ExitPlanMode', input: {}, isRunning: true, isErrored: false, isInterrupted: false } as never,
+  })
+  expect(JSON.stringify(await waiting.drawn())).toContain('승인 대기')
+  await waiting.unmount()
+})
