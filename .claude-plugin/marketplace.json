@@ -5,13 +5,25 @@
     "url": "https://github.com/KyongSik-Yoon"
   },
   "metadata": {
-    "description": "Claude Code 터미널 UI 를 데스크톱 앱처럼 꾸미는 mod 모음"
+    "description": "Claude Code mods that make the terminal UI look like the Claude desktop app"
   },
   "plugins": [
     {
       "name": "desk-look",
       "source": "./desk-look",
-      "description": "Claude 데스크톱 앱 Code 탭처럼 보이도록 터미널 transcript 를 다시 그린다"
+      "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, diff and context panes",
+      "category": "productivity",
+      "tags": [
+        "mod",
+        "theme",
+        "terminal",
+        "tui",
+        "desktop",
+        "markdown",
+        "mermaid",
+        "diff",
+        "context"
+      ]
     }
   ]
 }

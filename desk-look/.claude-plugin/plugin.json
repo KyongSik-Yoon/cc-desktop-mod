@@ -1,7 +1,20 @@
 {
   "name": "desk-look",
-  "version": "0.13.1",
-  "description": "Claude 데스크톱 앱 Code 탭처럼 보이도록 터미널 transcript 를 다시 그린다",
+  "version": "0.13.2",
+  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, diff and context panes",
+  "keywords": [
+    "claude-code",
+    "claude-code-mod",
+    "claude-code-plugin",
+    "terminal-ui",
+    "tui",
+    "theme",
+    "desktop",
+    "markdown",
+    "mermaid",
+    "diff",
+    "context"
+  ],
   "author": {
     "name": "KyongSik-Yoon",
     "url": "https://github.com/KyongSik-Yoon"
@@ -12,8 +25,8 @@
   "userConfig": {
     "bubbleSide": {
       "type": "string",
-      "title": "내 말풍선 위치",
-      "description": "내 프롬프트 말풍선을 왼쪽(엔진의 첨부 줄과 나란히) 또는 오른쪽(데스크톱 앱처럼)에 둔다",
+      "title": "Prompt bubble side",
+      "description": "Put your prompt bubble on the left (aligned with the engine's attachment lines) or on the right (like the desktop app)",
       "options": [
         "left",
         "right"
@@ -23,8 +36,8 @@
     },
     "contextChip": {
       "type": "string",
-      "title": "컨텍스트 칩",
-      "description": "입력창 아래턱 옆의 컨텍스트 사용량 칩(누르면 항목별 패널): auto 는 50% 이상일 때만, always 는 늘, off 는 끔",
+      "title": "Context chip",
+      "description": "The context usage chip next to the band above the prompt (click it for the breakdown pane): auto shows it from 50%, always always shows it, off hides it",
       "options": [
         "auto",
         "always",
@@ -35,8 +48,8 @@
     },
     "askNotify": {
       "type": "string",
-      "title": "질문 알림",
-      "description": "질문 카드가 뜰 때 알림을 보낸다(엔진 창이 보내던 것과 같은 채널, preferredNotifChannel). off 는 끔",
+      "title": "Question notification",
+      "description": "Send a notification when a question card opens (the same channel the engine dialog uses, preferredNotifChannel). off turns it off",
       "options": [
         "on",
         "off"

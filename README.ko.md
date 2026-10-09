@@ -1,9 +1,11 @@
-# cc-desktop-mod
+# cc-desktop-mod: Claude Code 터미널을 데스크톱 앱처럼
 
 [English](README.md) | **한국어**
 
-Claude Code 터미널 UI 를 Claude 데스크톱 앱 Code 탭처럼 보이게 만드는 mod 모음입니다.
-mod 는 Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면에 그리는 방식만 바꿉니다.
+**desk-look** 은 Claude Code CLI 터미널 UI 를 Claude 데스크톱 앱 Code 탭처럼 보이게 만드는 Claude Code 플러그인(mod)입니다. 프롬프트 말풍선, 폭을 채우는 마크다운 표, mermaid 그림, 접힌 도구 호출, 서브에이전트 카드, 계획 카드, 체크리스트, diff 패널, 컨텍스트 사용량 표시를 그립니다.
+Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면에 그리는 방식만 바꿉니다.
+
+![Claude Code 터미널의 desk-look: 프롬프트 말풍선, 접힌 도구 호출, 마크다운 표, mermaid 순서도, Note 상자, 고친 파일 카드](docs/screenshot.png)
 
 ## desk-look
 

@@ -1,9 +1,11 @@
-# cc-desktop-mod
+# cc-desktop-mod: Claude desktop look for the Claude Code terminal
 
 **English** | [한국어](README.ko.md)
 
-Mods that make the Claude Code terminal UI look like the Code tab of the Claude desktop app.
-They are Claude Code function-hook plugins: the engine stays as it is, and only the way things are drawn on screen changes.
+**desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look like the Code tab of the Claude desktop app: prompt bubbles, full-width markdown tables, mermaid diagrams, folded tool calls, subagent cards, a plan card, a checklist, a diff pane and a context usage meter.
+It is a Claude Code function-hook plugin: the engine stays as it is, and only the way things are drawn on screen changes.
+
+![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)
 
 ## desk-look
 
