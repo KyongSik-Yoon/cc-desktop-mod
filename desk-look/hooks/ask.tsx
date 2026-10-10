@@ -7,7 +7,7 @@ import { T } from './i18n'
 // 질문 카드: AskUserQuestion 을 엔진 창 대신 입력창 위 띠의 카드로 묻는다(데스크톱과 같은 자리).
 // 도구 호출 훅이 답을 기다리며 결과를 직접 돌려주고, 엔진은 그 결과를 도구의 원래 변환기로 모델에게 넘긴다.
 // 입력창이 비어 있으면 숫자 키가 띠의 버튼을 바로 누른다: 1-8 선택지, 0 제출(여러 개 고르기), 9 엔진 창.
-// 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로.
+// 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로(Remote Control 포함: 아래 REMOTE).
 // 엔진 창은 뜰 때 알림(permission_prompt)을 보내지만 카드는 도구가 도는 중이라 엔진이 보내지 않는다. 그래서 카드가 직접 알린다(askNotify).
 
 type On = Parameters<Register>[0]
@@ -21,6 +21,9 @@ const WAIT = 'end=$(( $(date +%s) + 540 )); while [ ! -e "$1/answer" ]; do [ "$(
 export const WRITE = 'printf %s "$2" > "$1/answer.tmp" && mv "$1/answer.tmp" "$1/answer"'
 const WAIT_ROUND_MS = 570_000
 const WAIT_ROUNDS = 40
+// Remote Control(Claude 앱)은 surfaces() 에 잡히지 않는다(앱이 attach 하지 않는다). 카드를 띄우면 엔진이
+// 원격 응답 요청을 보내지 않아 앱에서 답할 수 없으니, 세션 상태 파일에 bridgeSessionId 가 있으면 엔진 창에 맡긴다.
+export const REMOTE = 'for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/sessions/*.json; do grep -q "\\"sessionId\\":\\"$1\\"" "$f" 2>/dev/null && grep -q "\\"bridgeSessionId\\":\\"" "$f" && { echo remote; exit 0; }; done; exit 0'
 
 export type AskReply =
   | { kind: 'answer'; answers: Record<string, string> }
@@ -95,6 +98,9 @@ export function registerAsk(on: On, notify: boolean) {
     const surfaces = await $.session.surfaces()
     if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return next(e)
     if ((await read($, asking)) !== null) return next(e)
+    const sessionId = await $.session.id().catch(() => '')
+    const remote = await $.process.run(['sh', '-c', REMOTE, 'sh', sessionId], { timeoutMs: 3000 }).catch(() => null)
+    if (remote?.stdout.trim() === 'remote') return next(e)
 
     const made = await $.process.run(['mktemp', '-d'], { timeoutMs: 3000 }).catch(() => null)
     const dir = made?.exitCode === 0 ? made.stdout.trim() : ''

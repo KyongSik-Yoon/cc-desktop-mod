@@ -721,6 +721,26 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
   await band.unmount()
 })
 
+test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다', KO, async ($, on) => {
+  const scripts: string[][] = []
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('tool.call', () => ({ result: 'engine' }) as never)
+  on('process.run', ($, e) => {
+    scripts.push(e.argv)
+    const stdout = (e.argv[2] ?? '').includes('bridgeSessionId') ? 'remote\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const result = await $.tool.call({
+    tool: 'AskUserQuestion',
+    questions: [{ question: '어느 쪽?', header: '방향', multiSelect: false, options: [{ label: '왼쪽' }, { label: '오른쪽' }] }],
+  } as never)
+  expect(result).toEqual({ result: 'engine' })
+  // 세션 id 로 상태 파일을 찾았고, 카드용 임시 폴더는 만들지 않았다
+  expect(scripts[0]?.at(-1)).toBe('sess-1')
+  expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
+})
+
 test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', KO, async ($, on) => {
   const PATCH = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1,2 @@\n-a\n+b\n+c\n'
   on('ui.open', () => ({ value: { isPlaced: true } }))

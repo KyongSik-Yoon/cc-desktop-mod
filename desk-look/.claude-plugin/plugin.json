@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff and context panes",
   "keywords": [
     "claude-code",
