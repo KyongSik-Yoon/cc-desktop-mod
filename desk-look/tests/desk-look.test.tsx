@@ -1189,6 +1189,29 @@ test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편
   await pane.unmount()
 })
 
+test('diff 패널: 모두 접기·펴기 (z)', KO, async ($, on) => {
+  const twoFiles = `${DIFF_PATCH}diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-x\n+y\n`
+  on('process.run', (($: unknown, e: { argv: string[] }) =>
+    e.argv[1] === 'diff' && e.argv[2] === 'HEAD'
+      ? { value: { exitCode: 0, stdout: twoFiles, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      : gitStub($, e)) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  const codes = async () => (await pane.findAll({ type: 'Code' })).length
+  expect(await codes()).toBe(2)
+  expect(JSON.stringify(await pane.find({ type: 'Button', key: 'fold-all' }))).toContain('"hotkey":"z"')
+  // 하나라도 펴져 있으면 모두 접는다
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await pane.find({ type: 'Button', key: 'fold-all', label: '모두 접기' } as never)).toBeDefined()
+  await pane.press({ key: 'fold-all' })
+  expect(await codes()).toBe(0)
+  expect(await pane.find({ type: 'Button', key: 'fold-all', label: '모두 펴기' } as never)).toBeDefined()
+  await pane.press({ key: 'fold-all' })
+  expect(await codes()).toBe(2)
+  await pane.unmount()
+})
+
 import { planOf } from '../hooks/runs'
 import { splitPlan } from '../hooks/register'
 

@@ -1776,6 +1776,13 @@ export const register: Register = (on, options) => {
     }
 
     const shownCount = files.length + outside.length
+    // 지금 보이는 파일 블록의 접기 키(fileBlock·outsideBlock 과 같은 모양). 하나라도 펴져 있으면 모두 접고, 아니면 모두 편다.
+    const foldIds =
+      view.scope === 'commits'
+        ? view.commitFiles.map(file => `c:${view.commits.find(commit => commit.sha === view.commit)?.short ?? ''}:${file.path}`)
+        : [...files.map(file => `${view.scope === 'branch' ? 'b:' : ''}${file.path}`), ...outside.map(edit => `${OUTSIDE}${edit.path}`)]
+    const anyOpen = foldIds.some(id => !armed[`fold:${id}`])
+    const foldAll = () => update($, open, state => ({ ...state, ...Object.fromEntries(foldIds.map(id => [`fold:${id}`, anyOpen])) }))
     const title =
       view.scope === 'commits'
         ? view.commits.length > 0
@@ -1805,6 +1812,7 @@ export const register: Register = (on, options) => {
           {view.scope !== 'commits' && shownCount > 0 && diffChips(Text, added, removed)}
           {view.scope !== 'uncommitted' && view.base && <Text color={COLORS.muted}>{`vs ${view.base.ref}`}</Text>}
           <Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />
+          {foldIds.length > 1 && <Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />}
         </Box>
         {view.scope !== 'commits' && shownCount === 0 && <Text color={COLORS.muted}>{empty}</Text>}
         {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
