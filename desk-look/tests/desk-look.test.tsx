@@ -1076,6 +1076,8 @@ test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에
   expect(await pane.find({ type: 'Text', text: /git 밖 파일/ })).toBeDefined()
   expect(await pane.find({ type: 'Code', source: '@@ -0,0 +1,2 @@\n+a\n+b' } as never)).toBeDefined()
   expect(await pane.find({ type: 'Code', source: '@@ -1,2 +1,2 @@\n a\n-b\n+c' } as never)).toBeDefined()
+  // 새 파일 2줄 + 고친 1줄. 끝 줄바꿈을 줄로 세지 않는다
+  expect(await pane.find({ type: 'Text', text: ' +3 ' })).toBeDefined()
   await pane.unmount()
   await row.unmount()
 })

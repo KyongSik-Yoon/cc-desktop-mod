@@ -260,7 +260,8 @@ function verbOf(tool: string): string {
   return `Used ${tool.startsWith('mcp__') ? (tool.split('__').pop() ?? tool) : tool}`
 }
 
-const lineCount = (text: unknown) => (typeof text === 'string' && text.length > 0 ? text.split('\n').length : 0)
+// 끝 줄바꿈은 줄을 하나 더 만들지 않는다('a\nb\n' 은 2줄).
+const lineCount = (text: unknown) => (typeof text === 'string' ? linesOf(text.replace(/\n$/, '')).length : 0)
 
 // 앞뒤로 같은 줄 수. 편집은 old_string 에 문맥 줄을 함께 넣으니 그 줄은 바뀐 것으로 치지 않는다.
 function commonEnds(before: string[], after: string[]): { head: number; tail: number } {
