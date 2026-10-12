@@ -1082,6 +1082,33 @@ test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에
   await row.unmount()
 })
 
+test('아래턱의 +/− 칩을 누르면 diff 패널이 열린다', KO, async ($, on) => {
+  const opened: string[] = []
+  on('process.run', gitStub as never)
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('clock.now', () => ({ value: 0 }))
+  on('clock.every', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined as never }))
+  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
+  on('session.start', ($, e) => e as never)
+  on('session.messages', () => ({ value: [] as never }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+  for (let tries = 0; tries < 50 && !(await band.find({ type: 'Button', key: 'chin-diff' })); tries++) await wait(10)
+  expect(JSON.stringify(await band.find({ type: 'Button', key: 'chin-diff' }))).toContain(' +2 ')
+  await band.press({ key: 'chin-diff' })
+  expect(opened).toEqual(['desk-diff', 'desk-diff'])
+  await band.unmount()
+})
+
 test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편다', KO, async ($, on) => {
   on('process.run', gitStub as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))

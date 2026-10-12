@@ -630,6 +630,11 @@ async function refreshPr($: EngineInterface, force: boolean) {
   return prFetch
 }
 
+async function openDiff($: EngineInterface, scope?: DiffScope) {
+  await refreshDiffView($, scope)
+  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+}
+
 async function openPr($: EngineInterface) {
   const shown = refreshPr($, true).catch(() => undefined)
   await $.ui.open({ id: PR_PANE, title: 'PR', focus: true })
@@ -1178,8 +1183,7 @@ export const register: Register = (on, options) => {
       await openDiffAt($, name)
       return { text: T.diffOpenedAt(name) }
     }
-    await refreshDiffView($, scope ?? undefined)
-    await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+    await openDiff($, scope ?? undefined)
     return { text: T.diffOpened }
   })
 
@@ -1408,7 +1412,7 @@ export const register: Register = (on, options) => {
     const prState = showPr ? prChip(els, $, await read($, pr), rich) : null
     const extras = [prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
     const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
-    const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
+    const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve, rich)
     // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
     const chin =
       extras.length === 0 ? repoChin : (
@@ -2191,35 +2195,49 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
 
 // 데스크톱 입력창의 회색 아래턱: 폭을 채운 알약 띠, 왼쪽에 저장소·브랜치, 오른쪽에 diff 칩.
 // omarchy 테마를 못 읽으면 띠 없이 칩만.
-async function chinBand($: EngineInterface, els: Elements['terminal'], info: RepoInfo, columns: number) {
-  const { Box, Text } = els
+async function chinBand($: EngineInterface, els: Elements['terminal'], info: RepoInfo, columns: number, rich: boolean) {
+  const { Box, Text, Button } = els
   const face = await read($, surface)
   const files = await read($, diff)
   const added = files.reduce((sum, file) => sum + file.added, 0)
   const removed = files.reduce((sum, file) => sum + file.removed, 0)
+  // +/− 칩은 누르면 diff 패널(데스크톱처럼). 색을 품은 버튼은 2.1.295+ 에서만 되니, 그 전에는 글자로만 둔다.
+  const chips =
+    files.length === 0 ? null : rich ? (
+      <Button key="chin-diff" plain onPress={() => void openDiff($).catch(() => undefined)}>
+        {diffChips(Text, added, removed)}
+      </Button>
+    ) : (
+      diffChips(Text, added, removed)
+    )
   if (!face) {
     return (
       <Box columnGap={2} paddingX={1}>
         <Text color={COLORS.muted}>{info.name}</Text>
         {info.branch && <Text color={COLORS.muted}>{info.branch}</Text>}
-        {files.length > 0 && diffChips(Text, added, removed)}
+        {chips}
       </Box>
     )
   }
   const left = chinLabel(info.name, info.branch)
-  const chips = files.length > 0 ? ` +${added}  −${removed} ` : ''
-  const gap = Math.max(1, columns - 2 - cellWidth(left) - cellWidth(chips) - 1)
+  const chipText = files.length > 0 ? ` +${added}  −${removed} ` : ''
+  const gap = Math.max(1, columns - 2 - cellWidth(left) - cellWidth(chipText) - 1)
+  // 버튼은 Text 안에 넣을 수 없어 한 줄을 Box 로 잇는다.
   return (
-    <Text>
-      <Text color={face.bubble}>{EDGES.single[0]}</Text>
-      <Text color={COLORS.muted} backgroundColor={face.bubble}>
-        {left}
+    <Box>
+      <Text>
+        <Text color={face.bubble}>{EDGES.single[0]}</Text>
+        <Text color={COLORS.muted} backgroundColor={face.bubble}>
+          {left}
+        </Text>
+        <Text backgroundColor={face.bubble}>{' '.repeat(gap)}</Text>
       </Text>
-      <Text backgroundColor={face.bubble}>{' '.repeat(gap)}</Text>
-      {files.length > 0 && diffChips(Text, added, removed)}
-      <Text backgroundColor={face.bubble}> </Text>
-      <Text color={face.bubble}>{EDGES.single[1]}</Text>
-    </Text>
+      {chips}
+      <Text>
+        <Text backgroundColor={face.bubble}> </Text>
+        <Text color={face.bubble}>{EDGES.single[1]}</Text>
+      </Text>
+    </Box>
   )
 }
 
