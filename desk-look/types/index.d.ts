@@ -106,6 +106,28 @@ export type CommitInfo = { sha: string; short: string; subject: string; author: 
 // base: 비교 기준(브랜치 이름과 merge-base), 못 찾으면 null. commit: 커밋별에서 펼친 커밋.
 export type DiffView = { scope: DiffScope; base: { ref: string; sha: string } | null; files: FileDiff[]; commits: CommitInfo[]; commit: string | null; commitFiles: FileDiff[] }
 
+// 에이전트 패널 한 줄: $.agent.list() 의 행에 이 세션이 이벤트로 모은 수치를 더한 것.
+// 엔진 목록은 끝난 에이전트를 곧 지우므로 끝난 것도 여기 남는다. tokens 는 마지막 요청의 컨텍스트 크기.
+// activity: 지금 도는 도구(Fetching 등), 없으면 없다. startedAt·endedAt 은 ms. listed: 엔진 목록에 한 번이라도 있었는지.
+export type AgentRecord = {
+  id: string
+  description: string
+  type: string
+  status: string
+  name?: string
+  model?: string
+  startedAt?: number
+  endedAt?: number
+  tokens?: number
+  toolUses: number
+  activity?: string
+  listed?: boolean
+}
+
+// 에이전트 상세: 처음 받은 지시(prompt)와 그 뒤의 답변 글·도구 묶음·사용자 메시지 차례.
+export type AgentItem = { kind: 'text'; text: string } | { kind: 'user'; text: string } | { kind: 'run'; id: string; calls: RunCall[] }
+export type AgentDetail = { id: string; prompt: string; items: AgentItem[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'desk-look': {
@@ -139,6 +161,11 @@ declare module 'claude-code' {
       pr: PrState | null
       // /desk-diff 패널이 보여 주는 범위와 그 diff.
       diffView: DiffView
+      // /desk-agents 패널: 이 세션의 에이전트, 상세로 연 에이전트 id(목록이면 null)와 그 대화, 경과 시간 시계(ms).
+      agents: Record<string, AgentRecord>
+      agentView: string | null
+      agentDetail: AgentDetail | null
+      agentClock: number
     }
   }
 }

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
+import { agentDetailOf, mergeAgents, modelLabel, orderAgents, stepTokens } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -1645,4 +1646,111 @@ test('auto 는 Claude Code /config 의 language 를 따른다 (Korean → 한국
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
   expect(JSON.stringify(await pane.drawn())).toContain('● 커밋 안 한 변경')
   await pane.unmount()
+})
+
+test('에이전트 순수 함수: 모델 이름, 목록 합치기, 상세 차례', KO, async () => {
+  expect(['claude-haiku-5-5', 'claude-opus-5-5[1m]', 'claude-sonnet-4-20250514', 'gpt-x', undefined].map(modelLabel)).toEqual(['Haiku 5.5', 'Opus 5.5', 'Sonnet 4', 'gpt-x', undefined])
+  expect(stepTokens({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 })).toBe(135)
+  const merged = mergeAgents(
+    { a1: { id: 'a1', description: '날씨', type: 'Explore', status: 'running', toolUses: 4, tokens: 900, startedAt: 1000 } },
+    [
+      { id: 'a1', description: '날씨', type: 'Explore', status: 'completed' },
+      { id: 'a2', description: '', type: 'general-purpose', status: 'running' },
+      { id: 'a3', description: '기다림', type: 'Explore', status: 'waiting' },
+    ],
+    5000,
+  )
+  expect(merged.a1).toMatchObject({ status: 'completed', toolUses: 4, tokens: 900, startedAt: 1000, endedAt: 5000 })
+  expect(merged.a2).toMatchObject({ description: 'general-purpose', status: 'running', toolUses: 0, startedAt: 5000 })
+  expect(orderAgents(merged).live.map(agent => agent.id).sort()).toEqual(['a2', 'a3'])
+  // 한 번의 실행이 끝났어도 엔진이 살아 있다고 하면 끝난 시각을 지운다.
+  // 목록에 있다가 도는 채로 사라지면 끝을 놓친 것: 끝남으로. 목록에 없던 기록은 그대로.
+  const missed = mergeAgents({ ...merged, a4: { id: 'a4', description: 'x', type: 'workflow', status: 'running', toolUses: 0 } }, [], 9000)
+  expect(missed.a2).toMatchObject({ status: 'completed', endedAt: 9000 })
+  expect(missed.a1).toMatchObject({ status: 'completed', endedAt: 5000 })
+  expect(missed.a4?.status).toBe('running')
+  expect(mergeAgents({ a3: { id: 'a3', description: '기다림', type: 'Explore', status: 'completed', toolUses: 1, endedAt: 3000 } }, [{ id: 'a3', description: '기다림', type: 'Explore', status: 'waiting' }], 6000).a3?.endedAt).toBeUndefined()
+  const detail = agentDetailOf('a1', [
+    { role: 'user', text: '서울 날씨를 찾아라', toolUses: [] },
+    { role: 'assistant', text: '도구를 불러옵니다.', toolUses: [{ tool_use_id: 't1', tool: 'Bash', input: { command: 'date' } }, { tool_use_id: 't2', tool: 'ToolSearch', input: { query: 'select:WebSearch' } }] },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 't1', text: 'Mon', isError: false, result: undefined }, { tool_use_id: 't2', text: 'ok', isError: false, result: undefined }] },
+    { role: 'assistant', text: '결론: 맑음', toolUses: [{ tool_use_id: 'h1', tool: 'SubagentHandback', input: { message: '## 서울 날씨\n맑음' } }] },
+  ] as never)
+  expect(detail.prompt).toBe('서울 날씨를 찾아라')
+  // 보고 도구(SubagentHandback)는 도구 줄이 아니라 글로.
+  expect(detail.items.map(item => item.kind)).toEqual(['text', 'run', 'text', 'text'])
+  expect(detail.items[3]).toEqual({ kind: 'text', text: '## 서울 날씨\n맑음' })
+  expect(detail.items[1]).toMatchObject({ kind: 'run', id: 't1' })
+  expect(detail.items[1]?.kind === 'run' && detail.items[1].calls.map(call => call.tool)).toEqual(['Bash', 'ToolSearch'])
+})
+
+test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO, async ($, on) => {
+  let now = 1_000
+  const opened: string[] = []
+  let status = 'running'
+  on('clock.now', () => ({ value: now }))
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('agent.list', () => ({ value: [{ id: 'a1', description: '오늘 서울 날씨 조사', type: 'Explore', status }] as never }))
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }) as never)
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('turn.complete', () => ({ text: '' }) as never)
+  on('session.messages', ($, e) => ({
+    value: (e.agentId === 'a1'
+      ? [
+          { role: 'user', text: 'Research **today** weather', toolUses: [] },
+          { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'w1', tool: 'WebFetch', input: { url: 'https://example.com' } }] },
+          { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'w1', text: 'page', isError: false, result: undefined }] },
+          { role: 'assistant', text: '결론: 맑음', toolUses: [] },
+        ]
+      : []) as never,
+  }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+
+  await $.agent.spawn({ prompt: 'Research today weather', description: '오늘 서울 날씨 조사', subagentType: 'Explore' } as never)
+  await $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'x', agentId: 'a1' } as never)
+  now = 19_000
+
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never })
+  expect(await band.find({ type: 'Button', key: 'agents-chip' })).toBeDefined()
+  await band.press({ key: 'agents-chip' })
+  expect(opened).toEqual(['desk-agents'])
+  await band.unmount()
+
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-agents', viewport: VIEWPORT, props: { title: '에이전트', isFocused: true, bodyColumns: 60 } as never })
+  const list = JSON.stringify(await pane.drawn())
+  expect(list).toContain('실행 중')
+  expect(list).toContain('오늘 서울 날씨 조사')
+  expect(list).toContain('Haiku 5.5')
+  expect(list).toContain('도구 1회')
+  expect(list).toContain('18s')
+  await pane.press({ key: 'agent-view-a1' })
+  const detail = JSON.stringify(await pane.drawn())
+  expect(detail).toContain('‹ 목록')
+  expect(detail).toContain('today')
+  expect(detail).toContain('Fetched a page')
+  expect(detail).toContain('결론: 맑음')
+  await pane.press({ key: 'agent-back' })
+  expect(JSON.stringify(await pane.drawn())).toContain('대화 보기')
+  // 번호로 바로 상세, 없는 번호는 알린다.
+  expect(await $.command.run({ command: 'desk-agents', args: '1' } as never)).toMatchObject({ text: '1번 에이전트의 대화: 오늘 서울 날씨 조사' })
+  expect(JSON.stringify(await pane.drawn())).toContain('결론: 맑음')
+  expect(await $.command.run({ command: 'desk-agents', args: '7' } as never)).toMatchObject({ text: '7번 에이전트가 없어요. /desk-agents 로 목록을 보세요.' })
+  await $.command.run({ command: 'desk-agents', args: '' } as never)
+
+  // 끝나면 '끝남' 아래로 가고 칩이 사라진다.
+  status = 'completed'
+  await $.turn.complete({ durationMs: 18000, reason: 'answer', answer: '맑음', turnId: 't1', agentId: 'a1' } as never)
+  const done = JSON.stringify(await pane.drawn())
+  expect(done).toContain('끝남')
+  expect(done).toContain('완료')
+  await pane.unmount()
+  const after = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+  expect(await after.find({ type: 'Button', key: 'agents-chip' })).toBeUndefined()
+  await after.unmount()
 })

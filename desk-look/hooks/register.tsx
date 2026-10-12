@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEdit, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEdit, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
+import { activityOf, agentDetailOf, isLive, mergeAgents, modelLabel, orderAgents, stepTokens } from './agents'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
 import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
@@ -37,6 +38,7 @@ const PANE = 'desk-diff'
 const SESSIONS_PANE = 'desk-sessions'
 const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
+const AGENTS_PANE = 'desk-agents'
 const PER_GROUP = 8
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
@@ -68,6 +70,11 @@ const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
   commit: null,
   commitFiles: [],
 } as DiffView)
+
+const agents = atom({ plugin: 'desk-look', key: 'agents' } as const, {} as Record<string, AgentRecord>)
+const agentView = atom({ plugin: 'desk-look', key: 'agentView' } as const, null as string | null)
+const agentDetail = atom({ plugin: 'desk-look', key: 'agentDetail' } as const, null as AgentDetail | null)
+const agentClock = atom({ plugin: 'desk-look', key: 'agentClock' } as const, 0)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
@@ -782,6 +789,116 @@ async function refreshRuns($: EngineInterface) {
 
 type Els = Elements['terminal']
 
+// 에이전트 패널: 엔진 목록을 기록에 합친다. 끝난 에이전트는 목록에서 곧 빠지므로 기록이 남긴다.
+async function refreshAgents($: EngineInterface) {
+  const [list, now] = await Promise.all([$.agent.list(), $.clock.now()])
+  await update($, agents, records => {
+    const next = mergeAgents(records, list, now)
+    return JSON.stringify(next) === JSON.stringify(records) ? records : next
+  })
+  if (Object.values(await read($, agents)).some(agent => isLive(agent.status))) startAgentClock($)
+}
+
+// 도는 에이전트가 있는 동안 1초마다 경과 시간을 다시 그리고, 2초마다 엔진 목록으로 상태를 맞춘다.
+const AGENT_TICK = 1000
+let agentTimer: Timer | null = null
+
+function startAgentClock($: EngineInterface) {
+  if (agentTimer !== null) return
+  let count = 0
+  agentTimer = $.clock.every(AGENT_TICK, () => {
+    void (async () => {
+      count++
+      await update($, agentClock, () => count * AGENT_TICK)
+      if (count % 2 === 0) await refreshAgents($)
+      if (!Object.values(await read($, agents)).some(agent => isLive(agent.status))) {
+        agentTimer?.cancel()
+        agentTimer = null
+      }
+    })().catch(() => undefined)
+  })
+}
+
+async function patchAgent($: EngineInterface, id: string, patch: (agent: AgentRecord) => Partial<AgentRecord>) {
+  await update($, agents, records => {
+    const agent = records[id]
+    return agent ? { ...records, [id]: { ...agent, ...patch(agent) } } : records
+  })
+}
+
+async function refreshAgentDetail($: EngineInterface) {
+  const id = await read($, agentView)
+  if (id === null) return
+  const found = await $.session.messages({ agentId: id })
+  const next = Array.isArray(found) ? agentDetailOf(id, found) : null
+  await update($, agentDetail, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
+}
+
+async function openAgents($: EngineInterface, id: string | null = null) {
+  await update($, agentView, () => id)
+  await refreshAgents($).catch(() => undefined)
+  await refreshAgentDetail($).catch(() => undefined)
+  await $.ui.open({ id: AGENTS_PANE, title: T.paneAgents, focus: true })
+}
+
+// 아래턱 오른쪽의 "◆ 2": 도는 에이전트 수, 누르면 /desk-agents 패널.
+function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentRecord>, rich: boolean) {
+  const live = Object.values(records).filter(agent => isLive(agent.status)).length
+  if (live === 0) return null
+  const { Box, Text, Button } = els
+  const label = String(live)
+  return {
+    width: 2 + cellWidth(label),
+    node: rich ? (
+      <Button key="agents-chip" plain dimColor onPress={() => void openAgents($)}>
+        <Text color={COLORS.clay}>◆</Text>
+        {` ${label}`}
+      </Button>
+    ) : (
+      <Box columnGap={1}>
+        <Text color={COLORS.clay}>◆</Text>
+        <Button key="agents-chip" plain dimColor label={label} onPress={() => void openAgents($)} />
+      </Box>
+    ),
+  }
+}
+
+const AGENT_STATUS_COLOR: Record<string, string> = { completed: COLORS.success, failed: COLORS.danger }
+
+function agentFacts(agent: AgentRecord): string[] {
+  return [
+    modelLabel(agent.model),
+    agent.tokens !== undefined ? T.agentTokens(formatTokens(agent.tokens)) : undefined,
+    T.agentToolUses(agent.toolUses),
+  ].filter((fact): fact is string => fact !== undefined)
+}
+
+const agentElapsed = (agent: AgentRecord, now: number) =>
+  agent.startedAt === undefined ? undefined : formatElapsed((agent.endedAt ?? now) - agent.startedAt)
+
+// 목록의 카드 한 장: 데스크톱 Background tasks 처럼 제목, 종류·시간, 모델·토큰·도구 수·하는 일·대화 보기.
+function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: number, now: number, columns: number, rich: boolean) {
+  const { Box, Text } = els
+  const live = isLive(agent.status)
+  const elapsed = agentElapsed(agent, now)
+  return (
+    <Box key={`agent-card-${agent.id}`} flexDirection="column" borderStyle="round" borderColor={live ? COLORS.clay : COLORS.border} paddingX={1}>
+      {rowButton(els, rich, { key: `agent-title-${agent.id}`, onPress: () => void openAgents($, agent.id) }, clip(agent.description, Math.max(10, columns - 6)))}
+      <Box columnGap={1}>
+        <Text color={COLORS.muted}>{`${number}`}</Text>
+        <Text color={COLORS.muted}>{agent.type}</Text>
+        {elapsed && <Text color={COLORS.muted}>{elapsed}</Text>}
+        {!live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{T.agentStatus[agent.status] ?? agent.status}</Text>}
+      </Box>
+      <Box columnGap={2} flexWrap="wrap">
+        <Text color={COLORS.muted}>{agentFacts(agent).join('  ')}</Text>
+        {live && agent.activity && <Text color={COLORS.clay}>{agent.activity}</Text>}
+        {rowButton(els, rich, { key: `agent-view-${agent.id}`, onPress: () => void openAgents($, agent.id) }, T.viewTranscript)}
+      </Box>
+    </Box>
+  )
+}
+
 // 호출 하나를 펼쳤을 때: 명령과 출력, 편집 diff, 새 파일 내용.
 function callDetail({ Box, Text, Code }: Els, call: RunCall) {
   const fields = fieldsOf(call.input)
@@ -1113,6 +1230,11 @@ export const register: Register = (on, options) => {
       description: T.cmdContext,
     })
     await $.command.register({
+      name: 'desk-agents',
+      description: T.cmdAgents,
+      argumentHint: T.cmdAgentsHint,
+    })
+    await $.command.register({
       name: 'desk-update',
       description: T.cmdUpdate,
     })
@@ -1129,6 +1251,7 @@ export const register: Register = (on, options) => {
     themeWatch = $.clock.every(THEME_POLL, () => void refreshSurface($).catch(() => undefined))
     void refreshRuns($).catch(() => undefined)
     void refreshImages($).catch(() => undefined)
+    void refreshAgents($).catch(() => undefined)
     void (async () => {
       const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM] = await Promise.all([
         $.env.get('TMUX'),
@@ -1160,6 +1283,9 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined && e.message.type !== 'assistant') {
       void refreshImages($).catch(() => undefined)
     }
+    if (e.agentId !== undefined && e.agentId === (await read($, agentView))) {
+      void refreshAgentDetail($).catch(() => undefined)
+    }
     return appended
   })
 
@@ -1182,6 +1308,12 @@ export const register: Register = (on, options) => {
       await update($, turnStartedAt, () => null)
       void refreshUsage($).catch(() => undefined)
       if (showPr) void refreshPr($, false).catch(() => undefined)
+    } else {
+      // 서브에이전트 한 번의 실행이 끝났다. 상태는 곧 엔진 목록으로 다시 맞춘다(다시 깨어날 수 있다).
+      const now = await $.clock.now()
+      const status = e.reason === 'answer' ? 'completed' : e.reason === 'aborted' ? 'killed' : 'failed'
+      await patchAgent($, e.agentId, () => ({ status, endedAt: now, activity: undefined }))
+      void refreshAgents($).catch(() => undefined)
     }
     return done
   })
@@ -1225,6 +1357,55 @@ export const register: Register = (on, options) => {
     return { text: T.diffOpened }
   })
 
+  on('command.run', { command: 'desk-agents' }, async ($, e) => {
+    const index = Number.parseInt(e.args.trim(), 10)
+    if (Number.isInteger(index) && index > 0) {
+      await refreshAgents($).catch(() => undefined)
+      const { live, done } = orderAgents(await read($, agents))
+      const agent = [...live, ...done][index - 1]
+      if (!agent) return { text: T.noAgent(index) }
+      await openAgents($, agent.id)
+      return { text: T.agentPicked(index, agent.description) }
+    }
+    await openAgents($)
+    return { text: T.agentsOpened }
+  })
+
+  // 에이전트 패널의 수치: 띄운 시각·모델(agent.spawn), 컨텍스트 토큰(turn.step), 도구 수·하는 일(tool.call).
+  on('agent.spawn', async ($, e, next) => {
+    const startedAt = await $.clock.now()
+    const spawned = await next(e)
+    const id = spawned.agentId
+    if (id !== undefined) {
+      await update($, agents, records => ({
+        ...records,
+        [id]: {
+          toolUses: 0,
+          ...records[id],
+          id,
+          description: e.description || records[id]?.description || e.subagentType,
+          type: e.subagentType,
+          status: 'running',
+          model: spawned.model,
+          startedAt,
+          endedAt: undefined,
+        },
+      }))
+      void refreshAgents($).catch(() => undefined)
+    }
+    return spawned
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const id = e.agentId
+    const response = yield* next(e)
+    const used = response.usage
+    if (id !== undefined && used) {
+      await patchAgent($, id, agent => ({ tokens: stepTokens(used), model: agent.model ?? used.model }))
+    }
+    return response
+  })
+
   on('command.run', { command: 'desk-pr' }, async $ => {
     await openPr($)
     const state = await read($, pr)
@@ -1232,7 +1413,12 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
+    // 서브에이전트 안의 호출: 에이전트 패널의 도구 수와 지금 하는 일.
+    const agentId = e.agentId
+    const activity = activityOf(String(e.tool))
+    if (agentId !== undefined) await patchAgent($, agentId, agent => ({ toolUses: agent.toolUses + 1, activity })).catch(() => undefined)
     const ran = await next(e)
+    if (agentId !== undefined) await patchAgent($, agentId, agent => (agent.activity === activity ? { activity: undefined } : {})).catch(() => undefined)
     // 턴 끝 카드용: 성공한 편집만 파일별 +/− 로 모은다
     const tool = String(e.tool)
     if (FILE_EDITING.has(tool) && !ran.isError) {
@@ -1448,7 +1634,8 @@ export const register: Register = (on, options) => {
     const rich = await read($, richButtons)
     const meter = contextMeter(els, $, await read($, usage), chipMode, rich)
     const prState = showPr ? prChip(els, $, await read($, pr), rich) : null
-    const extras = [prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
+    const agentState = agentsChip(els, $, await read($, agents), rich)
+    const extras = [agentState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
     const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
     const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve, rich)
     // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
@@ -1619,7 +1806,95 @@ export const register: Register = (on, options) => {
     )
   })
 
-  // 우측 diff 패널: 파일별 +/− 요약과 헌크.
+  // 에이전트 패널: 목록(실행 중·끝남)과, 한 에이전트를 누르면 그 대화(지시·답변·도구 묶음).
+  on('ui.render', { component: 'Pane', requestId: AGENTS_PANE }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text } = els
+    const [records, view, detail, rich, openState, now] = await Promise.all([
+      read($, agents),
+      read($, agentView),
+      read($, agentDetail),
+      read($, richButtons),
+      read($, open),
+      $.clock.now(),
+      read($, agentClock),
+    ])
+    const columns = Math.max(24, e.props.bodyColumns)
+
+    const agent = view === null ? undefined : records[view]
+    if (view !== null) {
+      const shown = detail?.id === view ? detail : null
+      const live = agent ? isLive(agent.status) : false
+      const facts = agent
+        ? [agent.tokens !== undefined ? T.agentTokens(formatTokens(agent.tokens)) : undefined, T.agentToolUses(agent.toolUses), agentElapsed(agent, now)].filter(Boolean).join(' · ')
+        : ''
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          <Box columnGap={1}>
+            {rowButton(els, rich, { key: 'agent-back', dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)}
+            <Text color={COLORS.text} bold wrap="truncate-end">
+              {agent?.description ?? view}
+            </Text>
+          </Box>
+          {agent && (
+            <Box columnGap={1} flexWrap="wrap">
+              <Text color={COLORS.muted}>{T.agentModel}</Text>
+              <Text color={COLORS.text}>{modelLabel(agent.model) ?? agent.type}</Text>
+              <Text color={live ? COLORS.clay : AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{T.agentStatus[agent.status] ?? agent.status}</Text>
+              {facts !== '' && <Text color={COLORS.muted}>{facts}</Text>}
+            </Box>
+          )}
+          {shown === null ? (
+            <Text color={COLORS.muted}>{T.agentGone}</Text>
+          ) : (
+            <Box flexDirection="column" rowGap={1}>
+              {shown.prompt !== '' && (
+                <Box flexDirection="column" borderStyle="round" borderColor={COLORS.border} paddingX={1}>
+                  {renderMarkdown(shown.prompt, els, COLORS, columns - 4)}
+                </Box>
+              )}
+              {shown.items.length === 0 && <Text color={COLORS.muted}>{T.agentNoItems}</Text>}
+              {shown.items.map((item, index) => (
+                <Box key={`agent-item-${index}`} flexDirection="column">
+                  {item.kind === 'run'
+                    ? runLine(els, $, item.id, item.calls, openState, columns, rich)
+                    : item.kind === 'user'
+                      ? (
+                          <Box flexDirection="column" borderStyle="round" borderColor={COLORS.border} paddingX={1}>
+                            {renderMarkdown(item.text, els, COLORS, columns - 4)}
+                          </Box>
+                        )
+                      : renderMarkdown(item.text, els, COLORS, columns)}
+                </Box>
+              ))}
+              {live && agent?.activity && <Text color={COLORS.clay}>{`${spinnerDots(now)} ${agent.activity}`}</Text>}
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
+    const { live, done } = orderAgents(records)
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        {live.length === 0 && done.length === 0 && <Text color={COLORS.muted}>{T.noAgents}</Text>}
+        {live.length > 0 && (
+          <Box flexDirection="column">
+            <Text color={COLORS.muted}>{T.agentsRunning}</Text>
+            {live.map((item, index) => agentRow(els, $, item, index + 1, now, columns, rich))}
+          </Box>
+        )}
+        {done.length > 0 && (
+          <Box flexDirection="column">
+            <Text color={COLORS.muted}>{T.agentsDone}</Text>
+            {done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns, rich))}
+          </Box>
+        )}
+      </Box>
+    )
+  })
+
   // 컨텍스트 패널: /context 의 항목별 내역을 막대로, 그 아래 사용 한도와 비용.
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -1690,6 +1965,7 @@ export const register: Register = (on, options) => {
     )
   })
 
+  // 우측 diff 패널: 파일별 +/− 요약과 헌크.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
