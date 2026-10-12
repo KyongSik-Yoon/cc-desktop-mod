@@ -48,7 +48,6 @@ const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Recor
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
-const sessionEdits = atom({ plugin: 'desk-look', key: 'sessionEdits' } as const, [] as SessionEdit[])
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
@@ -94,7 +93,7 @@ export function mergeEdit(list: TurnEdit[], edit: TurnEdit): TurnEdit[] {
   )
 }
 
-// 세션 편집 기록: 파일별로 합치고 헌크는 편집 순서대로 붙인다. 최근 파일 SESSION_FILES 개, 파일마다 헌크 SESSION_PATCHES 개까지.
+// 세션 편집: 파일별로 합치고 헌크는 편집 순서대로 붙인다. 최근 파일 SESSION_FILES 개, 파일마다 헌크 SESSION_PATCHES 개까지.
 const SESSION_FILES = 50
 const SESSION_PATCHES = 20
 
@@ -104,6 +103,19 @@ export function mergeSessionEdit(list: SessionEdit[], edit: SessionEdit): Sessio
     ? { path: edit.path, added: old.added + edit.added, removed: old.removed + edit.removed, patches: [...old.patches, ...edit.patches].slice(-SESSION_PATCHES) }
     : edit
   return [...list.filter(item => item.path !== edit.path), merged].slice(-SESSION_FILES)
+}
+
+// 대화 기록(runs)의 성공한 편집 도구 호출을 파일별로 모은다. 기록에서 다시 계산하므로 재시작·resume 뒤에도 남는다.
+export function sessionEditsOf(state: Runs): SessionEdit[] {
+  let list: SessionEdit[] = []
+  for (const call of Object.values(state.calls).flat()) {
+    if (!FILE_EDITING.has(call.tool) || call.isRunning) continue
+    const fields = fieldsOf(call.input)
+    const path = stringField(fields, 'file_path') ?? stringField(fields, 'notebook_path')
+    const stat = diffStat(call)
+    if (path && stat) list = mergeSessionEdit(list, { path, ...stat, patches: editPatches(call.tool, call.input, call.output) })
+  }
+  return list
 }
 
 // diff 패널에 git 대신 세션 기록으로 보일 편집: git diff 가 잡지 못하는 저장소 밖(또는 저장소가 아닌 곳) 파일만.
@@ -573,7 +585,7 @@ async function openDiffAt($: EngineInterface, path: string) {
   await refreshDiffView($, 'uncommitted')
   const inGit = matchDiffFile(await read($, diff), path)
   // git 이 모르는 파일(저장소 밖)은 세션 편집 기록에서 찾는다. 경로는 도구가 준 절대 경로다.
-  const outside = inGit === null ? matchDiffFile(outsideEdits(await read($, sessionEdits), await read($, repo)), path) : null
+  const outside = inGit === null ? matchDiffFile(outsideEdits(sessionEditsOf(await read($, runs)), await read($, repo)), path) : null
   const target = inGit ?? (outside === null ? null : `${OUTSIDE}${outside}`)
   await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
   if (target === null) {
@@ -1186,8 +1198,6 @@ export const register: Register = (on, options) => {
       const stat = diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false })
       if (path && stat) {
         await update($, pendingEdits, list => mergeEdit(list, { path, ...stat }))
-        const patches = editPatches(tool, e, 'result' in ran ? ran.result : undefined)
-        await update($, sessionEdits, list => mergeSessionEdit(list, { path, ...stat, patches }))
       }
     }
     // 도구 결과를 git 실행 시간만큼 붙잡지 않도록 기다리지 않는다. 실패는 패널이 비어 보일 뿐이다.
@@ -1647,13 +1657,13 @@ export const register: Register = (on, options) => {
       read($, open),
       read($, richButtons),
       read($, repo),
-      read($, sessionEdits),
+      read($, runs),
       $.env.get('HOME').catch(() => undefined),
     ])
     const columns = e.viewport?.columns ?? 80
     const files = view.scope === 'branch' ? view.files : uncommitted
     // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
-    const outside = view.scope === 'uncommitted' ? outsideEdits(edits, info) : []
+    const outside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
     const added = [...files, ...outside].reduce((sum, file) => sum + file.added, 0)
     const removed = [...files, ...outside].reduce((sum, file) => sum + file.removed, 0)
     const shortPath = (path: string) => (home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)

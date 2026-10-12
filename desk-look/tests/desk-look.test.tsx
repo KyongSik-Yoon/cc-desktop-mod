@@ -1027,29 +1027,55 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   await row.unmount()
 })
 
-test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에 세션 편집이 보인다', KO, async ($, on) => {
+test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에 대화 기록의 편집이 보인다', KO, async ($, on) => {
   const notRepo = () => ({ value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', notRepo as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.cwd', () => ({ value: '/tmp/x' }))
   on('clock.now', () => ({ value: 0 }))
+  on('clock.every', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined as never }))
+  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
+  on('session.start', ($, e) => e as never)
   on('tool.call', () => ({ result: 'ok' }) as never)
   on('turn.complete', () => ({ text: '썼어요' }) as never)
   on('ui.render', { component: 'TurnDuration' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text>Baked for 4s</Text>
   })
-  await $.tool.call({ tool: 'Write', file_path: '/tmp/x/note.md', content: 'a\nb\n' } as never)
-  await $.tool.call({ tool: 'Edit', file_path: '/tmp/x/note.md', old_string: 'b', new_string: 'c' } as never)
+  // 플러그인을 올리기 전(또는 resume 전)에 한 편집: 대화 기록에만 있다
+  const write = { file_path: '/tmp/x/note.md', content: 'a\nb\n' }
+  const edit = { file_path: '/tmp/x/note.md', old_string: 'b', new_string: 'c' }
+  const hunk = { oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' a', '-b', '+c'] }
+  on('session.messages', () => ({
+    value: [
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'w1', tool: 'Write', input: write }, { tool_use_id: 'e1', tool: 'Edit', input: edit }] },
+      {
+        role: 'user',
+        text: '',
+        toolUses: [],
+        toolResults: [
+          { tool_use_id: 'w1', text: 'created', isError: false, result: { type: 'create', filePath: write.file_path, content: write.content, structuredPatch: [] } },
+          { tool_use_id: 'e1', text: 'edited', isError: false, result: { filePath: edit.file_path, structuredPatch: [hunk] } },
+        ],
+      },
+    ] as never,
+  }))
+  await $.session.start({ source: 'resume', cwd: '/tmp/x', surface: 'terminal' } as never)
+  await $.tool.call({ tool: 'Edit', ...edit } as never)
   await $.turn.complete({ durationMs: 4000, reason: 'answer', answer: '썼어요', turnId: 't1' } as never)
   const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 4000 } })
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Code' })); tries++) await wait(10)
+  await pane.press({ key: 'fold-s:/tmp/x/note.md' })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  // 접어 둔 파일도 카드에서 누르면 펼친다
   await row.press({ key: 'diffat-4000-/tmp/x/note.md' })
+  for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Code' })); tries++) await wait(10)
   expect(await pane.find({ type: 'Text', text: /git 저장소가 아니라서/ })).toBeUndefined()
   expect(await pane.find({ type: 'Text', text: /git 밖 파일/ })).toBeDefined()
   expect(await pane.find({ type: 'Code', source: '@@ -0,0 +1,2 @@\n+a\n+b' } as never)).toBeDefined()
-  expect(await pane.find({ type: 'Code', source: /^@@ -1,2 \+1,2 @@\n a\n-b\n\+c/ } as never)).toBeDefined()
-  await pane.press({ key: 'fold-s:/tmp/x/note.md' })
-  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  expect(await pane.find({ type: 'Code', source: '@@ -1,2 +1,2 @@\n a\n-b\n+c' } as never)).toBeDefined()
   await pane.unmount()
   await row.unmount()
 })

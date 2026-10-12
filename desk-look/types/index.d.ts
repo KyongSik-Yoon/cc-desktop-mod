@@ -118,7 +118,6 @@ declare module 'claude-code' {
       graphics: boolean
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
-      sessionEdits: SessionEdit[]
       sessions: SessionEntry[]
       // 세션 패널 검색어.
       sessionQuery: string
