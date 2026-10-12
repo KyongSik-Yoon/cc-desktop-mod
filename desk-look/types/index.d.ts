@@ -1,6 +1,7 @@
 export type FileDiff = { path: string; added: number; removed: number; patch: string; isNew: boolean }
 
-export type RepoInfo = { name: string; branch: string | null; isRepo: boolean }
+// root: 저장소 최상위 절대 경로(저장소가 아니면 없다).
+export type RepoInfo = { name: string; branch: string | null; isRepo: boolean; root?: string }
 
 // 터미널 배경에서 계산한 데스크톱식 회색 면. omarchy 테마를 못 읽으면 null.
 export type Surface = { mode: 'light' | 'dark'; background: string; bubble: string }
@@ -23,6 +24,9 @@ export type ImageInfo = { path: string; width: number; height: number }
 
 // 한 턴에 편집 도구로 바꾼 파일. 턴이 끝나면 소요 시간과 함께 카드로 남는다.
 export type TurnEdit = { path: string; added: number; removed: number }
+
+// 이 세션에서 도구로 고친 파일 하나와 편집마다의 diff 헌크. git 밖 파일을 diff 패널에 보일 때 쓴다.
+export type SessionEdit = TurnEdit & { patches: string[] }
 
 // text: 그 턴의 답변(턴 끝 줄의 복사 버튼용). 예전 기록에는 없다.
 // 할 일 목록 한 줄(TodoWrite·TaskCreate 에서).
@@ -114,6 +118,7 @@ declare module 'claude-code' {
       graphics: boolean
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
+      sessionEdits: SessionEdit[]
       sessions: SessionEntry[]
       // 세션 패널 검색어.
       sessionQuery: string

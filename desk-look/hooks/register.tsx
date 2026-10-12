@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEdit, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
@@ -48,6 +48,7 @@ const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Recor
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
+const sessionEdits = atom({ plugin: 'desk-look', key: 'sessionEdits' } as const, [] as SessionEdit[])
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
@@ -91,6 +92,26 @@ export function mergeEdit(list: TurnEdit[], edit: TurnEdit): TurnEdit[] {
   return list.map((item, at) =>
     at === index ? { ...item, added: item.added + edit.added, removed: item.removed + edit.removed } : item,
   )
+}
+
+// 세션 편집 기록: 파일별로 합치고 헌크는 편집 순서대로 붙인다. 최근 파일 SESSION_FILES 개, 파일마다 헌크 SESSION_PATCHES 개까지.
+const SESSION_FILES = 50
+const SESSION_PATCHES = 20
+
+export function mergeSessionEdit(list: SessionEdit[], edit: SessionEdit): SessionEdit[] {
+  const old = list.find(item => item.path === edit.path)
+  const merged = old
+    ? { path: edit.path, added: old.added + edit.added, removed: old.removed + edit.removed, patches: [...old.patches, ...edit.patches].slice(-SESSION_PATCHES) }
+    : edit
+  return [...list.filter(item => item.path !== edit.path), merged].slice(-SESSION_FILES)
+}
+
+// diff 패널에 git 대신 세션 기록으로 보일 편집: git diff 가 잡지 못하는 저장소 밖(또는 저장소가 아닌 곳) 파일만.
+// 저장소 안 파일은 git 이 정본이다(커밋했으면 패널에서 빠지는 게 맞다).
+export function outsideEdits(edits: ReadonlyArray<SessionEdit>, info: RepoInfo | null): SessionEdit[] {
+  if (info?.isRepo !== true) return [...edits]
+  const root = info.root
+  return root ? edits.filter(edit => !edit.path.startsWith(`${root}/`)) : []
 }
 
 // 소요 시간 줄과 턴 기록을 durationMs 로 짝짓는다. 둘이 같은 값을 재지만 반올림 차이를 1초까지 봐준다.
@@ -310,6 +331,27 @@ export function patchOf(output: unknown): string | null {
     .join('\n')
 }
 
+// 성공한 편집 도구 호출의 헌크들: 결과의 structuredPatch, 없으면 입력에서 만든다(새로 쓴 파일은 전부 +).
+export function editPatches(tool: string, input: unknown, result: unknown): string[] {
+  const fromResult = patchOf(result)
+  if (fromResult) return [fromResult]
+  const fields = fieldsOf(input)
+  switch (tool) {
+    case 'Edit':
+      return [editHunk(stringField(fields, 'old_string') ?? '', stringField(fields, 'new_string') ?? '')]
+    case 'MultiEdit':
+      return (Array.isArray(fields.edits) ? fields.edits.map(fieldsOf) : []).map(edit =>
+        editHunk(stringField(edit, 'old_string') ?? '', stringField(edit, 'new_string') ?? ''),
+      )
+    case 'Write': {
+      const lines = linesOf((stringField(fields, 'content') ?? '').replace(/\n$/, ''))
+      return lines.length === 0 ? [] : [[`@@ -0,0 +1,${lines.length} @@`, ...lines.map(line => `+${line}`)].join('\n')]
+    }
+    default:
+      return []
+  }
+}
+
 // 편집 하나를 diff 헌크로(결과에 헌크가 없을 때): 바뀐 줄만 −/+, 앞뒤 같은 줄은 문맥으로 두 줄까지.
 export function editHunk(oldText: string, newText: string, context = 2): string {
   const before = linesOf(oldText)
@@ -474,6 +516,7 @@ async function refreshDiff($: EngineInterface) {
     name: top.stdout.trim().split('/').pop() ?? '',
     branch: branch.exitCode === 0 ? branch.stdout.trim() : null,
     isRepo: true,
+    root: top.stdout.trim() || undefined,
   }))
   await update($, diff, () => files)
 }
@@ -522,10 +565,16 @@ export function clipStart(text: string, width: number): string {
   return `…${out}`
 }
 
+// diff 패널에서 세션 기록으로 보이는 파일의 키 앞머리.
+const OUTSIDE = 's:'
+
 // 데스크톱처럼 턴 끝 카드의 파일을 누르면 diff 패널을 그 파일에서 연다(접혀 있으면 펼쳐서).
 async function openDiffAt($: EngineInterface, path: string) {
   await refreshDiffView($, 'uncommitted')
-  const target = matchDiffFile(await read($, diff), path)
+  const inGit = matchDiffFile(await read($, diff), path)
+  // git 이 모르는 파일(저장소 밖)은 세션 편집 기록에서 찾는다. 경로는 도구가 준 절대 경로다.
+  const outside = inGit === null ? matchDiffFile(outsideEdits(await read($, sessionEdits), await read($, repo)), path) : null
+  const target = inGit ?? (outside === null ? null : `${OUTSIDE}${outside}`)
   await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
   if (target === null) {
     $.ui.toast(T.notInDiff)
@@ -1137,6 +1186,8 @@ export const register: Register = (on, options) => {
       const stat = diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false })
       if (path && stat) {
         await update($, pendingEdits, list => mergeEdit(list, { path, ...stat }))
+        const patches = editPatches(tool, e, 'result' in ran ? ran.result : undefined)
+        await update($, sessionEdits, list => mergeSessionEdit(list, { path, ...stat, patches }))
       }
     }
     // 도구 결과를 git 실행 시간만큼 붙잡지 않도록 기다리지 않는다. 실패는 패널이 비어 보일 뿐이다.
@@ -1590,11 +1641,22 @@ export const register: Register = (on, options) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
     const { Box, Text, Button, Code } = els
-    const [uncommitted, view, armed, rich, info] = await Promise.all([read($, diff), read($, diffView), read($, open), read($, richButtons), read($, repo)])
+    const [uncommitted, view, armed, rich, info, edits, home] = await Promise.all([
+      read($, diff),
+      read($, diffView),
+      read($, open),
+      read($, richButtons),
+      read($, repo),
+      read($, sessionEdits),
+      $.env.get('HOME').catch(() => undefined),
+    ])
     const columns = e.viewport?.columns ?? 80
     const files = view.scope === 'branch' ? view.files : uncommitted
-    const added = files.reduce((sum, file) => sum + file.added, 0)
-    const removed = files.reduce((sum, file) => sum + file.removed, 0)
+    // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
+    const outside = view.scope === 'uncommitted' ? outsideEdits(edits, info) : []
+    const added = [...files, ...outside].reduce((sum, file) => sum + file.added, 0)
+    const removed = [...files, ...outside].reduce((sum, file) => sum + file.removed, 0)
+    const shortPath = (path: string) => (home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)
     const empty =
       info?.isRepo === false
         ? T.notRepoDiff
@@ -1606,7 +1668,7 @@ export const register: Register = (on, options) => {
 
     // 파일 하나: 머리 줄(누르면 접고 폄)과 diff. 되돌리기는 커밋 안 한 변경에서만.
     const fileBlock = (file: FileDiff, prefix: string, canRevert: boolean) => (
-      <Box key={`${prefix}${file.path}`} flexDirection="column">
+      <Box key={`file-${prefix}${file.path}`} flexDirection="column">
         <Box columnGap={1}>
           {rowButton(
             els,
@@ -1636,13 +1698,38 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    // 세션 기록의 파일 하나: 편집마다의 헌크를 차례로. 되돌리기는 없다(git 이 모르는 파일).
+    const outsideBlock = (edit: SessionEdit) => {
+      const id = `${OUTSIDE}${edit.path}`
+      return (
+        <Box key={`file-${id}`} flexDirection="column">
+          {rowButton(
+            els,
+            rich,
+            { key: `fold-${id}`, onPress: () => toggle($, `fold:${id}`) },
+            clipStart(shortPath(edit.path), Math.max(12, columns - 34)),
+            ' ',
+            diffChips(Text, edit.added, edit.removed),
+            <Text color={COLORS.muted}>{armed[`fold:${id}`] ? ' ›' : ' ⌄'}</Text>,
+          )}
+          {!armed[`fold:${id}`] &&
+            (edit.patches.length > 0 ? (
+              edit.patches.map((patch, index) => <Code key={`patch-${id}-${index}`} source={patch} path={edit.path} format="diff" />)
+            ) : (
+              <Text color={COLORS.muted}>{T.binary}</Text>
+            ))}
+        </Box>
+      )
+    }
+
+    const shownCount = files.length + outside.length
     const title =
       view.scope === 'commits'
         ? view.commits.length > 0
           ? `${view.commits.length} commit${view.commits.length === 1 ? '' : 's'}`
           : T.commitsTitle
-        : files.length > 0
-          ? `Edited ${files.length} file${files.length === 1 ? '' : 's'}`
+        : shownCount > 0
+          ? `Edited ${shownCount} file${shownCount === 1 ? '' : 's'}`
           : T.changesTitle
 
     return (
@@ -1662,12 +1749,14 @@ export const register: Register = (on, options) => {
           <Text color={COLORS.text} bold>
             {title}
           </Text>
-          {view.scope !== 'commits' && files.length > 0 && diffChips(Text, added, removed)}
+          {view.scope !== 'commits' && shownCount > 0 && diffChips(Text, added, removed)}
           {view.scope !== 'uncommitted' && view.base && <Text color={COLORS.muted}>{`vs ${view.base.ref}`}</Text>}
           <Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />
         </Box>
-        {view.scope !== 'commits' && files.length === 0 && <Text color={COLORS.muted}>{empty}</Text>}
+        {view.scope !== 'commits' && shownCount === 0 && <Text color={COLORS.muted}>{empty}</Text>}
         {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
+        {outside.length > 0 && <Text color={COLORS.muted}>{T.outsideEdits}</Text>}
+        {outside.map(outsideBlock)}
         {view.scope === 'commits' && view.commits.length === 0 && (
           <Text color={COLORS.muted}>{info?.isRepo === false ? T.notRepo : view.base ? T.noCommitsSince(view.base.ref) : T.noCommits}</Text>
         )}

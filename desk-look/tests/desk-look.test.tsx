@@ -1027,6 +1027,33 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   await row.unmount()
 })
 
+test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에 세션 편집이 보인다', KO, async ($, on) => {
+  const notRepo = () => ({ value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } })
+  on('process.run', notRepo as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.now', () => ({ value: 0 }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('turn.complete', () => ({ text: '썼어요' }) as never)
+  on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>Baked for 4s</Text>
+  })
+  await $.tool.call({ tool: 'Write', file_path: '/tmp/x/note.md', content: 'a\nb\n' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/tmp/x/note.md', old_string: 'b', new_string: 'c' } as never)
+  await $.turn.complete({ durationMs: 4000, reason: 'answer', answer: '썼어요', turnId: 't1' } as never)
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 4000 } })
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  await row.press({ key: 'diffat-4000-/tmp/x/note.md' })
+  expect(await pane.find({ type: 'Text', text: /git 저장소가 아니라서/ })).toBeUndefined()
+  expect(await pane.find({ type: 'Text', text: /git 밖 파일/ })).toBeDefined()
+  expect(await pane.find({ type: 'Code', source: '@@ -0,0 +1,2 @@\n+a\n+b' } as never)).toBeDefined()
+  expect(await pane.find({ type: 'Code', source: /^@@ -1,2 \+1,2 @@\n a\n-b\n\+c/ } as never)).toBeDefined()
+  await pane.press({ key: 'fold-s:/tmp/x/note.md' })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  await pane.unmount()
+  await row.unmount()
+})
+
 test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편다', KO, async ($, on) => {
   on('process.run', gitStub as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
