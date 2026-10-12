@@ -58,8 +58,6 @@ const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskSta
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
-// Button 안에 글·Text 를 넣을 수 있는 엔진(2.1.295+)인지. 모르는 동안은 옛 모양.
-const richButtons = atom({ plugin: 'desk-look', key: 'richButtons' } as const, false)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
 const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
@@ -453,36 +451,22 @@ async function openContext($: EngineInterface) {
   await $.ui.open({ id: CONTEXT_PANE, title: T.paneContext, focus: true })
 }
 
-// 줄 전체가 눌리는 버튼. 2.1.295 부터 Button 안에 글·Text 를 넣을 수 있다. 그 전 엔진은 그런 그림을
-// 통째로 거부하고 자기 그림을 그리므로, 그때는 첫 조각만 버튼 라벨로 하고 나머지는 옆에 둔다.
+// 줄 전체가 눌리는 버튼: 라벨 뒤에 칩·흐린 설명(Text)을 함께 넣는다.
 type RowButtonProps = { key: string; dimColor?: boolean; hotkey?: string; hover?: TextHoverProps; onPress: (press: UiPressArgument) => void }
 
-function rowButton(els: Els, rich: boolean, props: RowButtonProps, label: string, ...rest: unknown[]) {
-  const { Box, Text, Button } = els
+function rowButton(els: Els, props: RowButtonProps, label: string, ...rest: unknown[]) {
+  const { Button } = els
   const parts = rest.filter(part => part !== null && part !== undefined && part !== false && part !== '')
-  if (rich) {
-    return (
-      <Button plain {...props}>
-        {label}
-        {parts as never}
-      </Button>
-    )
-  }
   return (
-    <Box>
-      <Button plain {...props} label={label} />
-      {parts.map(part => (typeof part === 'string' ? <Text>{part}</Text> : part)) as never}
-    </Box>
+    <Button plain {...props}>
+      {label}
+      {parts as never}
+    </Button>
   )
 }
 
-export function supportsRichButtons(base: string | undefined): boolean {
-  const [major = 0, minor = 0, patch = 0] = (base ?? '').split('-')[0]!.split('.').map(Number)
-  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 295)))
-}
-
 // 아래턱 오른쪽의 "◔ 62%": 링은 단계 색, 칩 전체가 컨텍스트 패널을 여는 버튼.
-function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode: ContextChipMode, rich: boolean) {
+function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode: ContextChipMode) {
   const percent = info?.percent ?? null
   if (!showsChip(mode, percent)) return null
   const { Box, Text, Button } = els
@@ -490,22 +474,17 @@ function contextMeter(els: Els, $: EngineInterface, info: UsageInfo | null, mode
   const label = `${percent}%`
   return {
     width: 2 + cellWidth(label),
-    node: rich ? (
+    node: (
       <Button key="context-chip" plain dimColor={level === 'muted'} onPress={() => void openContext($)}>
         <Text color={COLORS[level]}>{ring(percent)}</Text>
         {` ${label}`}
       </Button>
-    ) : (
-      <Box columnGap={1}>
-        <Text color={COLORS[level]}>{ring(percent)}</Text>
-        <Button key="context-chip" plain dimColor={level === 'muted'} label={label} onPress={() => void openContext($)} />
-      </Box>
     ),
   }
 }
 
 // 아래턱 오른쪽의 PR 칩 "#12 ✓ 5/5": 누르면 /desk-pr 패널.
-function prChip(els: Els, $: EngineInterface, state: PrState | null, rich: boolean) {
+function prChip(els: Els, $: EngineInterface, state: PrState | null) {
   const info = state?.pr
   if (!info) return null
   const { Box, Text, Button } = els
@@ -516,16 +495,11 @@ function prChip(els: Els, $: EngineInterface, state: PrState | null, rich: boole
   ))
   return {
     width: cellWidth(text),
-    node: rich ? (
+    node: (
       <Button key="pr-chip" plain dimColor onPress={() => void openPr($)}>
         {parts[0]!.text}
         {colored as never}
       </Button>
-    ) : (
-      <Box>
-        <Button key="pr-chip" plain dimColor label={parts[0]!.text} onPress={() => void openPr($)} />
-        {colored as never}
-      </Box>
     ),
   }
 }
@@ -842,23 +816,18 @@ async function openAgents($: EngineInterface, id: string | null = null) {
 }
 
 // 아래턱 오른쪽의 "◆ 2": 도는 에이전트 수, 누르면 /desk-agents 패널.
-function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentRecord>, rich: boolean) {
+function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentRecord>) {
   const live = Object.values(records).filter(agent => isLive(agent.status)).length
   if (live === 0) return null
   const { Box, Text, Button } = els
   const label = String(live)
   return {
     width: 2 + cellWidth(label),
-    node: rich ? (
+    node: (
       <Button key="agents-chip" plain dimColor onPress={() => void openAgents($)}>
         <Text color={COLORS.clay}>◆</Text>
         {` ${label}`}
       </Button>
-    ) : (
-      <Box columnGap={1}>
-        <Text color={COLORS.clay}>◆</Text>
-        <Button key="agents-chip" plain dimColor label={label} onPress={() => void openAgents($)} />
-      </Box>
     ),
   }
 }
@@ -877,13 +846,13 @@ const agentElapsed = (agent: AgentRecord, now: number) =>
   agent.startedAt === undefined ? undefined : formatElapsed((agent.endedAt ?? now) - agent.startedAt)
 
 // 목록의 카드 한 장: 데스크톱 Background tasks 처럼 제목, 종류·시간, 모델·토큰·도구 수·하는 일·대화 보기.
-function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: number, now: number, columns: number, rich: boolean) {
+function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: number, now: number, columns: number) {
   const { Box, Text } = els
   const live = isLive(agent.status)
   const elapsed = agentElapsed(agent, now)
   return (
     <Box key={`agent-card-${agent.id}`} flexDirection="column" borderStyle="round" borderColor={live ? COLORS.clay : COLORS.border} paddingX={1}>
-      {rowButton(els, rich, { key: `agent-title-${agent.id}`, onPress: () => void openAgents($, agent.id) }, clip(agent.description, Math.max(10, columns - 6)))}
+      {rowButton(els, { key: `agent-title-${agent.id}`, onPress: () => void openAgents($, agent.id) }, clip(agent.description, Math.max(10, columns - 6)))}
       <Box columnGap={1}>
         <Text color={COLORS.muted}>{`${number}`}</Text>
         <Text color={COLORS.muted}>{agent.type}</Text>
@@ -893,7 +862,7 @@ function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: numb
       <Box columnGap={2} flexWrap="wrap">
         <Text color={COLORS.muted}>{agentFacts(agent).join('  ')}</Text>
         {live && agent.activity && <Text color={COLORS.clay}>{agent.activity}</Text>}
-        {rowButton(els, rich, { key: `agent-view-${agent.id}`, onPress: () => void openAgents($, agent.id) }, T.viewTranscript)}
+        {rowButton(els, { key: `agent-view-${agent.id}`, onPress: () => void openAgents($, agent.id) }, T.viewTranscript)}
       </Box>
     </Box>
   )
@@ -962,7 +931,7 @@ export function textKey(text: string): string {
 }
 
 // 에이전트가 보낸 메시지: "◆ Explore  첫 줄 미리보기 ›", 누르면 본문을 마크다운으로.
-function peerRow(els: Els, $: EngineInterface, name: string, text: string, openState: Record<string, boolean>, columns: number, rich: boolean) {
+function peerRow(els: Els, $: EngineInterface, name: string, text: string, openState: Record<string, boolean>, columns: number) {
   const { Box, Text, Button } = els
   const key = `peer-${textKey(name + text)}`
   const isOpen = openState[key] ?? false
@@ -974,7 +943,6 @@ function peerRow(els: Els, $: EngineInterface, name: string, text: string, openS
         <Text color={COLORS.clay}>◆</Text>
         {rowButton(
           els,
-          rich,
           { key, onPress: () => toggle($, key, isOpen) },
           who,
           !isOpen && preview !== '' && <Text color={COLORS.muted}>{` ${clip(preview, Math.max(10, columns - cellWidth(who) - 6))}`}</Text>,
@@ -997,7 +965,7 @@ export function formatTokens(count: number): string {
   return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count)
 }
 
-function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, rich: boolean) {
+function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>) {
   const { Box, Text, Button } = els
   const fields = fieldsOf(call.input)
   const id = call.tool_use_id
@@ -1021,7 +989,6 @@ function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Recor
         <Text color={COLORS.muted}>{kind}</Text>
         {rowButton(
           els,
-          rich,
           { key: `agent-${id}`, onPress: () => toggle($, id, isOpen) },
           title,
           call.isRunning && <Text color={COLORS.muted}> running</Text>,
@@ -1064,7 +1031,7 @@ export function splitPlan(plan: string, rows: number): { head: string; hidden: n
 }
 
 // 계획(ExitPlanMode): 데스크톱처럼 묶음에 섞지 않고 카드로. 승인 창은 엔진 것이고 이건 기록에 남는 모습.
-function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, columns: number, rich: boolean) {
+function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, columns: number) {
   const { Box, Text } = els
   const plan = planOf(call.output)?.plan ?? ''
   const key = `plan-${call.tool_use_id}`
@@ -1092,15 +1059,15 @@ function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record
       </Box>
       {plan === '' ? <Text color={COLORS.muted}>{empty}</Text> : renderMarkdown(isOpen ? plan : head, els, COLORS, width - 4)}
       {hidden > 0 &&
-        rowButton(els, rich, { key, dimColor: true, onPress: () => toggle($, key) }, isOpen ? 'Show less' : `Show all · ${hidden} more lines`)}
+        rowButton(els, { key, dimColor: true, onPress: () => toggle($, key) }, isOpen ? 'Show less' : `Show all · ${hidden} more lines`)}
     </Box>
   )
 }
 
 // 호출 한 줄: "Edited register.tsx +12 −3 ›", 누르면 아래로 펼친다.
-function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, columns: number, rich: boolean, indent = 0, openFirst = false) {
-  if (isAgentTool(call.tool)) return agentCard(els, $, call, openState, rich)
-  if (isPlanTool(call.tool)) return planCard(els, $, call, openState, columns, rich)
+function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record<string, boolean>, columns: number, indent = 0, openFirst = false) {
+  if (isAgentTool(call.tool)) return agentCard(els, $, call, openState)
+  if (isPlanTool(call.tool)) return planCard(els, $, call, openState, columns)
   const { Box, Text, Button } = els
   const id = call.tool_use_id
   const isOpen = openState[id] ?? openFirst
@@ -1114,7 +1081,6 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
         {call.isRunning && <Text color={COLORS.clay}>···</Text>}
         {rowButton(
           els,
-          rich,
           { key: `row-${id}`, dimColor: true, onPress: () => toggle($, id, isOpen) },
           verbOf(call.tool),
           <Text color={COLORS.muted}>{` ${clip(summarize(call.tool, call.input), answer ? Math.ceil(room / 2) : room)}`}</Text>,
@@ -1137,10 +1103,10 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
 
 // 묶음 한 줄: "Ran 2 commands, edited 3 files +54 −12 ›", 펼치면 호출마다 한 줄.
 // 데스크톱처럼 성공한 편집은 펼치자마자 diff 까지 보인다.
-function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], openState: Record<string, boolean>, columns: number, rich: boolean) {
+function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], openState: Record<string, boolean>, columns: number) {
   // 에이전트만 모인 묶음은 접지 않고 카드를 쌓는다.
   if (calls.length > 0 && calls.every(call => isAgentTool(call.tool))) {
-    return <els.Box flexDirection="column">{calls.map(call => agentCard(els, $, call, openState, rich))}</els.Box>
+    return <els.Box flexDirection="column">{calls.map(call => agentCard(els, $, call, openState))}</els.Box>
   }
   const { Box, Text, Button } = els
   const key = `run-${runId}`
@@ -1154,7 +1120,6 @@ function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], 
         {calls.some(call => call.isRunning) && <Text color={COLORS.clay}>···</Text>}
         {rowButton(
           els,
-          rich,
           { key, dimColor: true, onPress: () => toggle($, key) },
           describeCalls(calls),
           stats.length > 0 && ' ',
@@ -1162,7 +1127,7 @@ function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], 
           <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
         )}
       </Box>
-      {isOpen && calls.map(call => callLine(els, $, call, openState, columns, rich, 2, isEditShown(call)))}
+      {isOpen && calls.map(call => callLine(els, $, call, openState, columns, 2, isEditShown(call)))}
     </Box>
   )
 }
@@ -1241,10 +1206,6 @@ export const register: Register = (on, options) => {
     void refreshDiff($).catch(() => undefined)
     void refreshUsage($).catch(() => undefined)
     if (showPr) void refreshPr($, false).catch(() => undefined)
-    void $.session
-      .version()
-      .then(engine => update($, richButtons, () => supportsRichButtons(engine.base ?? engine.version)))
-      .catch(() => undefined)
     void refreshSurface($).catch(() => undefined)
     // 테마를 바꾸면 3초 안에 말풍선·아래턱 색이 따라간다. 바뀌지 않았으면 다시 그리지 않는다.
     themeWatch?.cancel()
@@ -1444,7 +1405,7 @@ export const register: Register = (on, options) => {
       const els = $.ui.resolve(e)
       const [openState, state] = await Promise.all([read($, open), read($, runs)])
       if (e.props.task) return taskRow(els, e.props.task, e.props.text, state)
-      return peerRow(els, $, e.props.from?.name ?? 'agent', e.props.text, openState, e.viewport?.columns ?? 80, await read($, richButtons))
+      return peerRow(els, $, e.props.from?.name ?? 'agent', e.props.text, openState, e.viewport?.columns ?? 80)
     }
     if (e.surface !== 'terminal' || e.props.origin.kind !== 'composer') {
       return next(e)
@@ -1518,7 +1479,7 @@ export const register: Register = (on, options) => {
     const [state, openState] = await Promise.all([read($, runs), read($, open)])
     const plan = planRow([e.props.tool_use_id], state)
     if (plan.kind === 'hide') return <els.Box display="none" />
-    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80, await read($, richButtons))
+    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80)
     const own = asRunCall(e.props)
     // 계획은 엔진이 준 결과에 계획 글이 없을 수 있어(결과 글만 남은 기록) 저장해 둔 요약을 먼저 쓴다.
     // 승인 직후엔 저장한 결과가 먼저 오고 이 행의 props 는 아직 실행 중일 수 있어, 상태도 저장한 쪽을 따른다.
@@ -1527,7 +1488,7 @@ export const register: Register = (on, options) => {
       saved && planOf(saved.output)
         ? { ...own, output: saved.output, isRunning: false, isErrored: own.isErrored || saved.isErrored, isInterrupted: own.isInterrupted || saved.isInterrupted }
         : own
-    return callLine(els, $, call, openState, e.viewport?.columns ?? 80, await read($, richButtons))
+    return callLine(els, $, call, openState, e.viewport?.columns ?? 80)
   })
 
   // 데스크톱은 결과를 따로 그리지 않는다. 펼친 행 안에서 보여 준다.
@@ -1549,8 +1510,8 @@ export const register: Register = (on, options) => {
     const ids = e.props.calls.map(call => call.tool_use_id).filter((id): id is string => id !== undefined)
     const plan = planRow(ids, state)
     if (plan.kind === 'hide') return <els.Box display="none" />
-    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80, await read($, richButtons))
-    return runLine(els, $, e.requestId, e.props.calls.map(asRunCall), openState, e.viewport?.columns ?? 80, await read($, richButtons))
+    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80)
+    return runLine(els, $, e.requestId, e.props.calls.map(asRunCall), openState, e.viewport?.columns ?? 80)
   })
 
   // 진행 표시: 데스크톱의 "··· Running… 2m 29s". 클레이색 점 셋이 돌고, 경과 시간은 흐리게.
@@ -1632,13 +1593,12 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
     const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
-    const rich = await read($, richButtons)
-    const meter = contextMeter(els, $, await read($, usage), chipMode, rich)
-    const prState = showPr ? prChip(els, $, await read($, pr), rich) : null
-    const agentState = agentsChip(els, $, await read($, agents), rich)
+    const meter = contextMeter(els, $, await read($, usage), chipMode)
+    const prState = showPr ? prChip(els, $, await read($, pr)) : null
+    const agentState = agentsChip(els, $, await read($, agents))
     const extras = [agentState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
     const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
-    const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve, rich)
+    const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
     // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
     const chin =
       extras.length === 0 ? repoChin : (
@@ -1699,7 +1659,6 @@ export const register: Register = (on, options) => {
     const hidden = card.files.length - shown.length
     const width = Math.max(30, Math.min((e.viewport?.columns ?? 80) - 4, 72))
     const name = (path: string) => path.split('/').pop() ?? path
-    const rich = await read($, richButtons)
     const els = $.ui.resolve(e)
     // 파일 줄은 누르면 diff 패널의 그 파일로. 이름을 채워 칩을 오른쪽 끝에 맞춘다(테두리·여백 4칸).
     const fileRow = (file: TurnEdit) => {
@@ -1708,7 +1667,6 @@ export const register: Register = (on, options) => {
       const label = clipStart(name(file.path), room)
       return rowButton(
         els,
-        rich,
         { key: `diffat-${card.durationMs}-${file.path}`, onPress: () => void openDiffAt($, file.path).catch(() => undefined) },
         label + ' '.repeat(Math.max(0, room - cellWidth(label))),
         diffChips(Text, file.added, file.removed),
@@ -1745,7 +1703,6 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text, Button, Input } = els
-    const rich = await read($, richButtons)
     const [list, query, cwd, current, now, home] = await Promise.all([
       read($, sessions),
       read($, sessionQuery),
@@ -1794,7 +1751,6 @@ export const register: Register = (on, options) => {
                 </Text>
                 {rowButton(
                   els,
-                  rich,
                   { key: `open-${entry.id}`, dimColor: entry.id !== current, onPress: () => openSession($, entry) },
                   clip(entry.title, room),
                   <Text color={COLORS.muted}>{` ${ago(entry.updatedAt, now)}`}</Text>,
@@ -1812,11 +1768,10 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
-    const [records, view, detail, rich, openState, now] = await Promise.all([
+    const [records, view, detail, openState, now] = await Promise.all([
       read($, agents),
       read($, agentView),
       read($, agentDetail),
-      read($, richButtons),
       read($, open),
       $.clock.now(),
       read($, agentClock),
@@ -1833,7 +1788,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
-            {rowButton(els, rich, { key: 'agent-back', dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)}
+            {rowButton(els, { key: 'agent-back', dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)}
             <Text color={COLORS.text} bold wrap="truncate-end">
               {agent?.description ?? view}
             </Text>
@@ -1859,7 +1814,7 @@ export const register: Register = (on, options) => {
               {shown.items.map((item, index) => (
                 <Box key={`agent-item-${index}`} flexDirection="column">
                   {item.kind === 'run'
-                    ? runLine(els, $, item.id, item.calls, openState, columns, rich)
+                    ? runLine(els, $, item.id, item.calls, openState, columns)
                     : item.kind === 'user'
                       ? (
                           <Box flexDirection="column" borderStyle="round" borderColor={COLORS.border} paddingX={1}>
@@ -1883,13 +1838,13 @@ export const register: Register = (on, options) => {
         {live.length > 0 && (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>{T.agentsRunning}</Text>
-            {live.map((item, index) => agentRow(els, $, item, index + 1, now, columns, rich))}
+            {live.map((item, index) => agentRow(els, $, item, index + 1, now, columns))}
           </Box>
         )}
         {done.length > 0 && (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>{T.agentsDone}</Text>
-            {done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns, rich))}
+            {done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns))}
           </Box>
         )}
       </Box>
@@ -1971,11 +1926,10 @@ export const register: Register = (on, options) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
     const { Box, Text, Button, Code } = els
-    const [uncommitted, view, armed, rich, info, edits, home] = await Promise.all([
+    const [uncommitted, view, armed, info, edits, home] = await Promise.all([
       read($, diff),
       read($, diffView),
       read($, open),
-      read($, richButtons),
       read($, repo),
       read($, runs),
       $.env.get('HOME').catch(() => undefined),
@@ -2002,7 +1956,6 @@ export const register: Register = (on, options) => {
         <Box columnGap={1}>
           {rowButton(
             els,
-            rich,
             { key: `fold-${prefix}${file.path}`, onPress: () => toggle($, `fold:${prefix}${file.path}`) },
             clipStart(file.path, Math.max(12, columns - 34)),
             file.isNew && <Text color={COLORS.muted}> new</Text>,
@@ -2035,7 +1988,6 @@ export const register: Register = (on, options) => {
         <Box key={`file-${id}`} flexDirection="column">
           {rowButton(
             els,
-            rich,
             { key: `fold-${id}`, onPress: () => toggle($, `fold:${id}`) },
             clipStart(shortPath(edit.path), Math.max(12, columns - 34)),
             ' ',
@@ -2103,7 +2055,6 @@ export const register: Register = (on, options) => {
             <Box key={`commit-${commit.sha}`} flexDirection="column">
               {rowButton(
                 els,
-                rich,
                 { key: `commit-${commit.sha}`, onPress: () => void pickCommit($, commit.sha) },
                 commit.short,
                 ' ',
@@ -2126,7 +2077,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PR_PANE }, async ($, e) => {
     const els = $.ui.resolve(e) as Els
     const { Box, Text, Button, Link } = els
-    const [state, armed, rich] = await Promise.all([read($, pr), read($, open), read($, richButtons)])
+    const [state, armed] = await Promise.all([read($, pr), read($, open)])
     const columns = e.viewport?.columns ?? 80
     const refresh = <Button key="pr-refresh" plain dimColor label="↻" onPress={() => void refreshPr($, true).catch(() => undefined)} />
     const info = state?.pr ?? null
@@ -2236,7 +2187,6 @@ export const register: Register = (on, options) => {
           {passes.length > 0 &&
             rowButton(
               els,
-              rich,
               { key: 'pr-passes', dimColor: true, onPress: () => toggle($, 'pr:passes') },
               showPasses ? T.passesShown(passes.length) : T.passesFolded(passes.length),
               showPasses ? ' ⌄' : ' ›',
@@ -2335,7 +2285,6 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
   const state = await read($, asking)
   const question = state?.questions[state.step]
   if (!state || !question) return null
-  const rich = await read($, richButtons)
   const done = (card: ReturnType<typeof h>) => ({ card, rows })
   const picks = state.picks[state.step] ?? []
   const text = state.texts[state.step] ?? ''
@@ -2452,7 +2401,6 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
               <Box key={`opt-${k}-${index}`} columnGap={2} hover={option.preview ? { scope: `askp-${k}-${index}` } : undefined}>
                 {rowButton(
                   els,
-                  rich,
                   {
                     key: `ask-${k}-${index}`,
                     hover: { color: COLORS.clay },
@@ -2518,20 +2466,18 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
 
 // 데스크톱 입력창의 회색 아래턱: 폭을 채운 알약 띠, 왼쪽에 저장소·브랜치, 오른쪽에 diff 칩.
 // omarchy 테마를 못 읽으면 띠 없이 칩만.
-async function chinBand($: EngineInterface, els: Elements['terminal'], info: RepoInfo, columns: number, rich: boolean) {
+async function chinBand($: EngineInterface, els: Elements['terminal'], info: RepoInfo, columns: number) {
   const { Box, Text, Button } = els
   const face = await read($, surface)
   const files = await read($, diff)
   const added = files.reduce((sum, file) => sum + file.added, 0)
   const removed = files.reduce((sum, file) => sum + file.removed, 0)
-  // +/− 칩은 누르면 diff 패널(데스크톱처럼). 색을 품은 버튼은 2.1.295+ 에서만 되니, 그 전에는 글자로만 둔다.
+  // +/− 칩은 누르면 diff 패널(데스크톱처럼).
   const chips =
-    files.length === 0 ? null : rich ? (
+    files.length === 0 ? null : (
       <Button key="chin-diff" plain onPress={() => void openDiff($).catch(() => undefined)}>
         {diffChips(Text, added, removed)}
       </Button>
-    ) : (
-      diffChips(Text, added, removed)
     )
   if (!face) {
     return (

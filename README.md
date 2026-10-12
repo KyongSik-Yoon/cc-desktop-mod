@@ -36,13 +36,15 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-agents [number]` | — | A right-side pane like the desktop's Background tasks: this session's agents under `Running` and `Done`, each with its type, elapsed time, model, tokens, tool uses, what it is doing now (`Fetching`, `Running a command`) and `View transcript`. Click an agent, or give its number, to see its transcript: the prompt it was given, its messages, its tool calls folded as in the transcript (`Ran 2 commands ›`) and its report. While agents run, a `◆ 2` chip next to the band opens the pane. Background shell commands are not listed (the engine gives plugins no list of them) |
 | `/desk-update` | — | Updates desk-look to the latest version: refreshes the `cc-desktop-mod` marketplace, then `claude plugin update`. Run `/reload-plugins` afterwards to apply it (a plugin can't reload itself) |
 
-Tool lines, agent cards, agent messages, session rows, question options, the context and PR chips, commit rows, and file rows in the end-of-turn card and the diff pane are buttons across the whole row, so clicking the description or the `›` works too (Claude Code 2.1.295+; older versions only take the leading part).
+Tool lines, agent cards, agent messages, session rows, question options, the context and PR chips, commit rows, and file rows in the end-of-turn card and the diff pane are buttons across the whole row, so clicking the description or the `›` works too.
 
 The mod's own labels are in English or Korean: the `language` setting picks one, and by default follows Claude Code's own language setting.
 
 Nothing changes in the Code tab of the desktop app (the `desktop` surface).
 
 ### Install
+
+desk-look follows the latest Claude Code release and is tested only there; keep Claude Code up to date. On an older version, parts the engine can't draw yet fall back to its default look.
 
 At the prompt of a Claude Code terminal session:
 
@@ -60,7 +62,7 @@ Search for `desk-look` in `/config` to find these options.
 |---|---|---|
 | `language` | `auto` (default), `en`, `ko` | Language of the mod's own labels, panes, toasts and the text it puts in the prompt. `auto` follows Claude Code's `language` in `/config` when the session starts: Korean when it names Korean, English otherwise |
 | `bubbleSide` | `left` (default), `right` | Where your prompt bubble sits. The attachment lines the engine draws under the bubble (`└ 1 skill available` and so on) can't be moved by a plugin and always sit on the left, so `left` keeps them aligned. `right` is like the desktop app |
-| `askNotify` | `on` (default), `off` | Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself (2.1.295+) |
+| `askNotify` | `on` (default), `off` | Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself |
 | `prBar` | `on` (default), `off` | The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds; without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting |
 | `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
 

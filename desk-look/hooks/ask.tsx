@@ -109,10 +109,7 @@ export function registerAsk(on: On, notify: boolean) {
     const shownAt = await $.clock.now()
     await update($, asking, () => ({ id, dir, questions, step: 0, picks: questions.map(() => []), texts: questions.map(() => ''), shownAt }))
     if (notify) {
-      // 2.1.294 이하 엔진에는 notify 가 없다: 알림만 빠지고 카드는 그대로 뜬다.
-      try {
-        void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
-      } catch {}
+      void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
     }
 
     // 턴을 중단하면(Esc) 기다리던 셸을 끝낸다.

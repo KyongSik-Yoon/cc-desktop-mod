@@ -951,48 +951,27 @@ test('질문 알림 본문: 첫 질문, 여러 개면 외 N개', KO, () => {
   expect(askNotice([q('어느 쪽?'), q('몇 개?'), q('언제?')])).toBe('어느 쪽? (외 2개)')
 })
 
-import { supportsRichButtons } from '../hooks/register'
-
-test('줄 전체 버튼은 2.1.295 부터', KO, () => {
-  expect(supportsRichButtons('2.1.294')).toBe(false)
-  expect(supportsRichButtons('2.1.295')).toBe(true)
-  expect(supportsRichButtons('2.1.295-dev')).toBe(true)
-  expect(supportsRichButtons('2.2.0')).toBe(true)
-  expect(supportsRichButtons('3.0.0')).toBe(true)
-  expect(supportsRichButtons(undefined)).toBe(false)
-})
-
-for (const version of ['2.1.295', '2.1.294']) {
-  const rich = version !== '2.1.294'
-  test(`에이전트 메시지 줄 버튼 모양 (${version}: ${rich ? '줄 전체' : '이름만'})`, KO, async ($, on) => {
-    on('session.version', () => ({ value: { version, base: version } }))
-    on('command.register', () => ({ value: undefined as never }))
-    on('clock.every', () => ({ value: undefined }))
-    on('session.start', ($, e) => e as never)
-    await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
-    const row = await $.ui.mount({
-      plugin: 'desk-look',
-      surface: 'terminal',
-      component: 'UserMessage',
-      viewport: VIEWPORT,
-      props: { text: '첫 줄 미리보기\n\n본문', origin: { kind: 'unclassified' }, isExpanded: false, from: { name: '@Explore' } } as never,
-    })
-    let drawn = JSON.stringify(await row.drawn())
-    for (let tries = 0; tries < 50 && rich && !/"type":"Button"[^}]*"children"/.test(drawn); tries++) {
-      await wait(10)
-      drawn = JSON.stringify(await row.drawn())
-    }
-    const key = /"key":"(peer-[^"]+)"/.exec(drawn)?.[1] ?? ''
-    const button = await row.find({ type: 'Button', key })
-    expect(button).toBeDefined()
-    // 줄 전체 모양이면 미리보기가 버튼 안에, 옛 모양이면 이름이 라벨이고 미리보기는 옆에
-    expect(JSON.stringify(button).includes('첫 줄 미리보기')).toBe(rich)
-    expect(drawn).toContain('첫 줄 미리보기')
-    await row.press({ key })
-    expect(await row.find({ type: 'Text', text: /본문/ })).toBeDefined()
-    await row.unmount()
+test('에이전트 메시지는 줄 전체가 버튼', KO, async ($, on) => {
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const row = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'UserMessage',
+    viewport: VIEWPORT,
+    props: { text: '첫 줄 미리보기\n\n본문', origin: { kind: 'unclassified' }, isExpanded: false, from: { name: '@Explore' } } as never,
   })
-}
+  const drawn = JSON.stringify(await row.drawn())
+  const key = /"key":"(peer-[^"]+)"/.exec(drawn)?.[1] ?? ''
+  const button = await row.find({ type: 'Button', key })
+  // 미리보기까지 버튼 안에 있어서 설명을 눌러도 펼쳐진다
+  expect(JSON.stringify(button)).toContain('첫 줄 미리보기')
+  await row.press({ key })
+  expect(await row.find({ type: 'Text', text: /본문/ })).toBeDefined()
+  await row.unmount()
+})
 
 import { clipStart, matchDiffFile, updateMessage } from '../hooks/register'
 
@@ -1051,7 +1030,6 @@ test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에
   on('clock.now', () => ({ value: 0 }))
   on('clock.every', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined as never }))
-  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
   on('session.start', ($, e) => e as never)
   on('tool.call', () => ({ result: 'ok' }) as never)
   on('turn.complete', () => ({ text: '썼어요' }) as never)
@@ -1112,7 +1090,6 @@ test('저장소 안이지만 git 이 무시하는 파일도 카드에서 누르�
   on('clock.now', () => ({ value: 0 }))
   on('clock.every', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined as never }))
-  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
   on('session.start', ($, e) => e as never)
   on('tool.call', () => ({ result: 'ok' }) as never)
   on('turn.complete', () => ({ text: '적었어요' }) as never)
@@ -1153,7 +1130,6 @@ test('아래턱의 +/− 칩을 누르면 diff 패널이 열린다', KO, async (
   on('clock.now', () => ({ value: 0 }))
   on('clock.every', () => ({ value: undefined }))
   on('command.register', () => ({ value: undefined as never }))
-  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
   on('session.start', ($, e) => e as never)
   on('session.messages', () => ({ value: [] as never }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
@@ -1306,7 +1282,6 @@ test('계획 카드: 상태와 마크다운 본문, 길면 Show all', KO, async 
 })
 
 test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장한 결과로 승인됨', KO, async ($, on) => {
-  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
   on('command.register', () => ({ value: undefined as never }))
   on('clock.every', () => ({ value: undefined }))
   on('session.start', ($, e) => e as never)
@@ -1650,7 +1625,6 @@ test('auto 는 Claude Code /config 의 language 를 따른다 (Korean → 한국
     descriptions.push(String((e as { description?: string }).description))
     return { value: undefined as never }
   })
-  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
   on('clock.every', () => ({ value: undefined }))
   on('session.start', ($, e) => e as never)
   on('process.run', gitStub as never)
