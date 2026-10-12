@@ -1493,8 +1493,9 @@ export const register: Register = (on, options) => {
   })
 
   // 어시스턴트 답변: 서명·불릿 없이 데스크톱 산문 스타일 마크다운.
+  // 도구 호출 사이 글의 요약(isSummary)도 데스크톱처럼 불릿 없이 같은 모양으로 그린다.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || e.props.isSummary) {
+    if (e.surface !== 'terminal') {
       return next(e)
     }
     const els = $.ui.resolve(e)

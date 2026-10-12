@@ -76,6 +76,21 @@ describe('응답 렌더링', () => {
     await reply.unmount()
   })
 
+  test('도구 사이 글의 요약도 불릿 없이 산문으로', KO, async $ => {
+    const block = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '상세 화면을 **확인**했습니다.', isFirstOfReply: true, isSummary: true },
+    })
+    expect(await block.find({ type: 'Markdown' })).toBeUndefined()
+    const drawn = JSON.stringify(await block.drawn())
+    expect(drawn).toContain('확인')
+    expect(drawn).not.toContain('●')
+    await block.unmount()
+  })
+
   test('mermaid 는 박스 문자 그림으로, 한글 폭을 맞춰 그린다', KO, async $ => {
     const reply = await $.ui.mount({
       plugin: 'desk-look',
