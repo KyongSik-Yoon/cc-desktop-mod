@@ -794,11 +794,23 @@ function startAgentClock($: EngineInterface) {
   })
 }
 
+// agent.spawn 없이 시작한 에이전트(포크된 스킬 /code-review 등)는 활동이 처음 보일 때 엔진 목록을 다시 읽어 올린다.
+// 목록에 없는 루프(압축·워크플로 포크)로 거듭 묻지 않도록 id 마다 한 번만. 도구 실행을 붙잡지 않게 뒤에서 한다.
+const askedAgents = new Set<string>()
+
 async function patchAgent($: EngineInterface, id: string, patch: (agent: AgentRecord) => Partial<AgentRecord>) {
-  await update($, agents, records => {
+  let isKnown = true
+  const apply = (records: Record<string, AgentRecord>) => {
     const agent = records[id]
+    isKnown = agent !== undefined
     return agent ? { ...records, [id]: { ...agent, ...patch(agent) } } : records
-  })
+  }
+  await update($, agents, apply)
+  if (isKnown || askedAgents.has(id)) return
+  askedAgents.add(id)
+  void refreshAgents($)
+    .then(() => update($, agents, apply))
+    .catch(() => undefined)
 }
 
 // 셸·모니터 상세에 보일 출력 끝부분. 출력 파일은 끝남 알림이 알려 줘서 그 전에는 없다.

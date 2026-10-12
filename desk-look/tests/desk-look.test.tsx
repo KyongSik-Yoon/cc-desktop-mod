@@ -1811,3 +1811,27 @@ test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 �
   expect(done).toContain('끝남')
   await pane.unmount()
 })
+
+test('agent.spawn 없이 시작한 에이전트(포크된 스킬)도 활동이 보이면 패널에 올라온다', KO, async ($, on) => {
+  let listed = 0
+  on('clock.now', () => ({ value: 5_000 }))
+  on('agent.list', () => {
+    listed++
+    return { value: [{ id: 'f1', description: '/code-review low', type: 'code-review', status: 'running' }] as never }
+  })
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 70 } as never })
+  expect(JSON.stringify(await pane.drawn())).not.toContain('/code-review low')
+  await $.tool.call({ tool: 'Read', file_path: 'a.md', agentId: 'f1' } as never)
+  let drawn = JSON.stringify(await pane.drawn())
+  for (let tries = 0; tries < 50 && !drawn.includes('/code-review low'); tries++) {
+    await wait(10)
+    drawn = JSON.stringify(await pane.drawn())
+  }
+  expect(drawn).toContain('/code-review low')
+  // 같은 id 로 또 와도 목록을 다시 묻지 않는다
+  const before = listed
+  await $.tool.call({ tool: 'Read', file_path: 'b.md', agentId: 'f1' } as never)
+  expect(listed).toBe(before)
+  await pane.unmount()
+})

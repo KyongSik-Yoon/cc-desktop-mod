@@ -187,7 +187,7 @@ def main(argv):
         os.makedirs(CACHE, exist_ok=True)
         open(LAST, 'w').write(argv[2])
         print(f'marked {argv[2]}')
-    elif len(argv) >= 2 and argv[1] == 'gather':
+    elif len(argv) >= 2 and argv[1] == 'gather' and ('--since' not in argv or argv.index('--since') + 1 < len(argv)):
         since = argv[argv.index('--since') + 1] if '--since' in argv else None
         gather(since)
     else:
