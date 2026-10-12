@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
-import { agentDetailOf, mergeAgents, modelLabel, orderAgents, stepTokens } from '../hooks/agents'
+import { agentDetailOf, applyNotices, backgroundTaskOf, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -1708,10 +1708,10 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
   const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never })
   expect(await band.find({ type: 'Button', key: 'agents-chip' })).toBeDefined()
   await band.press({ key: 'agents-chip' })
-  expect(opened).toEqual(['desk-agents'])
+  expect(opened).toEqual(['desk-tasks'])
   await band.unmount()
 
-  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-agents', viewport: VIEWPORT, props: { title: '에이전트', isFocused: true, bodyColumns: 60 } as never })
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 60 } as never })
   const list = JSON.stringify(await pane.drawn())
   expect(list).toContain('실행 중')
   expect(list).toContain('오늘 서울 날씨 조사')
@@ -1727,10 +1727,10 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
   await pane.press({ key: 'agent-back' })
   expect(JSON.stringify(await pane.drawn())).toContain('대화 보기')
   // 번호로 바로 상세, 없는 번호는 알린다.
-  expect(await $.command.run({ command: 'desk-agents', args: '1' } as never)).toMatchObject({ text: '1번 에이전트의 대화: 오늘 서울 날씨 조사' })
+  expect(await $.command.run({ command: 'desk-tasks', args: '1' } as never)).toMatchObject({ text: '1번 작업: 오늘 서울 날씨 조사' })
   expect(JSON.stringify(await pane.drawn())).toContain('결론: 맑음')
-  expect(await $.command.run({ command: 'desk-agents', args: '7' } as never)).toMatchObject({ text: '7번 에이전트가 없어요. /desk-agents 로 목록을 보세요.' })
-  await $.command.run({ command: 'desk-agents', args: '' } as never)
+  expect(await $.command.run({ command: 'desk-tasks', args: '7' } as never)).toMatchObject({ text: '7번 작업이 없어요. /desk-tasks 로 목록을 보세요.' })
+  await $.command.run({ command: 'desk-tasks', args: '' } as never)
 
   // 끝나면 '끝남' 아래로 가고 칩이 사라진다.
   status = 'completed'
@@ -1742,4 +1742,72 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
   const after = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
   expect(await after.find({ type: 'Button', key: 'agents-chip' })).toBeUndefined()
   await after.unmount()
+})
+
+const NOTICE = (id: string, status: string) =>
+  `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file>/tmp/t/${id}.output</output-file>\n<status>${status}</status>\n<summary>Background command "빌드 기다리기" ${status} (exit code 0)</summary>\n</task-notification>`
+
+test('백그라운드 셸·모니터 순수 함수: 결과에서 작업, 알림 읽기·반영, 출력 끝부분', KO, async () => {
+  expect(backgroundTaskOf('Bash', { command: 'sleep 9', description: '빌드 기다리기' }, { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' }, 100)).toMatchObject({ id: 'b1', kind: 'shell', description: '빌드 기다리기', command: 'sleep 9', status: 'running', startedAt: 100 })
+  expect(backgroundTaskOf('Bash', { command: 'ls' }, { stdout: 'a', stderr: '', interrupted: false }, 100)).toBe(null)
+  expect(backgroundTaskOf('Monitor', { description: '로그 감시', command: 'tail -f x', timeout_ms: 1000 }, { taskId: 'm1', timeoutMs: 1000 }, 5)).toMatchObject({ id: 'm1', kind: 'monitor', description: '로그 감시' })
+  const notices = parseNotices(`앞 글\n${NOTICE('b1', 'completed')}\n${NOTICE('zz', 'failed')}`)
+  expect(notices).toEqual([
+    { id: 'b1', status: 'completed', outputFile: '/tmp/t/b1.output', summary: 'Background command "빌드 기다리기" completed (exit code 0)' },
+    { id: 'zz', status: 'failed', outputFile: '/tmp/t/zz.output', summary: 'Background command "빌드 기다리기" failed (exit code 0)' },
+  ])
+  const applied = applyNotices({ b1: { id: 'b1', kind: 'shell', description: 'x', type: 'shell', status: 'running', toolUses: 0, startedAt: 0 } }, notices, 900)
+  expect(applied.b1).toMatchObject({ status: 'completed', endedAt: 900, outputFile: '/tmp/t/b1.output' })
+  expect(applied.zz).toBeUndefined()
+  expect(tailOf('a\nb\nc\n', 2)).toBe('… 1줄 더\nb\nc')
+})
+
+test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 알림 뒤 출력', KO, async ($, on) => {
+  let now = 1_000
+  const stopped: string[] = []
+  on('clock.now', () => ({ value: now }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.toast', () => ({ value: undefined as never }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('fs.read', ($, e) => ({ value: (String((e as { path?: string }).path ?? e) === '/tmp/t/b2.output' ? 'line1\nline2\n' : '') as never }))
+  on('tool.call', ($, e) => {
+    if (e.tool === 'TaskStop') {
+      stopped.push(String((e as { task_id?: string }).task_id))
+      return { result: { message: 'stopped', task_id: (e as { task_id?: string }).task_id, task_type: 'local_bash' } } as never
+    }
+    const id = (e as { command?: string }).command === 'make watch' ? 'b1' : 'b2'
+    return { result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: id } } as never
+  })
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+
+  await $.tool.call({ tool: 'Bash', command: 'make watch', description: '감시 빌드', run_in_background: true } as never)
+  now = 2_000
+  await $.tool.call({ tool: 'Bash', command: 'sleep 20; echo done', run_in_background: true } as never)
+  now = 64_000
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 70 } as never })
+  const list = JSON.stringify(await pane.drawn())
+  expect(list).toContain('감시 빌드')
+  expect(list).toContain('make watch')
+  expect(list).toContain('1m 3s')
+  expect(list).toContain('자세히')
+
+  // 멈춤: 한 번은 묻기만, 두 번째에 TaskStop
+  await pane.press({ key: 'stop-b1' })
+  expect(stopped).toEqual([])
+  expect(JSON.stringify(await pane.drawn())).toContain('멈출까요?')
+  await pane.press({ key: 'stop-b1' })
+  expect(stopped).toEqual(['b1'])
+
+  // 끝남 알림 → 끝남, 상세에 출력 끝부분
+  await $.prompt.submit({ text: NOTICE('b2', 'completed'), origin: { kind: 'task-notification' }, wait: false } as never)
+  expect(await $.command.run({ command: 'desk-tasks', args: '1' } as never)).toMatchObject({ text: '1번 작업: sleep 20; echo done' })
+  const detail = JSON.stringify(await pane.drawn())
+  expect(detail).toContain('완료')
+  expect(detail).toContain('빌드 기다리기')
+  expect(detail).toContain('line2')
+  await $.command.run({ command: 'desk-tasks', args: '' } as never)
+  const done = JSON.stringify(await pane.drawn())
+  expect(done).toContain('중지됨')
+  expect(done).toContain('끝남')
+  await pane.unmount()
 })

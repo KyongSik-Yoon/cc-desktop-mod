@@ -122,3 +122,58 @@ export function agentDetailOf(id: string, messages: ReadonlyArray<SessionMessage
   })
   return { id, prompt, items: items.slice(-AGENT_ITEMS) }
 }
+
+// 백그라운드로 넘어간 셸(Bash 결과의 backgroundTaskId)이나 모니터(Monitor 결과의 taskId)를 기록 한 줄로.
+// run_in_background 뿐 아니라 Ctrl+B·시간 초과로 넘어간 명령도 결과에 id 가 있다.
+export function backgroundTaskOf(tool: string, input: Record<string, unknown>, result: unknown, startedAt: number): AgentRecord | null {
+  const fields = typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
+  const text = (value: unknown) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
+  const command = text(input.command)
+  if (tool === 'Bash' && typeof fields.backgroundTaskId === 'string') {
+    return { id: fields.backgroundTaskId, kind: 'shell', description: text(input.description) ?? command ?? 'shell', type: 'shell', status: 'running', command, startedAt, toolUses: 0 }
+  }
+  if (tool === 'Monitor' && typeof fields.taskId === 'string') {
+    return { id: fields.taskId, kind: 'monitor', description: text(input.description) ?? command ?? 'monitor', type: 'monitor', status: 'running', command, startedAt, toolUses: 0 }
+  }
+  return null
+}
+
+export type TaskNotice = { id: string; status?: string; outputFile?: string; summary?: string }
+
+// 작업이 끝났다는 알림 글(<task-notification> 묶음, 여러 개일 수 있다)에서 id·상태·출력 파일·요약을 읽는다.
+export function parseNotices(text: string): TaskNotice[] {
+  const tag = (block: string, name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(block)?.[1]?.trim()
+  return [...text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)].flatMap(match => {
+    const block = match[1] ?? ''
+    const id = tag(block, 'task-id')
+    if (!id) return []
+    const status = tag(block, 'status')
+    const outputFile = tag(block, 'output-file')
+    const summary = tag(block, 'summary')
+    return [{ id, ...(status ? { status } : {}), ...(outputFile ? { outputFile } : {}), ...(summary ? { summary } : {}) }]
+  })
+}
+
+// 알림을 기록에 반영한다. 끝난 상태(completed·failed·killed 등)면 끝난 시각을 적는다. 모르는 id 는 건너뛴다.
+export function applyNotices(records: Readonly<Record<string, AgentRecord>>, notices: ReadonlyArray<TaskNotice>, now: number): Record<string, AgentRecord> {
+  const next = { ...records }
+  for (const notice of notices) {
+    const task = next[notice.id]
+    if (!task) continue
+    const status = notice.status && !isLive(notice.status) ? notice.status : task.status
+    next[notice.id] = {
+      ...task,
+      status,
+      ...(notice.outputFile ? { outputFile: notice.outputFile } : {}),
+      ...(notice.summary ? { summary: notice.summary } : {}),
+      ...(!isLive(status) ? { endedAt: task.endedAt ?? now, activity: undefined } : {}),
+    }
+  }
+  return next
+}
+
+// 출력의 마지막 lines 줄(앞에 잘린 줄 수).
+export function tailOf(text: string, lines: number): string {
+  const all = text.replace(/\n+$/, '').split('\n')
+  return all.length > lines ? `${T.moreLines(all.length - lines)}\n${all.slice(-lines).join('\n')}` : all.join('\n')
+}

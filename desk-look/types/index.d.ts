@@ -106,7 +106,9 @@ export type CommitInfo = { sha: string; short: string; subject: string; author: 
 // base: 비교 기준(브랜치 이름과 merge-base), 못 찾으면 null. commit: 커밋별에서 펼친 커밋.
 export type DiffView = { scope: DiffScope; base: { ref: string; sha: string } | null; files: FileDiff[]; commits: CommitInfo[]; commit: string | null; commitFiles: FileDiff[] }
 
-// 에이전트 패널 한 줄: $.agent.list() 의 행에 이 세션이 이벤트로 모은 수치를 더한 것.
+// 백그라운드 작업 패널 한 줄. kind 가 없으면 에이전트: $.agent.list() 의 행에 이 세션이 이벤트로 모은 수치를 더한 것.
+// shell(백그라운드로 넘어간 Bash)·monitor(Monitor)는 엔진이 목록을 주지 않아 도구 결과와 끝남 알림으로만 안다.
+// command: 셸·모니터의 명령. outputFile·summary: 끝남 알림이 알려 준 출력 파일과 한 줄 요약.
 // 엔진 목록은 끝난 에이전트를 곧 지우므로 끝난 것도 여기 남는다. tokens 는 마지막 요청의 컨텍스트 크기.
 // activity: 지금 도는 도구(Fetching 등), 없으면 없다. startedAt·endedAt 은 ms. listed: 엔진 목록에 한 번이라도 있었는지.
 export type AgentRecord = {
@@ -122,6 +124,10 @@ export type AgentRecord = {
   toolUses: number
   activity?: string
   listed?: boolean
+  kind?: 'agent' | 'shell' | 'monitor'
+  command?: string
+  outputFile?: string
+  summary?: string
 }
 
 // 에이전트 상세: 처음 받은 지시(prompt)와 그 뒤의 답변 글·도구 묶음·사용자 메시지 차례.
@@ -164,6 +170,8 @@ declare module 'claude-code' {
       agentView: string | null
       agentDetail: AgentDetail | null
       agentClock: number
+      // 셸·모니터 상세에서 보이는 출력 끝부분(끝남 알림의 출력 파일에서). 없으면 null.
+      taskOutput: { id: string; text: string | null } | null
     }
   }
 }

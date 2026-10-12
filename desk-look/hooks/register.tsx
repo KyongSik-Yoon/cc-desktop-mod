@@ -5,7 +5,7 @@ import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
-import { activityOf, agentDetailOf, isLive, mergeAgents, modelLabel, orderAgents, stepTokens } from './agents'
+import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
 import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
@@ -38,7 +38,7 @@ const PANE = 'desk-diff'
 const SESSIONS_PANE = 'desk-sessions'
 const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
-const AGENTS_PANE = 'desk-agents'
+const AGENTS_PANE = 'desk-tasks'
 const PER_GROUP = 8
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
@@ -73,6 +73,7 @@ const agents = atom({ plugin: 'desk-look', key: 'agents' } as const, {} as Recor
 const agentView = atom({ plugin: 'desk-look', key: 'agentView' } as const, null as string | null)
 const agentDetail = atom({ plugin: 'desk-look', key: 'agentDetail' } as const, null as AgentDetail | null)
 const agentClock = atom({ plugin: 'desk-look', key: 'agentClock' } as const, 0)
+const taskOutput = atom({ plugin: 'desk-look', key: 'taskOutput' } as const, null as { id: string; text: string | null } | null)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
@@ -800,9 +801,19 @@ async function patchAgent($: EngineInterface, id: string, patch: (agent: AgentRe
   })
 }
 
+// 셸·모니터 상세에 보일 출력 끝부분. 출력 파일은 끝남 알림이 알려 줘서 그 전에는 없다.
+const OUTPUT_LINES = 40
+
 async function refreshAgentDetail($: EngineInterface) {
   const id = await read($, agentView)
   if (id === null) return
+  const task = (await read($, agents))[id]
+  if (task?.kind === 'shell' || task?.kind === 'monitor') {
+    const raw = task.outputFile ? await $.fs.read(task.outputFile).catch(() => null) : null
+    const text = typeof raw === 'string' ? tailOf(raw, OUTPUT_LINES) : null
+    await update($, taskOutput, () => ({ id, text }))
+    return
+  }
   const found = await $.session.messages({ agentId: id })
   const next = Array.isArray(found) ? agentDetailOf(id, found) : null
   await update($, agentDetail, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
@@ -815,7 +826,32 @@ async function openAgents($: EngineInterface, id: string | null = null) {
   await $.ui.open({ id: AGENTS_PANE, title: T.paneAgents, focus: true })
 }
 
-// 아래턱 오른쪽의 "◆ 2": 도는 에이전트 수, 누르면 /desk-agents 패널.
+// 작업 멈추기: Revert 처럼 5초 안에 두 번 눌러야 한다. 엔진의 TaskStop 도구를 부른다(셸·모니터·백그라운드 에이전트).
+const STOP_ARM_MS = 5000
+
+async function stopTask($: EngineInterface, task: AgentRecord, isArmed: boolean) {
+  const key = `stop:${task.id}`
+  if (!isArmed) {
+    await update($, open, state => ({ ...state, [key]: true }))
+    $.clock.after(STOP_ARM_MS, () => void update($, open, state => ({ ...state, [key]: false })))
+    return
+  }
+  await update($, open, state => ({ ...state, [key]: false }))
+  const ran = await $.tool.call({ tool: 'TaskStop', task_id: task.id } as never).catch((error: unknown) => ({ deny: String(error) }))
+  if ('deny' in ran && ran.deny !== undefined) {
+    $.ui.toast(T.stopFailed(ran.deny))
+    return
+  }
+  if (ran.isError) {
+    $.ui.toast(T.stopFailed(ran.text ?? ''))
+    return
+  }
+  const now = await $.clock.now()
+  await patchAgent($, task.id, agent => ({ status: 'killed', endedAt: agent.endedAt ?? now, activity: undefined }))
+  $.ui.toast(T.stopped(task.description))
+}
+
+// 아래턱 오른쪽의 "◆ 2": 도는 백그라운드 작업(에이전트·셸·모니터) 수, 누르면 /desk-tasks 패널.
 function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentRecord>) {
   const live = Object.values(records).filter(agent => isLive(agent.status)).length
   if (live === 0) return null
@@ -846,23 +882,47 @@ const agentElapsed = (agent: AgentRecord, now: number) =>
   agent.startedAt === undefined ? undefined : formatElapsed((agent.endedAt ?? now) - agent.startedAt)
 
 // 목록의 카드 한 장: 데스크톱 Background tasks 처럼 제목, 종류·시간, 모델·토큰·도구 수·하는 일·대화 보기.
-function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: number, now: number, columns: number) {
+const KIND_LABEL = (agent: AgentRecord) => (agent.kind === 'shell' ? T.kindShell : agent.kind === 'monitor' ? T.kindMonitor : agent.type)
+
+// 도는 작업의 멈춤 버튼: 한 번 누르면 "멈출까요?", 5초 안에 한 번 더 누르면 멈춘다.
+function stopButton(els: Els, $: EngineInterface, agent: AgentRecord, armed: Record<string, boolean>) {
+  const isArmed = armed[`stop:${agent.id}`] ?? false
+  return (
+    <els.Button
+      key={`stop-${agent.id}`}
+      plain
+      dimColor={!isArmed}
+      label={isArmed ? T.stopConfirm : T.stop}
+      onPress={() => void stopTask($, agent, isArmed).catch(() => undefined)}
+    />
+  )
+}
+
+// 목록의 카드 한 장: 데스크톱 Background tasks 처럼 제목, 종류·시간·상태, 그 아래 수치(에이전트) 또는 명령(셸·모니터).
+function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: number, now: number, columns: number, armed: Record<string, boolean>) {
   const { Box, Text } = els
   const live = isLive(agent.status)
   const elapsed = agentElapsed(agent, now)
+  const isAgent = agent.kind === undefined || agent.kind === 'agent'
+  const open = () => void openAgents($, agent.id)
   return (
     <Box key={`agent-card-${agent.id}`} flexDirection="column" borderStyle="round" borderColor={live ? COLORS.clay : COLORS.border} paddingX={1}>
-      {rowButton(els, { key: `agent-title-${agent.id}`, onPress: () => void openAgents($, agent.id) }, clip(agent.description, Math.max(10, columns - 6)))}
+      {rowButton(els, { key: `agent-title-${agent.id}`, onPress: open }, clip(agent.description, Math.max(10, columns - 6)))}
       <Box columnGap={1}>
         <Text color={COLORS.muted}>{`${number}`}</Text>
-        <Text color={COLORS.muted}>{agent.type}</Text>
+        <Text color={COLORS.muted}>{KIND_LABEL(agent)}</Text>
         {elapsed && <Text color={COLORS.muted}>{elapsed}</Text>}
         {!live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{T.agentStatus[agent.status] ?? agent.status}</Text>}
       </Box>
       <Box columnGap={2} flexWrap="wrap">
-        <Text color={COLORS.muted}>{agentFacts(agent).join('  ')}</Text>
+        {isAgent ? (
+          <Text color={COLORS.muted}>{agentFacts(agent).join('  ')}</Text>
+        ) : (
+          agent.command && agent.command !== agent.description && <Text color={COLORS.muted}>{clip(agent.command.split('\n')[0] ?? '', Math.max(10, columns - 30))}</Text>
+        )}
         {live && agent.activity && <Text color={COLORS.clay}>{agent.activity}</Text>}
-        {rowButton(els, { key: `agent-view-${agent.id}`, onPress: () => void openAgents($, agent.id) }, T.viewTranscript)}
+        {rowButton(els, { key: `agent-view-${agent.id}`, onPress: open }, isAgent ? T.viewTranscript : T.viewDetails)}
+        {live && stopButton(els, $, agent, armed)}
       </Box>
     </Box>
   )
@@ -1195,7 +1255,7 @@ export const register: Register = (on, options) => {
       description: T.cmdContext,
     })
     await $.command.register({
-      name: 'desk-agents',
+      name: 'desk-tasks',
       description: T.cmdAgents,
       argumentHint: T.cmdAgentsHint,
     })
@@ -1229,6 +1289,16 @@ export const register: Register = (on, options) => {
   // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다(타이머를 기다리지 않게).
   on('prompt.submit', async ($, e, next) => {
     void refreshSurface($).catch(() => undefined)
+    // 백그라운드 작업이 끝났다는 알림: 셸·모니터는 이것으로만 끝을 안다.
+    if (e.origin.kind === 'task-notification') {
+      const notices = parseNotices(e.text)
+      if (notices.length > 0) {
+        const now = await $.clock.now()
+        await update($, agents, records => applyNotices(records, notices, now)).catch(() => undefined)
+        const view = await read($, agentView)
+        if (notices.some(notice => notice.id === view)) void refreshAgentDetail($).catch(() => undefined)
+      }
+    }
     const submitted = await next(e)
     // 붙여 넣은 이미지가 저장된 뒤 다시 훑는다. 말풍선이 이 값을 읽어 썸네일로 다시 그려진다.
     void refreshImages($).catch(() => undefined)
@@ -1318,7 +1388,7 @@ export const register: Register = (on, options) => {
     return { text: T.diffOpened }
   })
 
-  on('command.run', { command: 'desk-agents' }, async ($, e) => {
+  on('command.run', { command: 'desk-tasks' }, async ($, e) => {
     const index = Number.parseInt(e.args.trim(), 10)
     if (Number.isInteger(index) && index > 0) {
       await refreshAgents($).catch(() => undefined)
@@ -1378,8 +1448,19 @@ export const register: Register = (on, options) => {
     const agentId = e.agentId
     const activity = activityOf(String(e.tool))
     if (agentId !== undefined) await patchAgent($, agentId, agent => ({ toolUses: agent.toolUses + 1, activity })).catch(() => undefined)
+    const startedAt = await $.clock.now()
     const ran = await next(e)
     if (agentId !== undefined) await patchAgent($, agentId, agent => (agent.activity === activity ? { activity: undefined } : {})).catch(() => undefined)
+    // 백그라운드로 넘어간 셸·모니터는 백그라운드 작업 패널에 올린다. 모델이 멈춘 작업은 멈춤으로.
+    if (!ran.isError && ran.result !== undefined) {
+      const task = backgroundTaskOf(String(e.tool), fieldsOf(e), ran.result, startedAt)
+      if (task) {
+        await update($, agents, records => ({ ...records, [task.id]: task })).catch(() => undefined)
+        startAgentClock($)
+      }
+      const stopped = String(e.tool) === 'TaskStop' || String(e.tool) === 'KillShell' ? stringField(fieldsOf(ran.result), 'task_id') ?? stringField(fieldsOf(ran.result), 'shell_id') : undefined
+      if (stopped) await patchAgent($, stopped, agent => ({ status: 'killed', endedAt: agent.endedAt ?? startedAt, activity: undefined })).catch(() => undefined)
+    }
     // 턴 끝 카드용: 성공한 편집만 파일별 +/− 로 모은다
     const tool = String(e.tool)
     if (FILE_EDITING.has(tool) && !ran.isError) {
@@ -1768,17 +1849,52 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
-    const [records, view, detail, openState, now] = await Promise.all([
+    const [records, view, detail, openState, now, output] = await Promise.all([
       read($, agents),
       read($, agentView),
       read($, agentDetail),
       read($, open),
       $.clock.now(),
+      read($, taskOutput),
       read($, agentClock),
     ])
     const columns = Math.max(24, e.props.bodyColumns)
 
     const agent = view === null ? undefined : records[view]
+    const back = rowButton(els, { key: 'agent-back', dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)
+    // 셸·모니터 상세: 데스크톱·엔진의 Shell details 처럼 상태, 실행 시간, 명령, 요약, 출력 끝부분.
+    if (agent && (agent.kind === 'shell' || agent.kind === 'monitor')) {
+      const live = isLive(agent.status)
+      const shownOutput = output?.id === agent.id ? output.text : null
+      const field = (label: string, value: unknown) => (
+        <Box columnGap={1}>
+          <Text color={COLORS.muted}>{label}</Text>
+          {value as never}
+        </Box>
+      )
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          <Box columnGap={1}>
+            {back}
+            <Text color={COLORS.text} bold wrap="truncate-end">
+              {agent.description}
+            </Text>
+          </Box>
+          <Box flexDirection="column">
+            {field(T.taskStatus, <Text color={live ? COLORS.clay : AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{T.agentStatus[agent.status] ?? agent.status}</Text>)}
+            {field(T.taskRuntime, <Text color={COLORS.text}>{agentElapsed(agent, now) ?? '—'}</Text>)}
+            {field(T.taskKind, <Text color={COLORS.text}>{KIND_LABEL(agent)}</Text>)}
+            {agent.summary && field(T.taskSummary, <Text color={COLORS.text}>{agent.summary}</Text>)}
+          </Box>
+          {agent.command && <els.Code source={agent.command} language="bash" wrap="wrap" />}
+          <Box flexDirection="column">
+            <Text color={COLORS.muted}>{T.taskOutput}</Text>
+            <Text color={shownOutput ? COLORS.text : COLORS.muted}>{shownOutput ?? (live ? T.outputWhenDone : T.noOutput)}</Text>
+          </Box>
+          {live && stopButton(els, $, agent, openState)}
+        </Box>
+      )
+    }
     if (view !== null) {
       const shown = detail?.id === view ? detail : null
       const live = agent ? isLive(agent.status) : false
@@ -1788,10 +1904,11 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
-            {rowButton(els, { key: 'agent-back', dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)}
+            {back}
             <Text color={COLORS.text} bold wrap="truncate-end">
               {agent?.description ?? view}
             </Text>
+            {agent && live && stopButton(els, $, agent, openState)}
           </Box>
           {agent && (
             <Box columnGap={1} flexWrap="wrap">
@@ -1838,13 +1955,13 @@ export const register: Register = (on, options) => {
         {live.length > 0 && (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>{T.agentsRunning}</Text>
-            {live.map((item, index) => agentRow(els, $, item, index + 1, now, columns))}
+            {live.map((item, index) => agentRow(els, $, item, index + 1, now, columns, openState))}
           </Box>
         )}
         {done.length > 0 && (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>{T.agentsDone}</Text>
-            {done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns))}
+            {done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns, openState))}
           </Box>
         )}
       </Box>

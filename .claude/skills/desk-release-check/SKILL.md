@@ -29,7 +29,7 @@ python3 .claude/skills/desk-release-check/scripts/release_check.py gather --sinc
 요약에서 이름만 보고 판단하지 말고, 후보마다 전체 diff 나 최신 스냅숏에서 그 선언과 doc 주석을 읽는다. 컴포넌트 props 변화(예: `Button` 이 children 을 받게 된 것)는 이름 요약에 안 잡히니, diff 에서 `props`, `ui.render`, 컴포넌트 이름 근처를 따로 훑는다.
 
 후보마다 이 질문에 대어 본다.
-1. **데스크톱 Code 탭에 있는데 desk-look 에 없던 것을 이제 만들 수 있나?** README 의 "한계" 문구와 지난 결정이 출발점이다. 예: 백그라운드 셸 작업 목록, 에이전트 정지(`/desk-agents`), 패널에서 키보드로 누르기.
+1. **데스크톱 Code 탭에 있는데 desk-look 에 없던 것을 이제 만들 수 있나?** README 의 "한계" 문구와 지난 결정이 출발점이다. 예: 도는 셸의 출력을 끝나기 전에 읽기(`/desk-tasks` 는 출력 파일을 끝남 알림으로만 안다), 패널에서 키보드로 누르기.
 2. **지금 우회하고 있는 코드를 걷어낼 수 있나?** desk-look 은 최신 Claude Code 만 지원하므로, 새 버전이 해결한 우회 코드·버전 분기·옛 엔진용 fallback 은 기본으로 **바로 할 것**이다. `hooks/` 에서 버전 번호(`2.1.`)나 "엔진이 … 못 해서" 류 주석을 grep 한다.
 3. **엔진 기본 그림이 바뀌어 desk-look 이 덮어쓰는 곳이 어긋나나?** desk-look 이 `ui.render` 로 가로채는 컴포넌트(AssistantMessage, UserMessage, ToolUse, ToolGroup, AbovePrompt, TurnDuration, Spinner, PromptHint, Pane 등)의 props 변화나 노트의 화면 변경을 본다.
 4. **고쳐진 엔진 버그 때문에 desk-look 쪽 방어 코드가 불필요해졌거나, 반대로 새 동작에 맞춰야 하나?**
