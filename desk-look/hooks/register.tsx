@@ -137,12 +137,13 @@ export function sessionEditsOf(state: Runs): SessionEdit[] {
   return list
 }
 
-// diff 패널에 git 대신 세션 기록으로 보일 편집: git diff 가 잡지 못하는 저장소 밖(또는 저장소가 아닌 곳) 파일만.
-// 저장소 안 파일은 git 이 정본이다(커밋했으면 패널에서 빠지는 게 맞다).
+// diff 패널에 git 대신 세션 기록으로 보일 편집: git diff 가 잡지 못하는 저장소 밖(또는 저장소가 아닌 곳) 파일과
+// 저장소 안이지만 git 이 무시하는 파일(.gitignore). 그 밖의 저장소 안 파일은 git 이 정본이다(커밋했으면 패널에서 빠지는 게 맞다).
 export function outsideEdits(edits: ReadonlyArray<SessionEdit>, info: RepoInfo | null): SessionEdit[] {
   if (info?.isRepo !== true) return [...edits]
   const root = info.root
-  return root ? edits.filter(edit => !edit.path.startsWith(`${root}/`)) : []
+  const ignored = new Set(info.ignored ?? [])
+  return root ? edits.filter(edit => !edit.path.startsWith(`${root}/`) || ignored.has(edit.path)) : []
 }
 
 // 소요 시간 줄과 턴 기록을 durationMs 로 짝짓는다. 둘이 같은 값을 재지만 반올림 차이를 1초까지 봐준다.
@@ -544,11 +545,16 @@ async function refreshDiff($: EngineInterface) {
     ...parseDiff(tracked.stdout),
     ...freshDiffs.flatMap(ran => parseDiff(ran.stdout, true)),
   ]
+  // 이 세션이 고친 저장소 안 파일 중 git 이 무시하는 것은 git diff·ls-files 어디에도 안 잡힌다. 세션 기록으로 보이게 골라 둔다.
+  const root = top.stdout.trim()
+  const inRepo = root ? sessionEditsOf(await read($, runs)).map(edit => edit.path).filter(path => path.startsWith(`${root}/`)) : []
+  const ignored = inRepo.length ? (await git(['check-ignore', '--', ...inRepo])).stdout.split('\n').filter(Boolean) : []
   await update($, repo, () => ({
-    name: top.stdout.trim().split('/').pop() ?? '',
+    name: root.split('/').pop() ?? '',
     branch: branch.exitCode === 0 ? branch.stdout.trim() : null,
     isRepo: true,
-    root: top.stdout.trim() || undefined,
+    root: root || undefined,
+    ignored,
   }))
   await update($, diff, () => files)
 }

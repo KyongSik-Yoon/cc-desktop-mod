@@ -1082,6 +1082,51 @@ test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에
   await row.unmount()
 })
 
+test('저장소 안이지만 git 이 무시하는 파일도 카드에서 누르면 diff 패널에 대화 기록의 편집이 보인다', KO, async ($, on) => {
+  const path = '/repo/.claude/handoff/CURRENT.md'
+  const asked: string[][] = []
+  on('process.run', (($: unknown, e: { argv: string[] }) => {
+    if (e.argv[1] !== 'check-ignore') return gitStub($, e)
+    asked.push(e.argv.slice(3))
+    const stdout = e.argv.includes(path) ? `${path}\n` : ''
+    return { value: { exitCode: stdout ? 0 : 1, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('clock.now', () => ({ value: 0 }))
+  on('clock.every', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined as never }))
+  on('session.version', () => ({ value: { version: '2.1.295', base: '2.1.295' } }))
+  on('session.start', ($, e) => e as never)
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('turn.complete', () => ({ text: '적었어요' }) as never)
+  on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>Baked for 5s</Text>
+  })
+  const edit = { file_path: path, old_string: 'b', new_string: 'c' }
+  const hunk = { oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' a', '-b', '+c'] }
+  on('session.messages', () => ({
+    value: [
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'e1', tool: 'Edit', input: edit }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'e1', text: 'edited', isError: false, result: { filePath: path, structuredPatch: [hunk] } }] },
+    ] as never,
+  }))
+  await $.session.start({ source: 'resume', cwd: '/repo', surface: 'terminal' } as never)
+  await $.tool.call({ tool: 'Edit', ...edit } as never)
+  await $.turn.complete({ durationMs: 5000, reason: 'answer', answer: '적었어요', turnId: 't1' } as never)
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 5000 } })
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  await row.press({ key: `diffat-5000-${path}` })
+  for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Code', source: '@@ -1,2 +1,2 @@\n a\n-b\n+c' } as never)); tries++) await wait(10)
+  expect(asked.some(paths => paths.includes(path))).toBe(true)
+  // git diff 의 a.txt 와 함께 무시 파일이 세션 기록으로 보인다
+  expect(await pane.find({ type: 'Code', source: '@@ -1,2 +1,2 @@\n a\n-b\n+c' } as never)).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /git 밖 파일/ })).toBeDefined()
+  await pane.unmount()
+  await row.unmount()
+})
+
 test('아래턱의 +/− 칩을 누르면 diff 패널이 열린다', KO, async ($, on) => {
   const opened: string[] = []
   on('process.run', gitStub as never)
