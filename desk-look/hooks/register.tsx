@@ -93,6 +93,25 @@ export function mergeEdit(list: TurnEdit[], edit: TurnEdit): TurnEdit[] {
   )
 }
 
+// /desk-update 가 올리는 이 플러그인(마켓플레이스 저장소 이름 그대로).
+const MARKETPLACE = 'cc-desktop-mod'
+const PLUGIN_ID = `desk-look@${MARKETPLACE}`
+
+const lastLine = (text: string) => text.trim().split('\n').pop() ?? ''
+
+// `claude plugin update --json` 의 결과 한 줄을 사람에게 보일 문장으로.
+export function updateMessage(exitCode: number, stdout: string, stderr: string): string {
+  let result: { outcome?: string; updateOutcome?: string; oldVersion?: string; newVersion?: string; message?: string } | null = null
+  try {
+    result = JSON.parse(lastLine(stdout))
+  } catch {
+    result = null
+  }
+  if (exitCode !== 0 || result?.outcome !== 'ok') return T.updateFailed(result?.message ?? lastLine(stderr || stdout))
+  if (result.updateOutcome === 'up_to_date') return T.updateLatest(result.newVersion ?? '')
+  return T.updateDone(result.oldVersion ?? '', result.newVersion ?? '')
+}
+
 // 세션 편집: 파일별로 합치고 헌크는 편집 순서대로 붙인다. 최근 파일 SESSION_FILES 개, 파일마다 헌크 SESSION_PATCHES 개까지.
 const SESSION_FILES = 50
 const SESSION_PATCHES = 20
@@ -1087,6 +1106,10 @@ export const register: Register = (on, options) => {
       name: 'desk-context',
       description: T.cmdContext,
     })
+    await $.command.register({
+      name: 'desk-update',
+      description: T.cmdUpdate,
+    })
     void refreshDiff($).catch(() => undefined)
     void refreshUsage($).catch(() => undefined)
     if (showPr) void refreshPr($, false).catch(() => undefined)
@@ -1169,6 +1192,15 @@ export const register: Register = (on, options) => {
     await refreshSessions($)
     await $.ui.open({ id: SESSIONS_PANE, title: T.paneSessions, focus: true })
     return { text: T.sessionsOpened }
+  })
+
+  // 마켓 목록을 새로 받고 desk-look 을 올린다. 플러그인이 스스로 다시 불러올 길은 없어 /reload-plugins 는 사람이 한다.
+  on('command.run', { command: 'desk-update' }, async $ => {
+    const claude = (args: string[]) => $.process.run(['claude', 'plugin', ...args], { timeoutMs: 150_000 })
+    const market = await claude(['marketplace', 'update', MARKETPLACE])
+    if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
+    const ran = await claude(['update', PLUGIN_ID, '--json'])
+    return { text: updateMessage(ran.exitCode, ran.stdout, ran.stderr) }
   })
 
   on('command.run', { command: 'desk-context' }, async $ => {

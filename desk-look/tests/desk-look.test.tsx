@@ -978,7 +978,7 @@ for (const version of ['2.1.295', '2.1.294']) {
   })
 }
 
-import { clipStart, matchDiffFile } from '../hooks/register'
+import { clipStart, matchDiffFile, updateMessage } from '../hooks/register'
 
 test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', KO, () => {
   const files = [{ path: 'a.txt' }, { path: 'src/a.txt' }, { path: 'b.txt' }]
@@ -1107,6 +1107,27 @@ test('아래턱의 +/− 칩을 누르면 diff 패널이 열린다', KO, async (
   await band.press({ key: 'chin-diff' })
   expect(opened).toEqual(['desk-diff', 'desk-diff'])
   await band.unmount()
+})
+
+test('/desk-update: 마켓 목록을 새로 받고 desk-look 을 올린다', KO, async ($, on) => {
+  const ran: string[] = []
+  const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  on('process.run', ($, e: { argv: readonly string[] }) => {
+    ran.push(e.argv.join(' '))
+    return (e.argv[2] === 'update'
+      ? ok('{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.15.4","newVersion":"0.15.5"}\n')
+      : ok('✔ Successfully updated marketplace: cc-desktop-mod\n')) as never
+  })
+  const done = await $.command.run({ command: 'desk-update', args: '' } as never)
+  expect(ran).toEqual(['claude plugin marketplace update cc-desktop-mod', 'claude plugin update desk-look@cc-desktop-mod --json'])
+  expect((done as { text: string }).text).toBe('desk-look 을 0.15.4 → 0.15.5 로 올렸어요. /reload-plugins 로 적용하세요.')
+})
+
+test('/desk-update 결과 문장: 최신, 실패', KO, () => {
+  setLang('ko')
+  expect(updateMessage(0, '{"outcome":"ok","updateOutcome":"up_to_date","oldVersion":"0.15.5","newVersion":"0.15.5"}', '')).toBe('desk-look 은 이미 최신(0.15.5)이에요.')
+  expect(updateMessage(1, '{"outcome":"error","message":"Plugin not found"}', '')).toBe('desk-look 을 올리지 못했어요: Plugin not found')
+  expect(updateMessage(1, '', 'network down\n')).toBe('desk-look 을 올리지 못했어요: network down')
 })
 
 test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편다', KO, async ($, on) => {
