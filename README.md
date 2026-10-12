@@ -2,7 +2,7 @@
 
 **English** | [한국어](README.ko.md)
 
-**desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look like the Code tab of the Claude desktop app: prompt bubbles, full-width markdown tables, mermaid diagrams, folded tool calls, subagent cards, a plan card, a checklist, a diff pane, a pull request bar for GitHub and GitLab, and a context usage meter.
+**desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look like the Code tab of the Claude desktop app: prompt bubbles, full-width markdown tables, mermaid diagrams, folded tool calls, subagent cards, a plan card, a checklist, a diff pane, a background tasks pane, a pull request bar for GitHub and GitLab, and a context usage meter.
 It is a Claude Code function-hook plugin: the engine stays as it is, and only the way things are drawn on screen changes.
 
 ![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)
@@ -21,7 +21,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | End of turn | A duration line | A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer |
 | Plan (ExitPlanMode) | Folded into one line with other tools | A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval dialog is the engine's own |
 | Tasks | Tool lines | A checklist card above the prompt, `Tasks 2/5` (✓ done, ◉ in progress, ○ to do). Only in sessions that have `TodoWrite` or `TaskCreate` |
-| Above the prompt | — | A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right. Once context passes half, a `◑ 62%` chip sits next to the band (caution color from 75%, warning color from 90%); click it for the `/desk-context` pane |
+| Above the prompt | — | A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right (click it for the `/desk-diff` pane). While background tasks run, a `⋯ 2` chip next to the band opens the `/desk-tasks` pane. Once context passes half, a `◑ 62%` chip sits next to the band (caution color from 75%, warning color from 90%); click it for the `/desk-context` pane |
 | Progress | `✻ Simmering… (12s · ↓ 300 tokens)` | `●·· Running…  2m 29s` (a word that matches the work, clay-colored dots) |
 | Code blocks | No way to copy | Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does |
 | Questions (AskUserQuestion) | A list under the prompt | A question card right above the prompt. With an empty prompt, pick by number alone (`1`-`8` options, `0` submit, `9` the default dialog); multi-select with ☐/☑; `Other` takes two clicks to type (the first selects the row); hover an option for its preview. A notification goes out when the card opens, as the engine dialog does (`preferredNotifChannel`). The transcript records `Asked question → answer` |
@@ -33,10 +33,10 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-diff [file]` | — | A right-side pane with per-file diffs and three scopes, like the desktop diff panel: `Uncommitted`, `Branch` (the whole branch since it left the base branch, via `merge-base`) and `Commits` (per commit: click a commit to expand its diff). Give a file name (the end of the path is enough) to scroll to it, or `branch` / `commits` to open in that scope. Click a file's header row to fold or unfold its diff. Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files) |
 | `/desk-sessions` | — | A right-side pane with recent sessions grouped by project. A search box at the top (title and folder; Enter opens the first result). Click a row or run `/desk-sessions <number>` to switch |
 | `/desk-context` | The `/context` grid | A right-side pane with a context bar (tokens / window, auto-compact point), a per-category breakdown (the same categories as `/context`; a local estimate, so no API requests), 5-hour and 7-day usage limits with time until reset, and the session cost. `↻` recalculates |
-| `/desk-tasks [number]` | Running shells and agents only show as `1 shell still running` | A right-side pane like the desktop's Background tasks: this session's agents, background shells (`run_in_background`, Ctrl+B or a timed-out command) and monitors, under `Running` and `Done`. Agents show their model, tokens, tool uses, what they are doing now (`Fetching`) and `View transcript`: the prompt, their messages, their tool calls folded as in the transcript, and their report. Shells and monitors show their command and `View details`: status, runtime, the result line and the end of the output (once it finishes). `■ Stop` on a running task stops it after a second press within 5 seconds. Click a card or give its number. While tasks run, a `◆ 2` chip next to the band opens the pane |
+| `/desk-tasks [number]` | Running shells and agents only show as `1 shell still running` | A right-side pane like the desktop's Background tasks: this session's agents, background shells (`run_in_background`, Ctrl+B or a timed-out command) and monitors, under `Running` and `Done`. Agents show their model, tokens, tool uses, what they are doing now (`Fetching`) and `View transcript`: the prompt, their messages, their tool calls folded as in the transcript, and their report. Shells and monitors show their command and `View details`: status, runtime, the result line and the end of the output (once it finishes). `■ Stop` on a running task stops it after a second press within 5 seconds. Click a card or give its number. While tasks run, a `⋯ 2` chip next to the band opens the pane |
 | `/desk-update` | — | Updates desk-look to the latest version: refreshes the `cc-desktop-mod` marketplace, then `claude plugin update`. Run `/reload-plugins` afterwards to apply it (a plugin can't reload itself) |
 
-Tool lines, agent cards, agent messages, session rows, question options, the context and PR chips, commit rows, and file rows in the end-of-turn card and the diff pane are buttons across the whole row, so clicking the description or the `›` works too.
+Tool lines, agent cards, agent messages, background task cards, session rows, question options, the context, PR and tasks chips, commit rows, and file rows in the end-of-turn card and the diff pane are buttons across the whole row, so clicking the description or the `›` works too.
 
 The mod's own labels are in English or Korean: the `language` setting picks one, and by default follows Claude Code's own language setting.
 
@@ -67,6 +67,8 @@ Search for `desk-look` in `/config` to find these options.
 | `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
 
 ### Update
+
+Run `/desk-update` at the prompt, or from a shell:
 
 ```bash
 claude plugin update desk-look
@@ -102,6 +104,8 @@ Add the local folder as a marketplace as is, and changes in the repo only need `
 ```bash
 claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 ```
+
+`.claude/skills/desk-release-check` gathers the Claude Code release notes and the plugin API diff since the last check, to find what desk-look can use or drop. `CLAUDE.md` holds the repository's conventions (latest Claude Code only, a GitHub release for every version).
 
 `desk-look/.claude-plugin/types/` holds type definitions the engine lays down again every time it loads the mod, so it isn't committed.
 

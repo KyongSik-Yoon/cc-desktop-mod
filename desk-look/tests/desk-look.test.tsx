@@ -1707,6 +1707,8 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
 
   const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never })
   expect(await band.find({ type: 'Button', key: 'agents-chip' })).toBeDefined()
+  // PR 칩의 ◆(안 풀린 리뷰)와 겹치지 않는 기호
+  expect(JSON.stringify(await band.find({ type: 'Button', key: 'agents-chip' }))).toContain('⋯')
   await band.press({ key: 'agents-chip' })
   expect(opened).toEqual(['desk-tasks'])
   await band.unmount()

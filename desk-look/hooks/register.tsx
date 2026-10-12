@@ -863,7 +863,8 @@ async function stopTask($: EngineInterface, task: AgentRecord, isArmed: boolean)
   $.ui.toast(T.stopped(task.description))
 }
 
-// 아래턱 오른쪽의 "◆ 2": 도는 백그라운드 작업(에이전트·셸·모니터) 수, 누르면 /desk-tasks 패널.
+// 아래턱 오른쪽의 "⋯ 2": 도는 백그라운드 작업(에이전트·셸·모니터) 수, 누르면 /desk-tasks 패널.
+// PR 칩이 안 풀린 리뷰를 ◆ 로 쓰므로 겹치지 않는 기호를 쓴다.
 function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentRecord>) {
   const live = Object.values(records).filter(agent => isLive(agent.status)).length
   if (live === 0) return null
@@ -873,7 +874,7 @@ function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentR
     width: 2 + cellWidth(label),
     node: (
       <Button key="agents-chip" plain dimColor onPress={() => void openAgents($)}>
-        <Text color={COLORS.clay}>◆</Text>
+        <Text color={COLORS.clay}>⋯</Text>
         {` ${label}`}
       </Button>
     ),
