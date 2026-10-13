@@ -1330,7 +1330,7 @@ test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장�
   await row.unmount()
 })
 
-import { checkState, checkSummary, fetchReview, jobState, prChipParts, prRepo, shortStat, toChecks, toDiscussions, toJobs, toMr, toPr, toThreads } from '../hooks/pr'
+import { checkState, checkSummary, fetchReview, jobState, mergeAction, mergePr, prChipParts, prRepo, shortStat, toChecks, toDiscussions, toJobs, toMr, toPr, toThreads } from '../hooks/pr'
 import { baseCandidates, parseCommits, scopeOf } from '../hooks/gitview'
 
 const GH_PR = {
@@ -1534,6 +1534,97 @@ test('PR 칩과 /desk-pr 패널: 실패한 체크를 Claude에게 맡기면 입�
   expect(filled[0]?.mode).toBe('replace')
   await pane.press({ key: 'fix-thread-0' })
   expect(filled[1]?.text).toContain('> Check the range')
+  await pane.unmount()
+})
+
+const READY_MR = { ...MR, detailed_merge_status: 'mergeable', sha: 'abc123' }
+const PASS_JOB = [{ name: 'unit', stage: 'test', status: 'success' }]
+const RUNNING_JOB = [{ name: 'unit', stage: 'test', status: 'running' }]
+const READY_PR = { ...GH_PR, reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN', headRefOid: 'abc123', statusCheckRollup: [{ __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' }] }
+
+test('머지 버튼을 낼지: 바로·자동·없음', KO, () => {
+  expect(mergeAction(toMr(READY_MR, toJobs(PASS_JOB), [], null))).toBe('now')
+  // GitLab 은 파이프라인이 도는 중에도 mergeable 이라 한다 → 성공하면 머지
+  expect(mergeAction(toMr(READY_MR, toJobs(RUNNING_JOB), [], null))).toBe('auto')
+  expect(mergeAction(toMr({ ...READY_MR, detailed_merge_status: 'ci_still_running' }, [], [], null))).toBe('auto')
+  expect(mergeAction(toMr(READY_MR, toJobs(MR_JOBS), [], null))).toBe(null)
+  expect(mergeAction(toMr({ ...READY_MR, merge_when_pipeline_succeeds: true }, toJobs(RUNNING_JOB), [], null))).toBe(null)
+  expect(mergeAction(toMr({ ...READY_MR, detailed_merge_status: 'not_approved' }, toJobs(PASS_JOB), [], null))).toBe(null)
+  expect(mergeAction(toMr({ ...READY_MR, draft: true }, toJobs(PASS_JOB), [], null))).toBe(null)
+  expect(mergeAction(toPr(READY_PR, []))).toBe('now')
+  expect(mergeAction(toPr({ ...READY_PR, headRefOid: undefined }, []))).toBe(null)
+  const running = [{ __typename: 'CheckRun', name: 'test', status: 'IN_PROGRESS', conclusion: null }]
+  expect(mergeAction(toPr({ ...READY_PR, mergeStateStatus: 'BLOCKED', statusCheckRollup: running }, []))).toBe('auto')
+  expect(mergeAction(toPr({ ...READY_PR, mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED', statusCheckRollup: running }, []))).toBe(null)
+  expect(mergeAction(toPr({ ...READY_PR, autoMergeRequest: { enabledAt: 'x' } }, []))).toBe(null)
+})
+
+test('머지 실행: GitLab 은 REST 로 본 커밋만, GitHub 은 허용된 방식으로 하고 원격 브랜치를 지운다', KO, async () => {
+  const calls: string[][] = []
+  const record = (table: Parameters<typeof run>[0]) => {
+    const inner = run(table)
+    return async (argv: string[]) => {
+      calls.push(argv)
+      return inner(argv)
+    }
+  }
+  const auto = await mergePr(record([[argv => argv[0] === 'glab', { exitCode: 0, stdout: JSON.stringify({ state: 'opened', merge_when_pipeline_succeeds: true }) }]]), toMr(READY_MR, toJobs(RUNNING_JOB), [], null), 'auto')
+  expect(auto).toEqual({ ok: true, merged: false })
+  expect(calls[0]).toEqual(['glab', 'api', '--hostname', 'gitlab.example.com', '-X', 'PUT', 'projects/42/merge_requests/7/merge', '-f', 'sha=abc123', '-F', 'should_remove_source_branch=true', '-F', 'merge_when_pipeline_succeeds=true', '-F', 'auto_merge=true'])
+  const refused = await mergePr(run([[argv => argv[0] === 'glab', { exitCode: 1, stdout: '{"message":"SHA does not match HEAD of source branch"}', stderr: 'ERROR\nglab: 409' }]]), toMr(READY_MR, toJobs(PASS_JOB), [], null), 'now')
+  expect(refused).toEqual({ ok: false, error: 'SHA does not match HEAD of source branch' })
+
+  calls.length = 0
+  const github = record([
+    [argv => argv[1] === 'repo', { exitCode: 0, stdout: JSON.stringify({ mergeCommitAllowed: false, squashMergeAllowed: true, rebaseMergeAllowed: true, deleteBranchOnMerge: false }) }],
+    [argv => argv[1] === 'pr', { exitCode: 0 }],
+    [argv => argv[1] === 'api', { exitCode: 0 }],
+  ])
+  expect(await mergePr(github, toPr(READY_PR, []), 'now')).toEqual({ ok: true, merged: true })
+  expect(calls[1]).toEqual(['gh', 'pr', 'merge', '12', '-R', 'github.com/owner/repo', '--squash', '--match-head-commit', 'abc123'])
+  expect(calls[2]).toEqual(['gh', 'api', '--hostname', 'github.com', '-X', 'DELETE', 'repos/owner/repo/git/refs/heads/feat/done'])
+  calls.length = 0
+  expect(await mergePr(github, toPr(READY_PR, []), 'auto')).toEqual({ ok: true, merged: false })
+  expect(calls.map(argv => argv[1])).toEqual(['repo', 'pr'])
+  expect(calls[1]).toContain('--auto')
+})
+
+test('/desk-pr 패널의 머지: 두 번 눌러야 하고, 머지한 뒤 다시 읽는다', KO, async ($, on) => {
+  const toasts: string[] = []
+  let merged = 0
+  let state = 'opened'
+  on('process.run', (($: unknown, e: { argv: string[] }) => {
+    const argv = e.argv
+    const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (argv[0] === 'git' && argv.includes('--abbrev-ref')) return out('fix/sheet\n')
+    if (argv[0] === 'gh') return out('', 1)
+    if (argv.join(' ').startsWith('glab mr list')) return out(JSON.stringify(state === 'opened' ? [{ iid: 7 }] : []))
+    if (argv.join(' ').startsWith('glab mr view')) return out(JSON.stringify({ ...READY_MR, state }))
+    if (argv.includes('PUT')) {
+      merged++
+      state = 'merged'
+      return out(JSON.stringify({ state: 'merged' }))
+    }
+    if (argv.at(-1)?.includes('/jobs')) return out(JSON.stringify(PASS_JOB))
+    if (argv.at(-1)?.includes('/discussions')) return out('[]')
+    return out('', 1)
+  }) as never)
+  on('clock.now', () => ({ value: 1000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.toast', ($, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined as never }
+  })
+  await $.command.run({ command: 'desk-pr', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-pr', viewport: VIEWPORT, props: { title: 'PR', isFocused: true } as never })
+  expect(JSON.stringify(await pane.find({ type: 'Button', key: 'pr-merge' }))).toContain('머지')
+  await pane.press({ key: 'pr-merge' })
+  expect(merged).toBe(0)
+  expect(JSON.stringify(await pane.drawn())).toContain('다시 누르면 머지해요')
+  await pane.press({ key: 'pr-merge' })
+  expect(merged).toBe(1)
+  expect(toasts.join('\n')).toContain('MR !7 을 머지했어요')
+  expect(await pane.find({ type: 'Button', key: 'pr-merge' })).toBeUndefined()
   await pane.unmount()
 })
 

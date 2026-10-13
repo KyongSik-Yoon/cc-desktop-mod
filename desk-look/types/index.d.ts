@@ -94,6 +94,10 @@ export type PrInfo = {
   removed: number | null
   checks: PrCheck[]
   threads: PrThread[] | null
+  // 머지 버튼: 패널이 본 head 커밋(그 사이 푸시되면 머지가 거절된다), 자동 머지가 걸렸는지, GitLab 프로젝트 id.
+  headSha: string | null
+  autoMerge: boolean
+  projectId?: number
 }
 // status: none 은 PR 이 없는 브랜치, off 는 읽지 못한 경우. at 은 읽은 시각(ms).
 // isSticky: off 의 원인이 로컬이라(도구가 없음, 그 호스트의 저장소가 아님) 다시 물어도 같은 경우.

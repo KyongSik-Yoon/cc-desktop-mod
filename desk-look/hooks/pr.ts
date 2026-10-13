@@ -3,8 +3,8 @@ import { T } from './i18n'
 
 // 데스크톱 Code 탭의 PR 바: 지금 브랜치의 PR 상태·체크·안 풀린 리뷰. 데스크톱도 gh 로 읽는다
 // (같은 필드: state isDraft reviewDecision mergeStateStatus additions deletions statusCheckRollup).
-// 읽기만 한다. 병합·Ready 같은 바꾸는 일은 GitHub 에 바로 나가므로 넣지 않는다.
-export const PR_FIELDS = 'number,title,url,state,isDraft,reviewDecision,mergeStateStatus,headRefName,baseRefName,additions,deletions,statusCheckRollup'
+// 바꾸는 일은 머지 하나뿐이다(패널에서 두 번 눌러야 한다, mergePr). Ready·승인·댓글은 넣지 않는다.
+export const PR_FIELDS = 'number,title,url,state,isDraft,reviewDecision,mergeStateStatus,headRefName,headRefOid,baseRefName,additions,deletions,statusCheckRollup,autoMergeRequest'
 
 export const THREADS_QUERY =
   'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved isOutdated path line comments(first:1){nodes{author{login} body url}}}}}}}'
@@ -100,6 +100,8 @@ export function toPr(raw: Record<string, unknown>, threads: PrThread[] | null): 
     removed: Number(raw.deletions ?? 0),
     checks: toChecks(raw.statusCheckRollup),
     threads,
+    headSha: typeof raw.headRefOid === 'string' && raw.headRefOid !== '' ? raw.headRefOid : null,
+    autoMerge: raw.autoMergeRequest !== null && raw.autoMergeRequest !== undefined,
   }
 }
 
@@ -300,6 +302,9 @@ export function toMr(raw: Record<string, unknown>, checks: PrCheck[], threads: P
     removed: stat?.removed ?? null,
     checks,
     threads,
+    headSha: typeof raw.sha === 'string' && raw.sha !== '' ? raw.sha : ((raw.diff_refs as { head_sha?: string } | null)?.head_sha ?? null),
+    autoMerge: raw.merge_when_pipeline_succeeds === true,
+    ...(typeof raw.project_id === 'number' ? { projectId: raw.project_id } : {}),
   }
 }
 
@@ -346,6 +351,90 @@ export async function fetchMr(run: Run, branch: string | null, at: number): Prom
   // job 목록을 못 읽으면 파이프라인 전체 상태 하나를 체크로
   const checks = jobs !== null ? toJobs(jobs) : pipeline?.status ? [{ name: 'pipeline', state: jobState(pipeline), url: pipeline.web_url ?? null }] : []
   return { status: 'ok', branch, pr: toMr(raw, checks, toDiscussions(discussions, webUrl), stat), at }
+}
+
+// ── 머지 ──────────────────────────────────────────────────────────────────────
+// now 는 바로 머지, auto 는 도는 체크가 통과하면 머지(GitLab 은 파이프라인이 성공하면). 실패한 체크가 있거나
+// 충돌·Draft·리뷰 미승인 같은 막힘이 있으면 버튼을 내지 않는다. GitLab 은 파이프라인 성공이 조건이 아닌
+// 프로젝트에서 도는 중에도 mergeable 이라 하므로, 도는 체크가 있으면 늘 auto 로 한다.
+export type MergeAction = 'now' | 'auto'
+
+const GITHUB_MERGEABLE = new Set(['CLEAN', 'HAS_HOOKS', 'UNSTABLE'])
+const GITLAB_MERGEABLE = new Set(['mergeable', 'ci_still_running', 'ci_must_pass'])
+
+export function mergeAction(pr: PrInfo): MergeAction | null {
+  if (pr.state !== 'OPEN' || pr.isDraft || pr.autoMerge || pr.headSha === null) return null
+  if (pr.checks.some(check => check.state === 'fail')) return null
+  const isPending = pr.checks.some(check => check.state === 'pending')
+  const state = pr.mergeState ?? ''
+  if (pr.provider === 'gitlab') {
+    if (pr.projectId === undefined || !GITLAB_MERGEABLE.has(state)) return null
+    return isPending || state !== 'mergeable' ? 'auto' : 'now'
+  }
+  if (GITHUB_MERGEABLE.has(state)) return isPending ? 'auto' : 'now'
+  // 필수 체크가 도는 중이면 BLOCKED 다. 리뷰 때문에 막힌 게 아니면 자동 머지를 걸 수 있다.
+  const isReviewBlocked = pr.reviewDecision === 'CHANGES_REQUESTED' || pr.reviewDecision === 'REVIEW_REQUIRED'
+  return state === 'BLOCKED' && isPending && !isReviewBlocked ? 'auto' : null
+}
+
+export type MergeResult = { ok: true; merged: boolean; note?: string } | { ok: false; error: string }
+
+const firstLine = (text: string) => text.split('\n').map(line => line.trim()).find(line => line !== '' && line !== 'ERROR') ?? ''
+
+// GitHub: 저장소가 허용하는 방식(merge → squash → rebase 순)으로, 본 head 커밋일 때만. 원격 브랜치는 머지된 뒤
+// 지운다. gh 의 --delete-branch 는 로컬 브랜치까지 지우고 기본 브랜치로 체크아웃하므로 쓰지 않는다.
+// 자동 머지는 나중에 일어나서 지울 수 없다(저장소의 "Automatically delete head branches" 를 따른다).
+// GitLab: REST 로 머지한다. squash 는 MR 설정(프로젝트 기본값)을 따르고 원격 브랜치는 지운다.
+// 자동 머지 파라미터는 옛 이름(merge_when_pipeline_succeeds)과 새 이름(auto_merge)을 함께 보낸다.
+export async function mergePr(run: Run, pr: PrInfo, action: MergeAction): Promise<MergeResult> {
+  const failed = (error: unknown): Ran => ({ exitCode: 127, stdout: '', stderr: String(error) })
+  if (pr.headSha === null) return { ok: false, error: T.mergeNoHead }
+  if (pr.provider === 'gitlab') {
+    if (pr.projectId === undefined) return { ok: false, error: T.mergeNoHead }
+    const host = /^https?:\/\/([^/]+)\//.exec(pr.url)?.[1]
+    const isAuto = action === 'auto'
+    const ran = await run([
+      'glab',
+      'api',
+      ...(host ? ['--hostname', host] : []),
+      '-X',
+      'PUT',
+      `projects/${pr.projectId}/merge_requests/${pr.number}/merge`,
+      '-f',
+      `sha=${pr.headSha}`,
+      '-F',
+      'should_remove_source_branch=true',
+      '-F',
+      `merge_when_pipeline_succeeds=${isAuto}`,
+      '-F',
+      `auto_merge=${isAuto}`,
+    ]).catch(failed)
+    let body: Record<string, unknown> = {}
+    try {
+      body = JSON.parse(ran.stdout) as Record<string, unknown>
+    } catch {
+      body = {}
+    }
+    if (ran.exitCode !== 0) return { ok: false, error: typeof body.message === 'string' ? body.message : firstLine(ran.stderr) }
+    return { ok: true, merged: body.state === 'merged' }
+  }
+  const where = prRepo(pr.url)
+  if (!where) return { ok: false, error: T.mergeNoHead }
+  const repo = `${where.host}/${where.owner}/${where.name}`
+  const settings = await run(['gh', 'repo', 'view', repo, '--json', 'mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,deleteBranchOnMerge']).catch(failed)
+  let allowed: Record<string, unknown> = {}
+  try {
+    allowed = settings.exitCode === 0 ? (JSON.parse(settings.stdout) as Record<string, unknown>) : {}
+  } catch {
+    allowed = {}
+  }
+  const method = allowed.mergeCommitAllowed !== false ? 'merge' : allowed.squashMergeAllowed !== false ? 'squash' : 'rebase'
+  const ran = await run(['gh', 'pr', 'merge', String(pr.number), '-R', repo, `--${method}`, '--match-head-commit', pr.headSha, ...(action === 'auto' ? ['--auto'] : [])]).catch(failed)
+  if (ran.exitCode !== 0) return { ok: false, error: firstLine(ran.stderr) }
+  if (action === 'auto') return { ok: true, merged: false }
+  if (allowed.deleteBranchOnMerge === true) return { ok: true, merged: true }
+  const removed = await run(['gh', 'api', '--hostname', where.host, '-X', 'DELETE', `repos/${where.owner}/${where.name}/git/refs/heads/${pr.head}`]).catch(failed)
+  return removed.exitCode === 0 ? { ok: true, merged: true } : { ok: true, merged: true, note: T.branchKept(pr.head) }
 }
 
 // GitHub 저장소가 아니면 gh 는 네트워크 없이 곧바로 실패한다. 그때 glab 으로 다시 본다.

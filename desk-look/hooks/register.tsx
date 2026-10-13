@@ -13,7 +13,8 @@ import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
 import type { ContextChipMode } from './usage'
-import { checkPrompt, checkSummary, fetchReview, mergeLevel, mergeName, prChipParts, prNumber, prRef, reviewName, threadPrompt } from './pr'
+import { checkPrompt, checkSummary, fetchReview, mergeAction, mergeLevel, mergeName, mergePr, prChipParts, prNumber, prRef, reviewName, threadPrompt } from './pr'
+import type { MergeAction } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 
@@ -648,6 +649,32 @@ async function openPr($: EngineInterface) {
   const shown = refreshPr($, true).catch(() => undefined)
   await $.ui.open({ id: PR_PANE, title: 'PR', focus: true })
   await shown
+}
+
+// PR 패널의 머지: Revert 처럼 5초 안에 두 번 눌러야 한다. 누른 순간 패널이 보여 준 PR(head 커밋)로 머지하고
+// 결과를 알린 뒤 다시 읽는다. 도는 체크가 있으면 통과하면 머지되게 건다.
+const MERGE_ARM_MS = 5000
+let merging = false
+
+async function mergeFromPane($: EngineInterface, info: PrInfo, action: MergeAction, isArmed: boolean) {
+  const key = `merge:${info.url}`
+  if (!isArmed) {
+    await update($, open, state => ({ ...state, [key]: true }))
+    $.clock.after(MERGE_ARM_MS, () => void update($, open, state => ({ ...state, [key]: false })))
+    return
+  }
+  await update($, open, state => ({ ...state, [key]: false }))
+  if (merging) return
+  merging = true
+  try {
+    $.ui.toast(T.merging(prRef(info)))
+    const result = await mergePr(argv => $.process.run(argv, { timeoutMs: 30_000 }), info, action)
+    if (!result.ok) $.ui.toast(T.mergeFailed(result.error))
+    else $.ui.toast([result.merged ? T.merged(prRef(info)) : T.autoMergeSet(prRef(info)), result.note].filter(Boolean).join(' · '))
+  } finally {
+    merging = false
+  }
+  await refreshPr($, true).catch(() => undefined)
 }
 
 // "Claude에게 맡기기": 입력창이 비어 있으면 채우고, 쓰던 글이 있으면 뒤에 붙인다.
@@ -2265,6 +2292,8 @@ export const register: Register = (on, options) => {
     const passes = info.checks.filter(check => check.state === 'pass' || check.state === 'skip')
     const showPasses = armed['pr:passes'] ?? false
     const nameWidth = Math.max(12, columns - 30)
+    const action = mergeAction(info)
+    const mergeKey = `merge:${info.url}`
 
     const checkRow = (check: PrCheck) => {
       const mark = check.state === 'fail' ? '✗' : check.state === 'pending' ? '●' : check.state === 'skip' ? '–' : '✓'
@@ -2324,6 +2353,15 @@ export const register: Register = (on, options) => {
               {info.reviewDecision && info.state === 'OPEN' && info.mergeState && <Text color={COLORS.muted}>·</Text>}
               {info.state === 'OPEN' && info.mergeState && <Text color={COLORS[mergeLevel(info.mergeState)]}>{mergeName(info.mergeState)}</Text>}
             </Box>
+          )}
+          {info.state === 'OPEN' && info.autoMerge && <Text color={COLORS.warning}>{T.autoMergeOn}</Text>}
+          {action !== null && (
+            <Button
+              key="pr-merge"
+              plain
+              label={armed[mergeKey] ? (action === 'auto' ? T.mergeAutoConfirm : T.mergeConfirm) : action === 'auto' ? T.mergeAuto(info.provider) : T.merge}
+              onPress={() => void mergeFromPane($, info, action, armed[mergeKey] ?? false)}
+            />
           )}
           <Link href={info.url}>{T.openOn(info.provider)}</Link>
         </Box>

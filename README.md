@@ -21,7 +21,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 |---|---|
 | `/desk-diff [file\|branch\|commits]` | Diff pane: uncommitted changes, the whole branch, or per commit |
 | `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
-| `/desk-pr` | The current branch's pull request or merge request |
+| `/desk-pr` | The current branch's pull request or merge request, with a merge button |
 | `/desk-context` | Context breakdown, usage limits and session cost |
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
 | `/desk-update` | Update desk-look to the latest version |
@@ -92,7 +92,8 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 - State, `base ← head`, `+N −M`, review decision and merge state
 - Failing and running checks (passing ones folded) and unresolved review threads
 - `Hand to Claude` next to a failing check or a review thread fills the prompt with it
-- Read-only: nothing is merged, approved or posted
+- `Merge` merges it after a second press within 5 seconds, only at the head commit the pane showed (a newer push makes the merge fail). While checks are still running it reads `Merge when pipeline succeeds` (GitLab) or `Merge when checks pass` (GitHub) and sets auto-merge instead. It shows only on an open, non-draft PR with no failing checks that the host reports as mergeable. The merge method is the repository's: GitLab follows the MR's squash setting; GitHub uses merge, else squash, else rebase, whichever the repository allows. The remote source branch is deleted (on GitHub, after an auto-merge only if the repository deletes head branches); the local branch is left alone
+- Nothing else is changed: no approvals, comments or `Ready for review`
 
 ### `/desk-context`: context and usage
 
