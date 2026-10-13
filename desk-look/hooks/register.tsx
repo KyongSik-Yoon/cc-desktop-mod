@@ -5,7 +5,7 @@ import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo
 import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
-import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
+import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
 import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
@@ -39,6 +39,8 @@ const SESSIONS_PANE = 'desk-sessions'
 const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
 const AGENTS_PANE = 'desk-tasks'
+// /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
+const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
@@ -936,6 +938,9 @@ function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: numb
         {live && agent.activity && <Text color={COLORS.clay}>{agent.activity}</Text>}
         {rowButton(els, { key: `agent-view-${agent.id}`, onPress: open }, isAgent ? T.viewTranscript : T.viewDetails)}
         {live && stopButton(els, $, agent, armed)}
+        {!live && (
+          <els.Button key={`dismiss-${agent.id}`} plain dimColor label={T.taskDismiss} onPress={() => void update($, agents, records => dismissAgents(records, [agent.id]))} />
+        )}
       </Box>
     </Box>
   )
@@ -1962,9 +1967,10 @@ export const register: Register = (on, options) => {
     }
 
     const { live, done } = orderAgents(records)
+    const doneFolded = openState[DONE_FOLDED] ?? false
     return (
       <Box flexDirection="column" rowGap={1}>
-        {live.length === 0 && done.length === 0 && <Text color={COLORS.muted}>{T.noAgents}</Text>}
+        {live.length === 0 && done.length === 0 && <Text color={COLORS.muted}>{Object.keys(records).length > 0 ? T.tasksAllCleared : T.noAgents}</Text>}
         {live.length > 0 && (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>{T.agentsRunning}</Text>
@@ -1973,8 +1979,17 @@ export const register: Register = (on, options) => {
         )}
         {done.length > 0 && (
           <Box flexDirection="column">
-            <Text color={COLORS.muted}>{T.agentsDone}</Text>
-            {done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns, openState))}
+            {/* 끝남 머리글: z 로 접고 펴고, c 로 끝난 작업을 목록에서 모두 뺀다(패널에 포커스가 있을 때). */}
+            <Box columnGap={2}>
+              {rowButton(
+                els,
+                { key: 'tasks-done-fold', dimColor: true, hotkey: 'z', onPress: () => toggle($, DONE_FOLDED, doneFolded) },
+                `${T.agentsDone} ${done.length}`,
+                <Text color={COLORS.muted}>{doneFolded ? ' ›' : ' ⌄'}</Text>,
+              )}
+              <els.Button key="tasks-clear-done" plain dimColor hotkey="c" label={T.tasksClearDone} onPress={() => void update($, agents, records => dismissAgents(records))} />
+            </Box>
+            {!doneFolded && done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns, openState))}
           </Box>
         )}
       </Box>

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
-import { agentDetailOf, applyNotices, backgroundTaskOf, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
+import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -1659,6 +1659,13 @@ test('에이전트 순수 함수: 모델 이름, 목록 합치기, 상세 차례
   expect(missed.a1).toMatchObject({ status: 'completed', endedAt: 5000 })
   expect(missed.a4?.status).toBe('running')
   expect(mergeAgents({ a3: { id: 'a3', description: '기다림', type: 'Explore', status: 'completed', toolUses: 1, endedAt: 3000 } }, [{ id: 'a3', description: '기다림', type: 'Explore', status: 'waiting' }], 6000).a3?.endedAt).toBeUndefined()
+  // 목록에서 빼기: 끝난 것만, 엔진 목록을 다시 합쳐도 그대로 빠져 있고, 다시 돌면 돌아온다.
+  const ended = { a3: { id: 'a3', description: 'x', type: 'Explore', status: 'completed', toolUses: 0, listed: true }, a5: { id: 'a5', description: 'y', type: 'Explore', status: 'running', toolUses: 0 } }
+  const cleared = dismissAgents(ended)
+  expect(orderAgents(cleared).done).toEqual([])
+  expect(orderAgents(cleared).live.map(agent => agent.id)).toEqual(['a5'])
+  expect(orderAgents(mergeAgents(cleared, [{ id: 'a3', description: 'x', type: 'Explore', status: 'completed' }], 7000)).done).toEqual([])
+  expect(orderAgents(mergeAgents(cleared, [{ id: 'a3', description: 'x', type: 'Explore', status: 'running' }], 7000)).live.map(agent => agent.id)).toContain('a3')
   const detail = agentDetailOf('a1', [
     { role: 'user', text: '서울 날씨를 찾아라', toolUses: [] },
     { role: 'assistant', text: '도구를 불러옵니다.', toolUses: [{ tool_use_id: 't1', tool: 'Bash', input: { command: 'date' } }, { tool_use_id: 't2', tool: 'ToolSearch', input: { query: 'select:WebSearch' } }] },
@@ -1810,7 +1817,18 @@ test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 �
   await $.command.run({ command: 'desk-tasks', args: '' } as never)
   const done = JSON.stringify(await pane.drawn())
   expect(done).toContain('중지됨')
-  expect(done).toContain('끝남')
+  expect(done).toContain('끝남 2')
+  // 끝남 접기(z) → 카드가 안 보이고, 다시 펴면 보인다
+  await pane.press({ key: 'tasks-done-fold' })
+  expect(JSON.stringify(await pane.drawn())).not.toContain('감시 빌드')
+  await pane.press({ key: 'tasks-done-fold' })
+  // 한 장 지우기 → 나머지는 남는다, 끝난 것 모두 지우기(c) → 빈 목록
+  await pane.press({ key: 'dismiss-b1' })
+  const one = JSON.stringify(await pane.drawn())
+  expect(one).not.toContain('감시 빌드')
+  expect(one).toContain('끝남 1')
+  await pane.press({ key: 'tasks-clear-done' })
+  expect(JSON.stringify(await pane.drawn())).toContain('끝난 작업을 목록에서 모두 지웠어요')
   await pane.unmount()
 })
 

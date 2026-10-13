@@ -74,7 +74,8 @@ export function mergeAgents(records: Readonly<Record<string, AgentRecord>>, list
       ...(info.name ? { name: info.name } : {}),
       listed: true,
       // 한 번의 실행이 끝나도(turn.complete) 엔진이 아직 살아 있다고 하면 시간은 계속 간다.
-      ...(isEnded ? { endedAt: old?.endedAt ?? now, activity: undefined } : { endedAt: undefined }),
+      // 다시 돌기 시작하면(SendMessage 로 이어 받은 에이전트) 목록에서 뺀 것도 되돌린다.
+      ...(isEnded ? { endedAt: old?.endedAt ?? now, activity: undefined } : { endedAt: undefined, dismissed: undefined }),
     }
   }
   const present = new Set(list.map(info => info.id))
@@ -86,10 +87,19 @@ export function mergeAgents(records: Readonly<Record<string, AgentRecord>>, list
   return next
 }
 
-// 목록 순서: 도는 것 먼저, 그 안에서는 늦게 시작한 것이 위.
+// 목록 순서: 도는 것 먼저, 그 안에서는 늦게 시작한 것이 위. 목록에서 뺀 끝난 작업은 보이지 않는다.
 export function orderAgents(records: Readonly<Record<string, AgentRecord>>): { live: AgentRecord[]; done: AgentRecord[] } {
   const all = Object.values(records).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
-  return { live: all.filter(agent => isLive(agent.status)), done: all.filter(agent => !isLive(agent.status)) }
+  return { live: all.filter(agent => isLive(agent.status)), done: all.filter(agent => !isLive(agent.status) && !agent.dismissed) }
+}
+
+// 끝난 작업을 목록에서 뺀다(ids 를 안 주면 끝난 것 모두). 도는 작업은 그대로 둔다.
+export function dismissAgents(records: Readonly<Record<string, AgentRecord>>, ids?: ReadonlyArray<string>): Record<string, AgentRecord> {
+  const next = { ...records }
+  for (const agent of Object.values(records)) {
+    if (!isLive(agent.status) && (ids === undefined || ids.includes(agent.id))) next[agent.id] = { ...agent, dismissed: true }
+  }
+  return next
 }
 
 // 에이전트 대화를 상세 화면 차례로: 첫 사용자 메시지는 지시, 그 뒤는 답변 글·도구 묶음·사용자 메시지.

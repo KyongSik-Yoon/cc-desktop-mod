@@ -128,6 +128,8 @@ export type AgentRecord = {
   command?: string
   outputFile?: string
   summary?: string
+  // 사용자가 목록에서 뺀 끝난 작업. 기록은 남겨 엔진 목록을 다시 합쳐도 되살아나지 않는다.
+  dismissed?: boolean
 }
 
 // 에이전트 상세: 처음 받은 지시(prompt)와 그 뒤의 답변 글·도구 묶음·사용자 메시지 차례.
