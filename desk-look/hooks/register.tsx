@@ -2448,7 +2448,8 @@ export const register: Register = (on, options) => {
       read($, surface),
       read($, diffWindow),
     ])
-    const columns = e.viewport?.columns ?? 80
+    // 패널 몸통 폭: viewport.columns 는 패널 폭이 아니다(구분선을 끌면 어긋나 단어 강조 조각이 일찍 잘렸다).
+    const columns = (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 80
     const files = view.scope === 'branch' ? view.files : uncommitted
     // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
     const outside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
