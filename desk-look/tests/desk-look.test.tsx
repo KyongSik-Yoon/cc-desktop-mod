@@ -1768,6 +1768,15 @@ test('백그라운드 셸·모니터 순수 함수: 결과에서 작업, 알림 
   const applied = applyNotices({ b1: { id: 'b1', kind: 'shell', description: 'x', type: 'shell', status: 'running', toolUses: 0, startedAt: 0 } }, notices, 900)
   expect(applied.b1).toMatchObject({ status: 'completed', endedAt: 900, outputFile: '/tmp/t/b1.output' })
   expect(applied.zz).toBeUndefined()
+  // 모니터 만료는 <status> 없이 event 로만 온다 → 끝남. 일반 모니터 이벤트는 상태를 바꾸지 않는다.
+  const expired = parseNotices('<task-notification>\n<task-id>m1</task-id>\n<summary>Monitor event: "로그 감시"</summary>\n<event>[Monitor expired after 30m with 12 events delivered. Re-arm it if you still need the watch.]</event>\n</task-notification>')
+  expect(expired).toEqual([{ id: 'm1', status: 'completed', summary: 'Monitor event: "로그 감시"' }])
+  expect(parseNotices('<task-notification>\n<task-id>m1</task-id>\n<summary>Monitor event: "로그 감시"</summary>\n<event>== base 1</event>\n</task-notification>')[0]?.status).toBeUndefined()
+  const monitor = { m1: { id: 'm1', kind: 'monitor', description: '로그 감시', type: 'monitor', status: 'running', toolUses: 0, startedAt: 0 } } as const
+  expect(applyNotices(monitor, expired, 1800)).toMatchObject({ m1: { status: 'completed', endedAt: 1800 } })
+  // 지난 세션에서 끝나지 못한 작업 묶음: id 마다 멈춤, 표지 id 는 빼고
+  const orphans = parseNotices('<task-notification>\n<task-id>b8</task-id>\n<task-id>b9</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>2 background shell command tasks didn\'t finish</summary>\n</task-notification>')
+  expect(orphans.map(notice => [notice.id, notice.status])).toEqual([['b8', 'stopped'], ['b9', 'stopped']])
   expect(tailOf('a\nb\nc\n', 2)).toBe('… 1줄 더\nb\nc')
 })
 
@@ -1829,6 +1838,28 @@ test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 �
   expect(one).toContain('끝남 1')
   await pane.press({ key: 'tasks-clear-done' })
   expect(JSON.stringify(await pane.drawn())).toContain('끝난 작업을 목록에서 모두 지웠어요')
+  await pane.unmount()
+})
+
+test('끝을 놓친 작업: 멈춤이 No task found 로 실패하면 끝남으로 옮긴다', KO, async ($, on) => {
+  const toasts: string[] = []
+  on('clock.now', () => ({ value: 1_000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.toast', ($, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined as never }
+  })
+  on('agent.list', () => ({ value: [] as never }))
+  on('tool.call', ($, e) => {
+    if (e.tool === 'TaskStop') return { result: '<tool_use_error>No task found with ID: m9</tool_use_error>', isError: true, text: '<tool_use_error>No task found with ID: m9</tool_use_error>' } as never
+    return { result: { taskId: 'm9', timeoutMs: 1800000, persistent: false } } as never
+  })
+  await $.tool.call({ tool: 'Monitor', command: 'tail -f x', description: '로그 감시' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 70 } as never })
+  await pane.press({ key: 'stop-m9' })
+  await pane.press({ key: 'stop-m9' })
+  expect(toasts.join('\n')).toContain('이미 끝난 작업이에요: 로그 감시')
+  expect(JSON.stringify(await pane.drawn())).toContain('끝남 1')
   await pane.unmount()
 })
 

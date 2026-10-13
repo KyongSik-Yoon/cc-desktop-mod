@@ -842,6 +842,7 @@ async function openAgents($: EngineInterface, id: string | null = null) {
 
 // 작업 멈추기: Revert 처럼 5초 안에 두 번 눌러야 한다. 엔진의 TaskStop 도구를 부른다(셸·모니터·백그라운드 에이전트).
 const STOP_ARM_MS = 5000
+const GONE = /No task found/
 
 async function stopTask($: EngineInterface, task: AgentRecord, isArmed: boolean) {
   const key = `stop:${task.id}`
@@ -856,11 +857,17 @@ async function stopTask($: EngineInterface, task: AgentRecord, isArmed: boolean)
     $.ui.toast(T.stopFailed(ran.deny))
     return
   }
+  const now = await $.clock.now()
+  // 엔진이 그런 작업이 없다고 하면 끝을 놓친 것이다. 끝남으로 두어 도는 목록에서 뺀다.
+  if (ran.isError && GONE.test(ran.text ?? '')) {
+    await patchAgent($, task.id, agent => ({ status: isLive(agent.status) ? 'completed' : agent.status, endedAt: agent.endedAt ?? now, activity: undefined }))
+    $.ui.toast(T.alreadyEnded(task.description))
+    return
+  }
   if (ran.isError) {
     $.ui.toast(T.stopFailed(ran.text ?? ''))
     return
   }
-  const now = await $.clock.now()
   await patchAgent($, task.id, agent => ({ status: 'killed', endedAt: agent.endedAt ?? now, activity: undefined }))
   $.ui.toast(T.stopped(task.description))
 }

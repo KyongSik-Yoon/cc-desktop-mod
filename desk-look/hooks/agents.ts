@@ -151,16 +151,20 @@ export function backgroundTaskOf(tool: string, input: Record<string, unknown>, r
 export type TaskNotice = { id: string; status?: string; outputFile?: string; summary?: string }
 
 // 작업이 끝났다는 알림 글(<task-notification> 묶음, 여러 개일 수 있다)에서 id·상태·출력 파일·요약을 읽는다.
+// 모니터의 30분 만료는 <status> 없이 <event>[Monitor expired …]</event> 로만 알리므로 끝남(completed)으로 읽는다.
+// 지난 세션에서 끝나지 못한 작업들은 <task-id> 여럿(+ __orphan_summary__ 표지)을 한 묶음으로 알린다.
+const EXPIRED = /^\[Monitor expired\b/
+
 export function parseNotices(text: string): TaskNotice[] {
   const tag = (block: string, name: string) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(block)?.[1]?.trim()
   return [...text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g)].flatMap(match => {
     const block = match[1] ?? ''
-    const id = tag(block, 'task-id')
-    if (!id) return []
-    const status = tag(block, 'status')
+    const ids = [...block.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map(found => found[1]?.trim() ?? '').filter(id => id !== '' && !id.startsWith('__'))
+    const event = tag(block, 'event')
+    const status = tag(block, 'status') ?? (event !== undefined && EXPIRED.test(event) ? 'completed' : undefined)
     const outputFile = tag(block, 'output-file')
     const summary = tag(block, 'summary')
-    return [{ id, ...(status ? { status } : {}), ...(outputFile ? { outputFile } : {}), ...(summary ? { summary } : {}) }]
+    return ids.map(id => ({ id, ...(status ? { status } : {}), ...(outputFile ? { outputFile } : {}), ...(summary ? { summary } : {}) }))
   })
 }
 
