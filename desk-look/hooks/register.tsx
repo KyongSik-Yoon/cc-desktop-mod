@@ -779,7 +779,8 @@ async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
 
 // 커밋들의 diff 를 git show 한 번으로 읽는다. 커밋마다 \x1e<sha> 줄로 시작한다.
 async function commitDiffs($: EngineInterface, shas: string[]): Promise<Record<string, FileDiff[]>> {
-  const ran = await $.process.run(['git', 'show', '--format=%x1e%H', ...GIT_DIFF, ...shas], { timeoutMs: 8000 })
+  // 시간을 넘기거나 git 을 못 띄우면 빈 커밋으로 둔다: 커밋 줄·z 는 결과를 기다리지 않아 던지면 아무도 못 받는다.
+  const ran = await $.process.run(['git', 'show', '--format=%x1e%H', ...GIT_DIFF, ...shas], { timeoutMs: 8000 }).catch(() => ({ exitCode: 1, stdout: '' }))
   const found = ran.exitCode === 0 ? splitCommitDiffs(ran.stdout) : {}
   return Object.fromEntries(shas.map(sha => [sha, found[sha] ?? []]))
 }
