@@ -37,7 +37,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | mermaid | Code block | Box diagrams ([lovely-mermaid](https://github.com/xl0/lovely-mermaid)) with arrowheads that touch the boxes |
 | `> [!NOTE]` alerts | Blockquote | A box with a border colored by alert type |
 | Code blocks | No way to copy | Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does |
-| Tool calls | One row per call + a result block | Consecutive calls fold into one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click. Expanded, edit diffs show right away (file line numbers, three lines of context) |
+| Tool calls | One row per call + a result block | Consecutive calls fold into one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click. Expanded, edit diffs show right away (file line numbers, three lines of context), in the desktop diff style when the terminal theme is known |
 | Subagents | One `Ran an agent` line; notifications and messages only expand with ctrl+o | A card per agent (type and description; tool count, tokens, time and changed lines; click for the result). Background notifications read `✓ description completed · 5s`; click an agent message `◆ name first line ›` to expand it in place |
 | Plan (ExitPlanMode) | Folded into one line with other tools | A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval dialog is the engine's own |
 | Questions (AskUserQuestion) | A list under the prompt | A question card right above the prompt. With an empty prompt, pick by number alone (`1`-`8` options, `0` submit, `9` the default dialog); multi-select with ☐/☑; `Other` takes two clicks to type (the first selects the row); hover an option for its preview. A notification goes out when the card opens, as the engine dialog does (`preferredNotifChannel`). The transcript records `Asked question → answer` |
@@ -73,6 +73,7 @@ Per-file diffs in three scopes, like the desktop diff panel:
 - Give a file name (the end of the path is enough) to scroll to it, or `branch` / `commits` to open in that scope
 - Click a file's header row to fold or unfold its diff; `z` folds or unfolds them all (in `Commits`, every commit at once; several commits can stay open)
 - Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files)
+- Drawn like the desktop diff panel when the terminal theme is known (Omarchy): a header band per file, full-width green and red rows with a colored edge, one line-number column, syntax colors on removed lines too, changed words in a darker tint, and unchanged stretches as `N unmodified lines`. Only the rows near the visible part are drawn, so a diff of thousands of lines scrolls as fast as a short one. Edits made this session outside git show each edit on its own, split by `· next edit`. Without a known theme, the engine's diff is used as before
 
 ### `/desk-tasks [number]`: background tasks
 

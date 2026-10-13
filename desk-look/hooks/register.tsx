@@ -1,9 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, HERDR_GRAPHICS, IMAGE_TOKEN, LIST_IMAGES, cornerPixels, parseImages, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
+import { diffPalette, diffRow, diffRows, gutterWidth, parseHunks, patchRows, rowHeight, windowPlan } from './diffview'
+import type { DiffPalette, DiffRow } from './diffview'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
@@ -54,6 +56,8 @@ const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Recor
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
+// /desk-diff 패널 창 위치: ui.scroll 이 알려 준 첫 행과 보이는 행 수. 보이는 곳만 그리는 데 쓴다.
+const diffWindow = atom({ plugin: 'desk-look', key: 'diffWindow' } as const, { offset: 0, bodyRows: 0 })
 // 미리보기 패널에 열린 문서, 그리고 이번 턴에 Write 로 쓴 문서(마지막 것이 턴 끝에 열린다).
 const previewFile = atom({ plugin: 'desk-look', key: 'preview' } as const, null as PreviewFile | null)
 const previewWritten = atom({ plugin: 'desk-look', key: 'previewWritten' } as const, null as string | null)
@@ -818,8 +822,13 @@ async function refreshSurface($: EngineInterface) {
   const home = await $.env.get('HOME')
   const toml = home ? await $.fs.read(`${home}/${OMARCHY_COLORS}`).catch(() => null) : null
   const next = toml === null ? null : parseSurface(toml)
+  diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted) : null
   await update($, surface, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
 }
+
+// diff 색: 터미널 바탕(Omarchy 테마)을 알 때만. 모르면 엔진 diff 그대로(말풍선 등과 같은 규칙).
+// 대화 속 편집 행(callDetail)은 비동기 읽기 없이 그려서 테마를 읽을 때 같이 맞춰 둔다.
+let diffColors: DiffPalette | null = null
 
 async function refreshImages($: EngineInterface) {
   const ran = await $.process.run(['sh', '-c', LIST_IMAGES, 'sh', await $.session.id()], { timeoutMs: 3000 })
@@ -1059,8 +1068,125 @@ function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: numb
   )
 }
 
+// diff 행 묶음(가상 스크롤 없이): 대화 속 편집 행처럼 짧은 곳에 쓴다. more 가 양수면 잘린 행 수를 흐리게.
+function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette, rows: DiffRow[], key: string, path: string | undefined, columns: number, more = 0) {
+  const gutter = gutterWidth(rows)
+  const options = { path, gutter, columns, unmodified: T.unmodifiedLines }
+  return (
+    <els.Box flexDirection="column">
+      {rows.map((row, index) => diffRow(els, palette, row, `${key}.${index}`, options))}
+      {more > 0 && <els.Text color={COLORS.muted}>{T.moreLines(more)}</els.Text>}
+    </els.Box>
+  )
+}
+
+// /desk-diff 패널 몸통(테마를 알 때): 모든 것을 높이가 정해진 항목으로 편 뒤 창(ui.scroll 이 알려 준 위치) 앞뒤 한 화면만
+// 실제로 그리고, 나머지 연달은 항목은 높이만 있는 빈 Box 하나로 둔다. 줄마다 Code 하나라 다 그리면 3000줄에 2초가 걸린다.
+type DiffSection =
+  | { kind: 'note'; key: string; text: string; indent?: number }
+  | { kind: 'element'; key: string; node: unknown }
+  | { kind: 'file'; file: FileDiff; prefix: string; canRevert: boolean; indent: number }
+  | { kind: 'session'; edit: SessionEdit }
+
+type VirtualDiff = {
+  els: Els
+  palette: DiffPalette
+  window: { offset: number; bodyRows: number }
+  columns: number
+  head: unknown[]
+  sections: DiffSection[]
+  isFolded: (id: string) => boolean
+  fileHeader: (file: FileDiff, prefix: string, canRevert: boolean, indent: number) => unknown
+  sessionHeader: (edit: SessionEdit) => unknown
+}
+
+// 창이 아직 없을 때(막 열림) 한 화면으로 치는 행 수.
+const DIFF_BODY_GUESS = 60
+
+function virtualDiff(v: VirtualDiff) {
+  const { Box, Text } = v.els
+  type Item = { key: string; height: number; always?: boolean; node: () => unknown }
+  const items: Item[] = []
+  const spacer = (key: string) => items.push({ key, height: 1, node: () => <Box key={key} height={1} /> })
+  const rowItems = (rows: DiffRow[], key: string, path: string, indent: number) => {
+    const options = { path, gutter: gutterWidth(rows), columns: v.columns - indent, unmodified: T.unmodifiedLines }
+    rows.forEach((row, index) => {
+      const rowKey = `${key}.${index}`
+      items.push({
+        key: rowKey,
+        height: rowHeight(row),
+        node: () =>
+          indent > 0 ? (
+            <Box key={rowKey} paddingLeft={indent}>
+              {diffRow(v.els, v.palette, row, `${rowKey}.r`, options)}
+            </Box>
+          ) : (
+            diffRow(v.els, v.palette, row, rowKey, options)
+          ),
+      })
+    })
+  }
+  // 안내 글은 좁은 패널에서 잘리지 않게 줄바꿈한다. 높이는 폭으로 셈해 정해 둔다(세 줄까지).
+  const note = (key: string, text: string, indent = 0) => {
+    const height = Math.min(3, Math.max(1, Math.ceil(cellWidth(text) / Math.max(10, v.columns - indent))))
+    items.push({
+      key,
+      height,
+      node: () => (
+        <Box key={key} height={height} overflow="hidden" paddingLeft={indent}>
+          <Text color={COLORS.muted}>{text}</Text>
+        </Box>
+      ),
+    })
+  }
+
+  v.head.forEach((node, index) => {
+    if (index > 0) spacer(`h-gap-${index}`)
+    items.push({ key: `h-${index}`, height: 1, always: true, node: () => node })
+  })
+  for (const section of v.sections) {
+    spacer(`gap-${items.length}`)
+    if (section.kind === 'note') note(`note-${section.key}`, section.text, section.indent)
+    else if (section.kind === 'element') {
+      items.push({
+        key: `el-${section.key}`,
+        height: 1,
+        always: true,
+        node: () => (
+          <Box key={`el-${section.key}`} height={1} overflow="hidden">
+            {section.node as never}
+          </Box>
+        ),
+      })
+    }
+    else if (section.kind === 'file') {
+      const { file, prefix, indent } = section
+      const id = `${prefix}${file.path}`
+      items.push({ key: `fh-${id}`, height: 1, always: true, node: () => v.fileHeader(file, prefix, section.canRevert, indent) })
+      if (v.isFolded(id)) continue
+      if (!file.patch) note(`bin-${id}`, T.binary, indent + 2)
+      else rowItems(patchRows(file.patch), `d-${id}`, file.path, indent)
+    } else {
+      const { edit } = section
+      const id = `${OUTSIDE}${edit.path}`
+      items.push({ key: `fh-${id}`, height: 1, always: true, node: () => v.sessionHeader(edit) })
+      if (v.isFolded(id)) continue
+      if (edit.patches.length === 0) note(`bin-${id}`, T.binary, 2)
+      // 편집마다 따로: 서로 다른 시점의 줄 번호를 한 diff 로 잇지 않는다.
+      edit.patches.forEach((patch, index) => {
+        if (index > 0) note(`next-${id}-${index}`, T.nextEdit, 2)
+        rowItems(patchRows(patch), `s-${id}-${index}`, edit.path, 0)
+      })
+    }
+  }
+
+  const steps = windowPlan(items, v.window.offset, v.window.bodyRows || DIFF_BODY_GUESS)
+  const drawn = steps.map((step, index) => ('skip' in step ? <Box key={`skip-${index}`} height={step.skip} /> : items[step.draw]?.node()))
+  return <Box flexDirection="column">{drawn as never}</Box>
+}
+
 // 호출 하나를 펼쳤을 때: 명령과 출력, 편집 diff, 새 파일 내용.
-function callDetail({ Box, Text, Code }: Els, call: RunCall) {
+function callDetail({ Box, Text, Code }: Els, call: RunCall, columns: number) {
   const fields = fieldsOf(call.input)
   const filePath = stringField(fields, 'file_path') ?? stringField(fields, 'notebook_path')
   const output = outputText(call.output)
@@ -1076,7 +1202,11 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall) {
     case 'MultiEdit': {
       const edits = call.tool === 'Edit' ? [fields] : Array.isArray(fields.edits) ? fields.edits.map(fieldsOf) : []
       const guessed = edits.map(edit => editHunk(stringField(edit, 'old_string') ?? '', stringField(edit, 'new_string') ?? ''))
-      return <Code source={cap(patchOf(call.output) ?? guessed.join('\n'), 40)} path={filePath} format="diff" />
+      const patch = patchOf(call.output) ?? guessed.join('\n')
+      if (!diffColors) return <Code source={cap(patch, 40)} path={filePath} format="diff" />
+      // 데스크톱 모양 diff. 대화 안이라 안 바뀐 구간 표시는 빼고 40행까지.
+      const rows = diffRows(parseHunks(patch), false)
+      return diffBlock({ Box, Text, Code }, diffColors, rows.slice(0, 40), `edit-${call.tool_use_id}`, filePath, columns, rows.length - 40)
     }
     case 'Write':
       return <Code source={cap(stringField(fields, 'content') ?? '', 40)} path={filePath} />
@@ -1288,7 +1418,7 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
       </Box>
       {isOpen && (
         <Box marginLeft={2} borderStyle="round" borderColor={COLORS.border} paddingX={1} flexDirection="column">
-          {callDetail(els, call)}
+          {callDetail(els, call, columns - indent - 6)}
         </Box>
       )}
     </Box>
@@ -2293,18 +2423,29 @@ export const register: Register = (on, options) => {
     )
   })
 
+  // diff 패널 창이 움직이면(휠·스크롤 키·openDiffAt 의 스크롤) 위치를 적어 그 앞뒤만 다시 그린다.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const moved = await next(e)
+    if (moved.deny === undefined) {
+      await update($, diffWindow, w => (w.offset === e.offset && w.bodyRows === e.bodyRows ? w : { offset: e.offset, bodyRows: e.bodyRows }))
+    }
+    return moved
+  })
+
   // 우측 diff 패널: 파일별 +/− 요약과 헌크.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
     const { Box, Text, Button, Code } = els
-    const [uncommitted, view, armed, info, edits, home] = await Promise.all([
+    const [uncommitted, view, armed, info, edits, home, face, window] = await Promise.all([
       read($, diff),
       read($, diffView),
       read($, open),
       read($, repo),
       read($, runs),
       $.env.get('HOME').catch(() => undefined),
+      read($, surface),
+      read($, diffWindow),
     ])
     const columns = e.viewport?.columns ?? 80
     const files = view.scope === 'branch' ? view.files : uncommitted
@@ -2393,10 +2534,59 @@ export const register: Register = (on, options) => {
           ? `Edited ${shownCount} file${shownCount === 1 ? '' : 's'}`
           : T.changesTitle
 
-    return (
-      <Box flexDirection="column" rowGap={1}>
-        <Box columnGap={2}>
-          {SCOPES.map(scope => (
+    // 커밋별 탭의 커밋 한 줄: 누르면 그 커밋의 파일을 펼친다.
+    const commitRow = (commit: CommitInfo) =>
+      rowButton(
+        els,
+        { key: `commit-${commit.sha}`, onPress: () => void pickCommit($, commit.sha) },
+        commit.short,
+        ' ',
+        <Text color={COLORS.text}>{clip(commit.subject, Math.max(10, columns - cellWidth(commit.ago) - 16))}</Text>,
+        <Text color={COLORS.muted}>{` · ${commit.ago}`}</Text>,
+        <Text color={COLORS.muted}>{view.commitFiles[commit.sha] ? ' ⌄' : ' ›'}</Text>,
+      )
+
+    // 데스크톱 diff 패널의 파일 머리 띠: 바탕색 한 줄에 ⌄ 이름(굵게) 흐린 폴더 +N −M, 되돌리기.
+    // 띠 Box 의 key(file-…)는 openDiffAt 이 스크롤해 갈 곳이라 패널이 보이는 곳만 그려도 늘 그린다.
+    const diffFileHeader = (path: string, prefix: string, plus: number, minus: number, isNew: boolean, canRevert: boolean, indent: number, shown = path) => {
+      const id = `${prefix}${path}`
+      const isFolded = armed[`fold:${id}`] ?? false
+      const name = shown.split('/').pop() ?? shown
+      const folder = shown.slice(0, Math.max(0, shown.length - name.length - 1))
+      const room = Math.max(0, columns - indent - cellWidth(name) - cellWidth(` +${plus}  −${minus} `) - (canRevert ? cellWidth(T.revertConfirm) + 2 : 0) - (isNew ? 5 : 0) - 8)
+      return (
+        <Box key={`file-${id}`} height={1} overflow="hidden" columnGap={1} paddingLeft={indent} {...(face ? { backgroundColor: face.bubble } : {})}>
+          <Box flexShrink={0}>
+          {rowButton(
+            els,
+            { key: `fold-${id}`, onPress: () => toggle($, `fold:${id}`) },
+            isFolded ? ' › ' : ' ⌄ ',
+            <Text color={COLORS.text} bold>
+              {name}
+            </Text>,
+            folder && room > 4 && <Text color={COLORS.muted}>{` ${clipStart(folder, room)}`}</Text>,
+            isNew && <Text color={COLORS.muted}> new</Text>,
+            ' ',
+            diffChips(Text, plus, minus),
+          )}
+          </Box>
+          {canRevert && !isNew && (
+            <Button
+              key={`revert-${path}`}
+              plain
+              dimColor={!armed[`revert:${path}`]}
+              label={armed[`revert:${path}`] ? T.revertConfirm : T.revert}
+              onPress={() => void revertFile($, path, armed[`revert:${path}`] ?? false)}
+            />
+          )}
+        </Box>
+      )
+    }
+
+    const tabs = (
+      <Box key="diff-tabs" columnGap={2} height={1} overflow="hidden">
+        {SCOPES.map(scope => (
+          <Box key={`scope-box-${scope}`} flexShrink={0}>
             <Button
               key={`scope-${scope}`}
               plain
@@ -2404,17 +2594,69 @@ export const register: Register = (on, options) => {
               label={`${scope === view.scope ? '●' : '○'} ${scopeLabel(scope)}`}
               onPress={() => void refreshDiffView($, scope)}
             />
-          ))}
-        </Box>
-        <Box columnGap={1}>
+          </Box>
+        ))}
+      </Box>
+    )
+    const titleRow = (
+      <Box key="diff-title" columnGap={1} height={1} overflow="hidden">
+        <Box flexShrink={0}>
           <Text color={COLORS.text} bold>
             {title}
           </Text>
-          {view.scope !== 'commits' && shownCount > 0 && diffChips(Text, added, removed)}
-          {view.scope !== 'uncommitted' && view.base && <Text color={COLORS.muted}>{`vs ${view.base.ref}`}</Text>}
-          <Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />
-          {foldCount > 1 && <Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />}
         </Box>
+        {view.scope !== 'commits' && shownCount > 0 && <Box flexShrink={0}>{diffChips(Text, added, removed)}</Box>}
+        {view.scope !== 'uncommitted' && view.base && (
+          <Box flexShrink={0}>
+            <Text color={COLORS.muted}>{`vs ${view.base.ref}`}</Text>
+          </Box>
+        )}
+        <Box flexShrink={0}>
+          <Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />
+        </Box>
+        {foldCount > 1 && (
+          <Box flexShrink={0}>
+            <Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />
+          </Box>
+        )}
+      </Box>
+    )
+
+    if (face && diffColors) {
+      return virtualDiff({
+        els,
+        palette: diffColors,
+        window,
+        columns,
+        head: [tabs, titleRow],
+        sections: [
+          ...(view.scope !== 'commits' && shownCount === 0 ? [{ kind: 'note' as const, key: 'empty', text: empty }] : []),
+          ...(view.scope !== 'commits'
+            ? files.map(file => ({ kind: 'file' as const, file, prefix: view.scope === 'branch' ? 'b:' : '', canRevert: view.scope === 'uncommitted', indent: 0 }))
+            : []),
+          ...(outside.length > 0 ? [{ kind: 'note' as const, key: 'outside', text: T.outsideEdits }] : []),
+          ...outside.map(edit => ({ kind: 'session' as const, edit })),
+          ...(view.scope === 'commits' && view.commits.length === 0
+            ? [{ kind: 'note' as const, key: 'no-commits', text: info?.isRepo === false ? T.notRepo : view.base ? T.noCommitsSince(view.base.ref) : T.noCommits }]
+            : []),
+          ...(view.scope === 'commits'
+            ? view.commits.flatMap(commit => [
+                { kind: 'element' as const, key: `commit-${commit.sha}`, node: commitRow(commit) },
+                ...(view.commitFiles[commit.sha]?.length === 0 ? [{ kind: 'note' as const, key: `empty-${commit.sha}`, text: T.emptyCommit, indent: 2 }] : []),
+                ...(view.commitFiles[commit.sha] ?? []).map(file => ({ kind: 'file' as const, file, prefix: `c:${commit.short}:`, canRevert: false, indent: 2 })),
+              ])
+            : []),
+        ],
+        isFolded: id => armed[`fold:${id}`] ?? false,
+        fileHeader: (file, prefix, canRevert, indent) => diffFileHeader(file.path, prefix, file.added, file.removed, file.isNew, canRevert, indent),
+        sessionHeader: edit => diffFileHeader(edit.path, OUTSIDE, edit.added, edit.removed, false, false, 0, shortPath(edit.path)),
+      })
+    }
+
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        {tabs}
+        {titleRow}
         {view.scope !== 'commits' && shownCount === 0 && <Text color={COLORS.muted}>{empty}</Text>}
         {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
         {outside.length > 0 && <Text color={COLORS.muted}>{T.outsideEdits}</Text>}
@@ -2425,15 +2667,7 @@ export const register: Register = (on, options) => {
         {view.scope === 'commits' &&
           view.commits.map(commit => (
             <Box key={`commit-${commit.sha}`} flexDirection="column">
-              {rowButton(
-                els,
-                { key: `commit-${commit.sha}`, onPress: () => void pickCommit($, commit.sha) },
-                commit.short,
-                ' ',
-                <Text color={COLORS.text}>{clip(commit.subject, Math.max(10, columns - cellWidth(commit.ago) - 16))}</Text>,
-                <Text color={COLORS.muted}>{` · ${commit.ago}`}</Text>,
-                <Text color={COLORS.muted}>{view.commitFiles[commit.sha] ? ' ⌄' : ' ›'}</Text>,
-              )}
+              {commitRow(commit)}
               {view.commitFiles[commit.sha] && (
                 <Box flexDirection="column" rowGap={1} paddingLeft={2}>
                   {view.commitFiles[commit.sha].length === 0 && <Text color={COLORS.muted}>{T.emptyCommit}</Text>}

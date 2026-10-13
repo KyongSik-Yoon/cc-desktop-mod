@@ -183,6 +183,8 @@ declare module 'claude-code' {
       agentClock: number
       // 셸·모니터 상세에서 보이는 출력 끝부분(끝남 알림의 출력 파일에서). 없으면 null.
       taskOutput: { id: string; text: string | null } | null
+      // /desk-diff 패널 창 위치(ui.scroll 이 알려 준 첫 행과 보이는 행 수). 보이는 곳만 그리는 데 쓴다.
+      diffWindow: { offset: number; bodyRows: number }
       // 미리보기 패널에 열린 문서와, 이번 턴에 Write 로 쓴 문서(턴 끝에 연다). 없으면 null.
       preview: PreviewFile | null
       previewWritten: string | null

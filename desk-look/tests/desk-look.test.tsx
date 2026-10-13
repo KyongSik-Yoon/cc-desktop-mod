@@ -1,3 +1,4 @@
+import type { On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
 import { setLang } from '../hooks/i18n'
@@ -6,6 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
+import { diffPalette, diffRows, gutterWidth, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -787,7 +789,7 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
 
 // Remote Control 세션에서 마지막 입력이 터미널이면 카드를 띄운다. 기다림은 5초씩 돌아오고(시계를 5초씩 민다),
 // 카드를 1분 동안 건드리지 않으면 엔진 창으로 넘긴다. pressAt 번째 기다림에서 카드를 누른다.
-async function remoteAsk($: Parameters<Parameters<typeof test>[2]>[0], on: Parameters<Parameters<typeof test>[2]>[1], pressAt: number | null) {
+async function remoteAsk($: Parameters<Parameters<typeof test>[2]>[0], on: On, pressAt: number | null) {
   let now = 1_000_000
   let rounds = 0
   let touched = false
@@ -2128,7 +2130,7 @@ test('agent.spawn 없이 시작한 에이전트(포크된 스킬)도 활동이 �
 })
 
 // 미리보기 패널: 파일은 /repo 아래에 두고, 쓰기·편집은 files 에 남긴다.
-const docWorld = (on: Parameters<Parameters<typeof test>[2]>[1], files: Record<string, string>) => {
+const docWorld = (on: On, files: Record<string, string>) => {
   const opened: { id: string; title?: string }[] = []
   on('process.run', gitStub as never)
   on('clock.now', () => ({ value: 0 }))
@@ -2253,5 +2255,167 @@ describe('미리보기 패널', () => {
     expect(ran.result).toBe('Showing /repo/docs/guide.md in the preview pane.')
     expect((await $.tool.call({ tool: 'mcp__desk-look__preview', path: '/repo/none.md' } as never)).deny).toMatch(/Couldn't open \/repo\/none\.md for preview/)
     expect(opened.map(item => item.title)).toEqual(['NOTES.md', 'guide.md', 'none.md'])
+  })
+})
+
+describe('데스크톱 모양 diff', () => {
+  // 시험 테마(밝음, 바탕 #fafafa)의 diff 색
+  const TINT = diffPalette('light', '#fafafa', 'inactive')
+  test('순수 함수: hunk 읽기, 행 만들기(안 바뀐 구간·단어 강조), 창 계획', KO, async () => {
+    const hunks = parseHunks('@@ -10,3 +10,3 @@\n keep\n-const total = price * qty\n+const total = price * quantity\n end\n@@ -40 +40,2 @@\n-x\n+y\n+z')
+    expect(hunks.map(h => [h.oldStart, h.oldLines, h.newStart, h.newLines])).toEqual([
+      [10, 3, 10, 3],
+      [40, 1, 40, 2],
+    ])
+    expect(hunks[0]?.lines.map(l => `${l.kind}${l.oldNo}:${l.newNo}`)).toEqual([' 10:10', '-11:0', '+0:11', ' 12:12'])
+    const rows = diffRows(hunks)
+    // 첫 hunk 앞 9줄, 두 hunk 사이 27줄(13~39)
+    expect(rows.filter(row => row.kind === 'gap').map(row => (row.kind === 'gap' ? row.count : 0))).toEqual([9, 27])
+    expect(diffRows(hunks, false).some(row => row.kind === 'gap')).toBe(false)
+    // qty → quantity 만 강조
+    const changed = rows.filter(row => row.kind === 'line' && row.span)
+    expect(changed.map(row => (row.kind === 'line' && row.span ? row.line.text.slice(row.span[0], row.span[1]) : ''))).toEqual(['qty', 'quantity'])
+    // 줄 대부분이 바뀌면 강조하지 않는다
+    expect(wordSpan('x', 'y')).toBeNull()
+    expect(gutterWidth(rows)).toBe(5)
+    expect(rows.reduce((sum, row) => sum + rowHeight(row), 0)).toBe(2 * 3 + 7)
+    // 창: 첫 행 100, 화면 10행 → 90~119 와 맨 위 20행, always 만
+    const items = Array.from({ length: 200 }, (_, i) => ({ height: 1, always: i === 150 }))
+    const steps = windowPlan(items, 100, 10)
+    const drawn = steps.flatMap(step => ('draw' in step ? [step.draw] : []))
+    expect(drawn[0]).toBe(0)
+    expect(drawn).toContain(19)
+    expect(drawn).not.toContain(20)
+    expect(drawn).toContain(90)
+    expect(drawn).toContain(119)
+    expect(drawn).not.toContain(120)
+    expect(drawn).toContain(150)
+    // 그린 행과 건너뛴 칸의 높이 합은 늘 전체와 같다
+    expect(steps.reduce((sum, step) => sum + ('skip' in step ? step.skip : 1), 0)).toBe(200)
+  })
+
+  // Omarchy 밝은 테마 파일을 읽게 하고 프롬프트 하나로 테마를 읽힌다.
+  const lightTheme = (on: On) => {
+    on('env.get', ($, e) => ({ value: (String((e as { name?: string }).name ?? e) === 'HOME' ? '/home/t' : undefined) as never }))
+    on('fs.read', ($, e) => {
+      const path = String((e as { path?: string }).path ?? e)
+      if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
+      throw new Error('ENOENT')
+    })
+    on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  }
+  const BIG = Array.from({ length: 600 }, (_, i) => `+line ${i}`).join('\n')
+  const THEMED_PATCH = [
+    'diff --git a/src/cart.ts b/src/cart.ts\n--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -10,3 +10,3 @@\n keep\n-const total = price * qty\n+const total = price * quantity\n end',
+    `diff --git a/big.ts b/big.ts\n--- a/big.ts\n+++ b/big.ts\n@@ -0,0 +1,600 @@\n${BIG}`,
+  ].join('\n')
+
+  test('테마를 알면 diff 패널을 데스크톱처럼, 큰 파일은 보이는 곳만 그린다', KO, async ($, on) => {
+    lightTheme(on)
+    on('process.run', (($: unknown, e: { argv: string[] }) => {
+      const stdout = e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? THEMED_PATCH : e.argv.includes('--abbrev-ref') ? 'main\n' : ''
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.now', () => ({ value: 0 }))
+    on('tool.call', () => ({ result: 'ok' }) as never)
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/src/cart.ts', old_string: 'qty', new_string: 'quantity' } as never)
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true, bodyRows: 30 } as never })
+    for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Text', text: /안 바뀐 줄/ })); tries++) await wait(10)
+    const drawn = JSON.stringify(await pane.drawn())
+    // 줄 전체 폭 틴트, 진한 단어 강조, 파일 머리 띠(이름 굵게, 폴더 흐리게), 안 바뀐 구간
+    expect(drawn).toContain(`"backgroundColor":"${TINT.addBg}"`)
+    expect(drawn).toContain(`"backgroundColor":"${TINT.delBg}"`)
+    expect(drawn).toContain(`"backgroundColor":"${TINT.addStrong}"`)
+    expect(await pane.find({ type: 'Text', text: 'cart.ts' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: ' src' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '안 바뀐 줄 9개' })).toBeDefined()
+    // 엔진 diff 는 쓰지 않는다
+    expect(drawn).not.toContain('"format":"diff"')
+    // 600줄 파일: 처음 창(위 두 화면)만 Code 로, 나머지는 높이만 있는 빈 칸
+    const codes = (await pane.findAll({ type: 'Code' })).length
+    expect(codes).toBeLessThan(200)
+    expect(drawn).toMatch(/"height":(4\d\d|5\d\d)/)
+    // 머리 띠 접기는 그대로
+    await pane.press({ key: 'fold-big.ts' })
+    expect((await pane.findAll({ type: 'Code' })).length).toBeLessThan(codes)
+    // 접은 파일도 이름으로 열면(openDiffAt) 다시 펼치고, 그 머리 띠(file-…)는 보이는 곳만 그려도 늘 있다
+    await pane.press({ key: 'fold-src/cart.ts' })
+    expect(await pane.find({ type: 'Text', text: '안 바뀐 줄 9개' })).toBeUndefined()
+    await $.command.run({ command: 'desk-diff', args: 'cart.ts' } as never)
+    expect(await pane.find({ type: 'Text', text: '안 바뀐 줄 9개' })).toBeDefined()
+    expect(await pane.find({ key: 'file-src/cart.ts' } as never)).toBeDefined()
+    expect(await pane.find({ key: 'file-big.ts' } as never)).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('저장소 밖 세션 편집은 편집마다 따로, 사이에 구분 줄', KO, async ($, on) => {
+    lightTheme(on)
+    const notRepo = () => ({ value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } })
+    on('process.run', notRepo as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.now', () => ({ value: 0 }))
+    on('clock.every', () => ({ value: undefined }))
+    on('session.cwd', () => ({ value: '/tmp/x' }))
+    on('command.register', () => ({ value: undefined as never }))
+    on('session.start', ($, e) => e as never)
+    // 세션 편집은 대화 기록에서 모은다: 같은 파일을 두 번 고친 기록
+    const a = { file_path: '/tmp/x/n.ts', old_string: 'b', new_string: 'c' }
+    const b = { file_path: '/tmp/x/n.ts', old_string: 'x', new_string: 'y' }
+    const hunkA = { oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' a', '-b', '+c'] }
+    const hunkB = { oldStart: 5, oldLines: 1, newStart: 5, newLines: 1, lines: ['-x', '+y'] }
+    on('session.messages', () => ({
+      value: [
+        { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'a1', tool: 'Edit', input: a }, { tool_use_id: 'b1', tool: 'Edit', input: b }] },
+        {
+          role: 'user',
+          text: '',
+          toolUses: [],
+          toolResults: [
+            { tool_use_id: 'a1', text: 'edited', isError: false, result: { filePath: a.file_path, structuredPatch: [hunkA] } },
+            { tool_use_id: 'b1', text: 'edited', isError: false, result: { filePath: b.file_path, structuredPatch: [hunkB] } },
+          ],
+        },
+      ] as never,
+    }))
+    await $.session.start({ source: 'resume', cwd: '/tmp/x', surface: 'terminal' } as never)
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+    for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Text', text: '· 다음 편집' })); tries++) await wait(10)
+    expect(await pane.find({ type: 'Text', text: '· 다음 편집' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'n.ts' })).toBeDefined()
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain(`"backgroundColor":"${TINT.addBg}"`)
+    expect(drawn).not.toContain('"format":"diff"')
+    await pane.unmount()
+  })
+
+  test('테마를 알면 펼친 편집 행도 데스크톱 모양, 모르면 엔진 diff', KO, async ($, on) => {
+    // 테마 파일은 처음부터 있지만 프롬프트가 오기 전에는 읽지 않았다
+    lightTheme(on)
+    const props = {
+      tool_use_id: 'e9',
+      tool: 'Edit',
+      input: { file_path: '/repo/a.ts', old_string: 'qty', new_string: 'quantity' },
+      output: { structuredPatch: [{ oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ['-const n = qty', '+const n = quantity'] }] },
+      isRunning: false,
+      isErrored: false,
+      isInterrupted: false,
+    }
+    const before = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'ToolUse', requestId: 'e9', viewport: VIEWPORT, props })
+    await before.press({ key: 'row-e9' })
+    expect(JSON.stringify(await before.drawn())).toContain('"format":"diff"')
+    await before.unmount()
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await wait(20)
+    const after = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'ToolUse', requestId: 'e9', viewport: VIEWPORT, props })
+    const drawn = JSON.stringify(await after.drawn())
+    expect(drawn).not.toContain('"format":"diff"')
+    expect(drawn).toContain(`"backgroundColor":"${TINT.delBg}"`)
+    // 대화 안에서는 안 바뀐 구간 줄을 넣지 않는다
+    expect(await after.find({ type: 'Text', text: /안 바뀐 줄/ })).toBeUndefined()
+    await after.unmount()
   })
 })
