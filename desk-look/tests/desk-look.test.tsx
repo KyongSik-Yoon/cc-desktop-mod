@@ -355,7 +355,7 @@ describe('v3: 테마 면과 도구 묶음', () => {
   })
 })
 
-import { parseImages, supportsGraphics, thumbnailSize } from '../hooks/images'
+import { CORNER_SIZE, cornerPixels, parseImages, supportsGraphics, thumbnailSize } from '../hooks/images'
 import { renderDiagram } from '../hooks/diagram'
 
 test('붙여 넣은 이미지 목록과 썸네일 크기', KO, async () => {
@@ -378,7 +378,12 @@ test('말풍선 줄바꿈과 다이어그램 색 나누기', KO, async () => {
 test('그래픽 지원 판정과 그림 못 그릴 때 [Image #N] 지우기', KO, async $ => {
   expect(supportsGraphics({ TERM: 'xterm-ghostty' })).toBe(true)
   expect(supportsGraphics({ TERM: 'xterm-256color', TERM_PROGRAM: 'ghostty' })).toBe(true)
-  expect(supportsGraphics({ TERM: 'xterm-ghostty', HERDR_ENV: '1' })).toBe(false)
+  // herdr 는 kitty_graphics 설정과 엔진 강제(CLAUDE_CODE_FORCE_TERMINAL_IMAGES)가 모두 있어야 그린다
+  const herdr = { TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1' }
+  expect(supportsGraphics({ ...herdr, TERM: 'xterm-ghostty' })).toBe(false)
+  expect(supportsGraphics(herdr, true)).toBe(false)
+  expect(supportsGraphics({ ...herdr, CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' })).toBe(false)
+  expect(supportsGraphics({ ...herdr, CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }, true)).toBe(true)
   expect(supportsGraphics({ TERM: 'xterm-kitty', TMUX: '/tmp/tmux' })).toBe(false)
   expect(supportsGraphics({ TERM: 'xterm-256color' })).toBe(false)
 
@@ -393,6 +398,21 @@ test('그래픽 지원 판정과 그림 못 그릴 때 [Image #N] 지우기', KO
   expect(drawn).not.toContain('[Image #13]')
   expect(drawn).toContain('이건 여전히 어색')
   await bubble.unmount()
+})
+
+test('말풍선 모서리 그림: 바깥 모서리는 비우고 안쪽은 말풍선 색으로 채운다', KO, async () => {
+  const { width, height } = CORNER_SIZE
+  const alpha = (pixels: Uint8Array, x: number, y: number) => pixels[(y * width + x) * 4 + 3]
+  const topLeft = cornerPixels('top-left', '#e2e2e2')
+  expect(topLeft.length).toBe(width * height * 4)
+  expect([...topLeft.slice(0, 3)]).toEqual([0xe2, 0xe2, 0xe2])
+  expect(alpha(topLeft, 0, 0)).toBe(0)
+  expect(alpha(topLeft, width - 1, 0)).toBe(255)
+  expect(alpha(topLeft, 0, height - 1)).toBe(255)
+  const bottomRight = cornerPixels('bottom-right', '#e2e2e2')
+  expect(alpha(bottomRight, width - 1, height - 1)).toBe(0)
+  expect(alpha(bottomRight, 0, height - 1)).toBe(255)
+  expect(alpha(bottomRight, width - 1, 0)).toBe(255)
 })
 
 test('분기 노드는 이중선 상자, 일반 노드는 둥근 상자', KO, async () => {

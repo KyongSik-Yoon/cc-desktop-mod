@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
 import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEdit, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
-import { IMAGE_TOKEN, LIST_IMAGES, parseImages, supportsGraphics, thumbnailSize } from './images'
+import { CORNER_SIZE, HERDR_GRAPHICS, IMAGE_TOKEN, LIST_IMAGES, cornerPixels, parseImages, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
@@ -1299,14 +1299,17 @@ export const register: Register = (on, options) => {
     void refreshImages($).catch(() => undefined)
     void refreshAgents($).catch(() => undefined)
     void (async () => {
-      const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM] = await Promise.all([
+      const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES] = await Promise.all([
         $.env.get('TMUX'),
         $.env.get('ZELLIJ'),
         $.env.get('HERDR_ENV'),
         $.env.get('TERM'),
         $.env.get('TERM_PROGRAM'),
+        $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'),
       ])
-      await update($, graphics, () => supportsGraphics({ TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM }))
+      const herdr = HERDR_ENV === '1' && (await $.process.run(['sh', '-c', HERDR_GRAPHICS], { timeoutMs: 3000 })).stdout.trim() === 'on'
+      const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES }
+      await update($, graphics, () => supportsGraphics(env, herdr))
     })().catch(() => undefined)
     return next(e)
   })
@@ -1549,7 +1552,7 @@ export const register: Register = (on, options) => {
         )}
         {text !== '' &&
           (face ? (
-            bubbleLines(Text, wrapText(text, Math.floor(columns * 0.85) - 6), face.bubble)
+            bubbleLines(Box, Text, canDraw ? Image : null, wrapText(text, Math.floor(columns * 0.85) - 6), face.bubble)
           ) : (
             <Box width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
               <Text color={COLORS.text}>{text}</Text>
@@ -2727,21 +2730,59 @@ export function bubbleRows(lines: string[]): string[] {
   return lines.map(line => `  ${line}${' '.repeat(inner - cellWidth(line))}  `)
 }
 
-function bubbleLines(Text: Elements['terminal']['Text'], lines: string[], fill: string) {
+// 여러 줄 말풍선의 위·아래 줄 끝 칸을 그림으로 그릴 수 있으면(kitty 그래픽) 글리프 대신 둥근 모서리 그림을 쓴다.
+// 사선 글리프는 모서리를 깎을 뿐이고, 한 칸 높이를 다 쓰는 반원은 줄 사이에 홈을 낸다.
+// 그림은 말풍선 색으로 칠하므로 테마 색마다 한 번 만들어 둔다.
+const cornerCache = new Map<string, string>()
+
+function cornerSource(corner: Corner, fill: string) {
+  const key = `${corner} ${fill}`
+  let rgba = cornerCache.get(key)
+  if (rgba === undefined) {
+    rgba = cornerPixels(corner, fill).toBase64()
+    cornerCache.set(key, rgba)
+  }
+  return { rgba, ...CORNER_SIZE }
+}
+
+function bubbleLines(
+  Box: Elements['terminal']['Box'],
+  Text: Elements['terminal']['Text'],
+  Image: Elements['terminal']['Image'] | null,
+  lines: string[],
+  fill: string,
+) {
   const edges = bubbleEdges(lines.length)
   const edge = (glyph: string | null) =>
     glyph === null ? <Text backgroundColor={fill}> </Text> : <Text color={fill}>{glyph}</Text>
+  const corner = (key: string, at: Corner) =>
+    Image && <Image key={key} source={cornerSource(at, fill)} columns={1} rows={1} alt=" " />
   return (
     <>
-      {bubbleRows(lines).map((row, index) => (
-        <Text>
-          {edge(edges[index]?.[0] ?? null)}
+      {bubbleRows(lines).map((row, index) => {
+        const body = (
           <Text color={COLORS.text} backgroundColor={fill}>
             {row}
           </Text>
-          {edge(edges[index]?.[1] ?? null)}
-        </Text>
-      ))}
+        )
+        const side = lines.length > 1 && index === 0 ? 'top' : lines.length > 1 && index === lines.length - 1 ? 'bottom' : null
+        if (Image && side) {
+          return (
+            <Box flexDirection="row">
+              {corner(`bubble-${index}-left`, `${side}-left`)}
+              {body}
+              {corner(`bubble-${index}-right`, `${side}-right`)}
+            </Box>
+          )
+        }
+        return (
+          <Text>
+            {edge(edges[index]?.[0] ?? null)}
+            {body}
+            {edge(edges[index]?.[1] ?? null)}
+          </Text>
+        )
+      })}
     </>
   )
 }

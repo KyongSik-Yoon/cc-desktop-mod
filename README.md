@@ -153,8 +153,8 @@ Then run `/reload-plugins` in your session.
 ## Behavior by environment
 
 - **Colors**: uses engine theme keys (`text`, `inactive`, `claude` …), so both light and dark themes are followed.
-- **Gray bubble fill**: drawn only when the [omarchy](https://omarchy.org) theme (`~/.local/state/omarchy/current/theme/colors.toml`) can be read; a theme change is picked up within 3 seconds. Elsewhere the bubble is a rounded border. The rounded ends use Nerd Font half-circle glyphs and Symbols for Legacy Computing blocks. The chin band above the prompt works the same way: without the theme it draws only the chips, with no gray band.
-- **Image thumbnails**: drawn above the bubble only in kitty and Ghostty outside a multiplexer (tmux, zellij, herdr).
+- **Gray bubble fill**: drawn only when the [omarchy](https://omarchy.org) theme (`~/.local/state/omarchy/current/theme/colors.toml`) can be read; a theme change is picked up within 3 seconds. Elsewhere the bubble is a rounded border. The rounded ends use Nerd Font half-circle glyphs and Symbols for Legacy Computing blocks; where the terminal draws images (see below), the corners of a multi-line bubble are small images instead, so they come out properly round. The chin band above the prompt works the same way: without the theme it draws only the chips, with no gray band.
+- **Image thumbnails and round bubble corners**: drawn in kitty and Ghostty, not inside tmux or zellij. Inside herdr they need both `kitty_graphics = true` under `[experimental]` in herdr's `config.toml` and `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` for Claude Code, which otherwise asks the terminal's name and gets herdr's.
 - **Question card**: used only in sessions with a single terminal attached. When a remote client (mobile or web) is attached, or an option has a preview, the engine's default question dialog opens instead. Esc stops the turn, so it also cancels the question.
 - **Links**: inside a multiplexer that doesn't pass OSC 8 hyperlinks through, the URL is appended dimly after the name.
 
