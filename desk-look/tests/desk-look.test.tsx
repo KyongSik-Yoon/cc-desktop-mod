@@ -761,6 +761,8 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
   const scripts: string[][] = []
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.id', () => ({ value: 'sess-1' }))
+  on('clock.now', () => ({ value: 0 }))
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
   on('tool.call', () => ({ result: 'engine' }) as never)
   on('process.run', ($, e) => {
     scripts.push(e.argv)
@@ -775,6 +777,84 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
   // 세션 id 로 상태 파일을 찾았고, 카드용 임시 폴더는 만들지 않았다
   expect(scripts[0]?.at(-1)).toBe('sess-1')
   expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
+
+  // 마지막 입력이 앱(bridge)에서 왔어도 엔진 창
+  await $.prompt.submit({ text: '폰에서', origin: { kind: 'bridge' }, wait: false } as never)
+  expect(await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: '또?', header: '', options: [{ label: 'a' }] }] } as never)).toEqual({ result: 'engine' })
+  expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
+})
+
+// Remote Control 세션에서 마지막 입력이 터미널이면 카드를 띄운다. 기다림은 5초씩 돌아오고(시계를 5초씩 민다),
+// 카드를 1분 동안 건드리지 않으면 엔진 창으로 넘긴다. pressAt 번째 기다림에서 카드를 누른다.
+async function remoteAsk($: Parameters<Parameters<typeof test>[2]>[0], on: Parameters<Parameters<typeof test>[2]>[1], pressAt: number | null) {
+  let now = 1_000_000
+  let rounds = 0
+  let touched = false
+  // pressAt 번째 기다림은 테스트가 카드를 누를 때까지 붙잡아 둔다
+  let reached: () => void = () => undefined
+  let release: () => void = () => undefined
+  const atPress = new Promise<void>(resolve => (reached = resolve))
+  const pressed = new Promise<void>(resolve => (release = resolve))
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('clock.now', () => ({ value: now }))
+  on('ui.notify', () => ({ value: { isSent: true, channel: 'ghostty' } }))
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  on('tool.call', () => ({ result: 'engine' }) as never)
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine-band</Text>
+  })
+  on('process.run', async ($, e) => {
+    const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === 'mktemp') return out('/tmp/ask-remote\n')
+    const script = e.argv[2] ?? ''
+    if (script.includes('bridgeSessionId')) return out('remote\n')
+    // 카드가 건드림 파일을 만든다
+    if (script.includes('/touched"') && !script.includes('while')) {
+      touched = true
+      return out('')
+    }
+    if (!script.includes('while [ ! -e')) return out('')
+    expect(e.argv.at(-1)).toBe('5')
+    rounds++
+    if (rounds === pressAt) {
+      reached()
+      await pressed
+    }
+    now += 5000
+    const stdout = touched ? 'touched\n' : ''
+    touched = false
+    return out(stdout, 3)
+  })
+  await $.prompt.submit({ text: '터미널에서', origin: { kind: 'composer' }, wait: false } as never)
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never })
+  const call = $.tool.call({
+    tool: 'AskUserQuestion',
+    questions: [{ question: '어느 쪽?', header: '방향', multiSelect: true, options: [{ label: '왼쪽' }, { label: '오른쪽' }] }],
+  } as never)
+  if (pressAt !== null) {
+    await atPress
+    const key = /"key":"(ask-[^"]+-1)"/.exec(JSON.stringify(await band.drawn()))?.[1]
+    await band.press({ key: key ?? '' })
+    // 고른 것이 카드에 반영될 때까지
+    for (let tries = 0; tries < 50 && !touched; tries++) await wait(10)
+    expect(JSON.stringify(await band.drawn())).toContain('☑')
+    release()
+  }
+  const result = await call
+  expect(await band.find({ type: 'Text', text: '어느 쪽?' })).toBeUndefined()
+  await band.unmount()
+  return { result, rounds }
+}
+
+test('질문 카드: Remote Control 세션이라도 터미널에서 입력했으면 카드, 1분 손대지 않으면 엔진 창으로', KO, async ($, on) => {
+  expect(await remoteAsk($, on, null)).toEqual({ result: { result: 'engine' }, rounds: 12 })
+})
+
+test('질문 카드: 넘기기 전에 카드를 건드리면 1분을 다시 센다', KO, async ($, on) => {
+  // 6번째 기다림(30초)에 누르면 그 뒤로 1분: 6 + 12 = 18번
+  expect(await remoteAsk($, on, 6)).toEqual({ result: { result: 'engine' }, rounds: 18 })
 })
 
 test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', KO, async ($, on) => {

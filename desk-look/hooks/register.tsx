@@ -7,7 +7,7 @@ import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
-import { WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
+import { TOUCH as ASK_TOUCH, WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
@@ -58,6 +58,7 @@ const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const,
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
 // 질문 카드 상태. ask.tsx 의 것과 같은 키다(상태 원본은 파일마다 선언해야 한다).
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
+const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
@@ -1379,6 +1380,9 @@ export const register: Register = (on, options) => {
   // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다(타이머를 기다리지 않게).
   on('prompt.submit', async ($, e, next) => {
     void refreshSurface($).catch(() => undefined)
+    // 사람이 어디서 입력했는지: 질문 카드가 Remote Control 세션에서 카드를 띄울지 고른다(ask.tsx)
+    const origin = e.origin.kind
+    if (origin === 'composer' || origin === 'bridge') await update($, promptOrigin, () => origin).catch(() => undefined)
     // 백그라운드 작업이 끝났다는 알림: 셸·모니터는 이것으로만 끝을 안다.
     if (e.origin.kind === 'task-notification') {
       const notices = parseNotices(e.text)
@@ -2450,6 +2454,11 @@ async function replyAsk($: EngineInterface, dir: string, payload: AskReply) {
   await $.process.run(['sh', '-c', ASK_WRITE, 'sh', dir, JSON.stringify(payload)], { timeoutMs: 3000 })
 }
 
+// 카드를 건드렸다고 알린다: Remote Control 세션에서 엔진 창으로 넘기는 시계를 다시 센다(ask.tsx).
+function touchAsk($: EngineInterface, dir: string) {
+  void $.process.run(['sh', '-c', ASK_TOUCH, 'sh', dir], { timeoutMs: 3000 }).catch(() => undefined)
+}
+
 // 지금 질문에 답을 정하고 다음 질문으로, 마지막이면 답을 보낸다.
 // 선택지 하나를 눌렀을 때. 질문이 바뀐 직후(ASK_SETTLE)의 키는 앞 질문에서 넘어온 것이라 버린다:
 // 키를 누르고 떼는 사이에 질문이 바뀌면 다음 질문의 같은 번호가 함께 눌리기 때문이다.
@@ -2462,6 +2471,7 @@ async function pickAsk($: EngineInterface, state: AskState, label: string, isPic
   if (!question.multiSelect) return advanceAsk($, state, [label], '')
   const picks = state.picks[state.step] ?? []
   const value = isPicked ? picks.filter(item => item !== label) : [...picks, label]
+  touchAsk($, state.dir)
   await update($, asking, current =>
     current && current.id === state.id ? { ...current, picks: current.picks.map((item, index) => (index === current.step ? value : item)) } : current,
   )
@@ -2478,6 +2488,7 @@ async function advanceAsk($: EngineInterface, state: AskState, picks: string[], 
   const nextPicks = state.picks.map((value, index) => (index === state.step ? picks : value))
   const nextTexts = state.texts.map((value, index) => (index === state.step ? text : value))
   if (state.step + 1 < state.questions.length) {
+    touchAsk($, state.dir)
     const shownAt = await $.clock.now()
     await update($, asking, current =>
       current && current.id === state.id ? { ...current, step: current.step + 1, picks: nextPicks, texts: nextTexts, shownAt } : current,
@@ -2519,10 +2530,12 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
   const total = state.questions.length
   const isLast = state.step + 1 === total
   const k = `${state.id}-${state.step}`
-  const setText = (value: string) =>
-    update($, asking, current =>
+  const setText = (value: string) => {
+    touchAsk($, state.dir)
+    return update($, asking, current =>
       current && current.id === state.id ? { ...current, texts: current.texts.map((item, index) => (index === current.step ? value : item)) } : current,
     )
+  }
   const unit = question.unit ? ` (${question.unit})` : ''
   const width = Math.max(30, Math.min(columns, 100))
   const { mode, rows } = askMode(question, room)

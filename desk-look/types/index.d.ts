@@ -164,6 +164,8 @@ declare module 'claude-code' {
       tasks: TaskItem[]
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
       ask: AskState | null
+      // 마지막 사람 입력이 온 곳: 터미널(composer) 또는 Remote Control(bridge). 아직 없으면 null.
+      promptOrigin: 'composer' | 'bridge' | null
       // 컨텍스트·사용 한도(턴이 끝날 때마다), 그리고 컨텍스트 패널을 열 때 계산한 항목별 내역.
       usage: UsageInfo | null
       usageBreakdown: UsageBreakdown | null

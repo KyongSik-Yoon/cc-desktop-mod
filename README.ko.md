@@ -156,7 +156,7 @@ claude plugin update desk-look
 - **색**: 엔진 테마 키(`text`, `inactive`, `claude` …)를 써서 밝은·어두운 테마를 모두 따라갑니다.
 - **말풍선 회색 면**: [omarchy](https://omarchy.org) 테마(`~/.local/state/omarchy/current/theme/colors.toml`)를 읽을 수 있을 때만 그립니다. 테마를 바꾸면 3초 안에 따라갑니다. 그 밖의 환경에서는 둥근 테두리 말풍선입니다. 둥근 끝은 Nerd Font 반원 글리프와 Symbols for Legacy Computing 블록을 씁니다. 그림을 그릴 수 있는 터미널(아래)에서는 여러 줄 말풍선의 모서리를 작은 그림으로 그려 제대로 둥글게 나옵니다. 입력창 아래턱 띠도 같아서, 테마를 못 읽으면 회색 띠 없이 칩만 그립니다.
 - **이미지 썸네일과 둥근 말풍선 모서리**: kitty·Ghostty 에서 그리고, tmux·zellij 안에서는 그리지 않습니다. herdr 안에서는 herdr `config.toml` 의 `[experimental]` 에 `kitty_graphics = true` 와 Claude Code 의 `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` 이 모두 있어야 합니다. 없으면 Claude Code 가 터미널 이름을 물었을 때 herdr 가 대답해 그림을 그리지 않습니다.
-- **질문 카드**: 터미널 하나만 붙은 세션에서만 씁니다. 원격(모바일·웹)이 붙어 있거나 선택지에 미리보기가 있으면 엔진의 기본 질문 창이 뜹니다. Esc 는 턴을 멈추므로 질문도 취소됩니다.
+- **질문 카드**: 터미널 하나만 붙은 세션에서만 씁니다. Remote Control 이 켜져 있으면 마지막 입력이 터미널에서 왔을 때만 카드를 띄우고, 1분 동안 아무도 건드리지 않으면 엔진의 기본 질문 창으로 넘겨 모바일·웹 앱에서도 답할 수 있게 합니다. 마지막 입력이 앱에서 왔으면 처음부터 기본 창이 뜹니다. Esc 는 턴을 멈추므로 질문도 취소됩니다.
 - **링크**: OSC 8 하이퍼링크를 통과시키지 않는 멀티플렉서 안에서는 이름 뒤에 URL 이 흐리게 붙습니다.
 
 ## 개발
