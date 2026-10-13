@@ -7,7 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
-import { diffPalette, diffRows, gutterWidth, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
+import { diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -2294,9 +2294,29 @@ describe('데스크톱 모양 diff', () => {
     expect(steps.reduce((sum, step) => sum + ('skip' in step ? step.skip : 1), 0)).toBe(200)
   })
 
-  // Omarchy 밝은 테마 파일을 읽게 하고 프롬프트 하나로 테마를 읽힌다.
+  test('256색으로 그려질 때는 팔레트에 있는 색을 그대로 쓴다', KO, async () => {
+    expect(isTruecolor({ COLORTERM: 'truecolor' })).toBe(true)
+    expect(isTruecolor({ COLORTERM: '24bit' })).toBe(true)
+    // tmux 안에서는 엔진이 256색으로 줄인다
+    expect(isTruecolor({ COLORTERM: 'truecolor', TMUX: '/tmp/tmux-1000/default,1,0' })).toBe(false)
+    expect(isTruecolor({})).toBe(false)
+    const cube = new Set([0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff])
+    const onCube = (hex: string) => [1, 3, 5].every(i => cube.has(parseInt(hex.slice(i, i + 2), 16)))
+    for (const mode of ['light', 'dark'] as const) {
+      const p = diffPalette(mode, mode === 'light' ? '#fafafa' : '#1a1b26', 'inactive', false)
+      const tints = [p.addBg, p.delBg, p.addStrong, p.delStrong, p.addBar, p.delBar]
+      // 모두 팔레트 칸이라 줄여도 제자리이고, 바탕과 진한 강조가 서로 다르다
+      expect(tints.every(onCube)).toBe(true)
+      expect(new Set(tints).size).toBe(tints.length)
+    }
+  })
+
+  // Omarchy 밝은 테마 파일을 읽게 하고 프롬프트 하나로 테마를 읽힌다. 터미널은 truecolor(tmux 밖).
   const lightTheme = (on: On) => {
-    on('env.get', ($, e) => ({ value: (String((e as { name?: string }).name ?? e) === 'HOME' ? '/home/t' : undefined) as never }))
+    on('env.get', ($, e) => {
+      const name = String((e as { name?: string }).name ?? e)
+      return { value: (name === 'HOME' ? '/home/t' : name === 'COLORTERM' ? 'truecolor' : undefined) as never }
+    })
     on('fs.read', ($, e) => {
       const path = String((e as { path?: string }).path ?? e)
       if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never

@@ -4,7 +4,7 @@ import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGr
 import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, HERDR_GRAPHICS, IMAGE_TOKEN, LIST_IMAGES, cornerPixels, parseImages, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
-import { diffPalette, diffRow, diffRows, gutterWidth, parseHunks, patchRows, rowHeight, windowPlan } from './diffview'
+import { diffPalette, diffRow, diffRows, gutterWidth, isTruecolor, parseHunks, patchRows, rowHeight, windowPlan } from './diffview'
 import type { DiffPalette, DiffRow } from './diffview'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
@@ -823,7 +823,8 @@ async function refreshSurface($: EngineInterface) {
   const home = await $.env.get('HOME')
   const toml = home ? await $.fs.read(`${home}/${OMARCHY_COLORS}`).catch(() => null) : null
   const next = toml === null ? null : parseSurface(toml)
-  diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted) : null
+  const [colorterm, tmux] = await Promise.all([$.env.get('COLORTERM').catch(() => undefined), $.env.get('TMUX').catch(() => undefined)])
+  diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, isTruecolor({ COLORTERM: colorterm, TMUX: tmux })) : null
   await update($, surface, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
 }
 

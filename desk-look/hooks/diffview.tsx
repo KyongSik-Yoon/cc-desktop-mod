@@ -21,7 +21,20 @@ export const rowHeight = (row: DiffRow) => (row.kind === 'gap' ? GAP_ROWS : 1)
 export type DiffPalette = { addBg: string; delBg: string; addStrong: string; delStrong: string; addBar: string; delBar: string; muted: string }
 
 // 틴트는 터미널 바탕에 초록·빨강을 섞어 만든다: 고정 색은 바탕(흰색·회색·짙은 색)에 따라 묻히거나 튄다.
-export function diffPalette(mode: 'light' | 'dark', background: string, muted: string): DiffPalette {
+// 256색으로 그려질 때(엔진이 줄인다)는 섞은 색이 가까운 팔레트 칸으로 뭉개진다: 진한 강조가 바탕과 같은 칸이 되거나
+// 초록이 청록 칸으로 간다. 그래서 xterm 256색 팔레트에 있는 색을 그대로 골라 둔다(줄여도 제자리).
+const PALETTE_256 = {
+  light: { addBg: '#d7ffd7', delBg: '#ffd7d7', addStrong: '#afd7af', delStrong: '#ffafaf', addBar: '#5faf5f', delBar: '#d75f5f' },
+  dark: { addBg: '#005f00', delBg: '#5f0000', addStrong: '#008700', delStrong: '#870000', addBar: '#5fd75f', delBar: '#ff5f5f' },
+} as const
+
+// 엔진이 truecolor 로 그리는지: COLORTERM 이 truecolor·24bit 이고 tmux 밖일 때(tmux 안에서는 FORCE_COLOR=3 이어도 256색으로 줄였다).
+export function isTruecolor(env: { COLORTERM?: string; TMUX?: string }): boolean {
+  return /^(truecolor|24bit)$/i.test(env.COLORTERM ?? '') && !env.TMUX
+}
+
+export function diffPalette(mode: 'light' | 'dark', background: string, muted: string, truecolor = true): DiffPalette {
+  if (!truecolor) return { ...PALETTE_256[mode], muted }
   const add = mode === 'light' ? '#2da44e' : '#3fb950'
   const del = mode === 'light' ? '#d1242f' : '#f85149'
   return {
