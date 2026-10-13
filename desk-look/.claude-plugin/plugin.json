@@ -1,7 +1,7 @@
 {
   "name": "desk-look",
-  "version": "0.22.0",
-  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff, context and background tasks panes",
+  "version": "0.23.0",
+  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff, context, background tasks and Markdown preview panes",
   "keywords": [
     "claude-code",
     "claude-code-mod",
@@ -77,6 +77,17 @@
       "type": "string",
       "title": "PR bar",
       "description": "The pull request chip next to the band above the prompt (click it for the /desk-pr pane). Reads GitHub with gh and GitLab with glab. off turns it off",
+      "options": [
+        "on",
+        "off"
+      ],
+      "default": "on",
+      "required": false
+    },
+    "previewAutoOpen": {
+      "type": "string",
+      "title": "Preview new documents",
+      "description": "Open a Markdown document Claude writes in the preview pane when the turn ends (files under .claude/ never open by themselves). off leaves it to the ◫ chip and /desk-preview",
       "options": [
         "on",
         "off"

@@ -4,7 +4,8 @@ import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
-import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText } from '../hooks/markdown'
+import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
+import { previewOf } from '../hooks/preview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -2124,4 +2125,133 @@ test('agent.spawn 없이 시작한 에이전트(포크된 스킬)도 활동이 �
   await $.tool.call({ tool: 'Read', file_path: 'b.md', agentId: 'f1' } as never)
   expect(listed).toBe(before)
   await pane.unmount()
+})
+
+// 미리보기 패널: 파일은 /repo 아래에 두고, 쓰기·편집은 files 에 남긴다.
+const docWorld = (on: Parameters<Parameters<typeof test>[2]>[1], files: Record<string, string>) => {
+  const opened: { id: string; title?: string }[] = []
+  on('process.run', gitStub as never)
+  on('clock.now', () => ({ value: 0 }))
+  on('fs.read', ($, e) => {
+    const text = files[(e as { path: string }).path]
+    if (text === undefined) throw new Error('ENOENT')
+    return { value: text } as never
+  })
+  on('fs.stat', ($, e) => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false, realPath: (e as { path: string }).path } }) as never)
+  on('ui.open', ($, e) => {
+    opened.push({ id: e.id, title: (e as { title?: string }).title })
+    return { value: { isPlaced: true } }
+  })
+  on('tool.call', ($, e) => {
+    const call = e as { tool: string; file_path?: string; content?: string; old_string?: string; new_string?: string }
+    if (call.tool === 'Write' && call.file_path) files[call.file_path] = call.content ?? ''
+    if (call.tool === 'Edit' && call.file_path) files[call.file_path] = (files[call.file_path] ?? '').replace(call.old_string ?? '', call.new_string ?? '')
+    return { result: 'ok' } as never
+  })
+  on('turn.complete', () => ({ text: '썼어요' }) as never)
+  return opened
+}
+const DOC = ['---', 'title: "릴리즈 노트"', 'status: draft', '---', '# 0.23.0', '', '## 바뀐 점', '', '| 항목 | 상태 |', '|---|---|', '| 미리보기 | 완료 |'].join('\n')
+
+describe('미리보기 패널', () => {
+  test('순수 함수: front matter 떼기, 행이 다룬 문서', KO, async () => {
+    expect(splitFrontMatter(DOC).fields).toEqual([
+      ['title', '릴리즈 노트'],
+      ['status', 'draft'],
+    ])
+    expect(splitFrontMatter(DOC).body.startsWith('# 0.23.0')).toBe(true)
+    expect(splitFrontMatter('---\n열리고 안 닫힘').fields).toEqual([])
+    expect(previewOf({ tool: 'Write', input: { file_path: '/r/a.md' }, isErrored: false, isRunning: false })).toBe('/r/a.md')
+    expect(previewOf({ tool: 'Edit', input: { file_path: '/r/a.ts' }, isErrored: false, isRunning: false })).toBeNull()
+    expect(previewOf({ tool: 'Write', input: { file_path: '/r/a.md' }, isErrored: true, isRunning: false })).toBeNull()
+    expect(previewOf({ tool: 'mcp__desk-look__preview', input: { path: 'docs/x.mdx' }, isErrored: false, isRunning: false })).toBe('docs/x.mdx')
+  })
+
+  test('쓴 문서는 턴이 끝날 때 열리고, 열린 문서는 편집을 따라간다', KO, async ($, on) => {
+    const files: Record<string, string> = {}
+    const opened = docWorld(on, files)
+    await $.tool.call({ tool: 'Write', file_path: '/repo/NOTES.md', content: DOC } as never)
+    expect(opened).toEqual([])
+    await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '썼어요', turnId: 't1' } as never)
+    expect(opened).toEqual([{ id: 'desk-preview', title: 'NOTES.md' }])
+
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-preview', viewport: VIEWPORT, props: { title: 'NOTES.md', isFocused: false, bodyColumns: 70 } as never })
+    // 머리: 이름은 따로(좁아도 잘리지 않게), 폴더는 흐리게
+    expect(await pane.find({ type: 'Text', text: 'NOTES.md' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '/repo' })).toBeDefined()
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('릴리즈 노트')
+    expect(drawn).toContain('0.23.0')
+    expect(drawn).toContain('미리보기')
+    expect(drawn).not.toContain('status: draft')
+
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/NOTES.md', old_string: '완료', new_string: '검토 중' } as never)
+    expect(JSON.stringify(await pane.drawn())).toContain('검토 중')
+    // d: 같은 문서를 diff 패널에서
+    await pane.press({ key: 'preview-changes' })
+    expect(opened.map(item => item.id)).toEqual(['desk-preview', 'desk-diff'])
+
+    // .claude/ 아래(메모리·플랜)는 저절로 열지 않는다
+    await $.tool.call({ tool: 'Write', file_path: '/home/me/.claude/plans/p.md', content: '# plan' } as never)
+    await $.turn.complete({ durationMs: 2000, reason: 'answer', answer: '썼어요', turnId: 't2' } as never)
+    expect(opened).toHaveLength(2)
+    await pane.unmount()
+  })
+
+  test('편집 행과 묶음 줄의 ◫ 칩이 문서를 연다', KO, async ($, on) => {
+    const opened = docWorld(on, { '/repo/README.md': '# 읽어 보기' })
+    const row = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolUse',
+      requestId: 'w1',
+      viewport: VIEWPORT,
+      props: { tool_use_id: 'w1', tool: 'Edit', input: { file_path: '/repo/README.md', old_string: 'a', new_string: 'b' }, isRunning: false, isErrored: false, isInterrupted: false },
+    })
+    await row.press({ key: 'preview-w1' })
+    expect(opened).toEqual([{ id: 'desk-preview', title: 'README.md' }])
+    await row.unmount()
+
+    const code = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolUse',
+      requestId: 'w2',
+      viewport: VIEWPORT,
+      props: { tool_use_id: 'w2', tool: 'Edit', input: { file_path: '/repo/app.ts', old_string: 'a', new_string: 'b' }, isRunning: false, isErrored: false, isInterrupted: false },
+    })
+    expect(JSON.stringify(await code.drawn())).not.toContain('◫')
+    await code.unmount()
+
+    const group = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolGroup',
+      requestId: 'g1',
+      viewport: VIEWPORT,
+      props: {
+        calls: [
+          { tool_use_id: 'g-r', ...call('Read', { file_path: '/repo/a.ts' }) },
+          { tool_use_id: 'g-w', ...call('Write', { file_path: '/repo/README.md', content: '# 읽어 보기' }) },
+        ],
+      } as never,
+    })
+    expect(JSON.stringify(await group.drawn())).toContain('◫ README.md')
+    await group.unmount()
+  })
+
+  test('저절로 열기를 끄면 턴 끝에 열지 않고, /desk-preview 와 preview 도구로 연다', { options: { language: 'ko', previewAutoOpen: 'off' } }, async ($, on) => {
+    const files: Record<string, string> = { '/repo/docs/guide.md': '# 안내' }
+    const opened = docWorld(on, files)
+    await $.tool.call({ tool: 'Write', file_path: '/repo/NOTES.md', content: '# 메모' } as never)
+    await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '썼어요', turnId: 't1' } as never)
+    expect(opened).toEqual([])
+
+    expect(await $.command.run({ command: 'desk-preview', args: '' } as never)).toMatchObject({ text: '아직 미리본 문서가 없어요. /desk-preview <파일> 로 여세요.' })
+    expect(await $.command.run({ command: 'desk-preview', args: '/repo/NOTES.md' } as never)).toMatchObject({ text: 'NOTES.md 을(를) 미리보기 패널에 펼쳤어요.' })
+    const ran = await $.tool.call({ tool: 'mcp__desk-look__preview', path: '/repo/docs/guide.md' } as never)
+    expect(ran.result).toBe('Showing /repo/docs/guide.md in the preview pane.')
+    expect((await $.tool.call({ tool: 'mcp__desk-look__preview', path: '/repo/none.md' } as never)).deny).toMatch(/Couldn't open \/repo\/none\.md for preview/)
+    expect(opened.map(item => item.title)).toEqual(['NOTES.md', 'guide.md', 'none.md'])
+  })
 })

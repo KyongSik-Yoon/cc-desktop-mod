@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEdit, SessionEntry, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, HERDR_GRAPHICS, IMAGE_TOKEN, LIST_IMAGES, cornerPixels, parseImages, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
@@ -17,6 +17,7 @@ import { checkPrompt, checkSummary, fetchReview, mergeAction, mergeLevel, mergeN
 import type { MergeAction } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
+import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
 
 export { cellWidth } from './markdown'
 
@@ -53,6 +54,9 @@ const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Recor
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
+// 미리보기 패널에 열린 문서, 그리고 이번 턴에 Write 로 쓴 문서(마지막 것이 턴 끝에 열린다).
+const previewFile = atom({ plugin: 'desk-look', key: 'preview' } as const, null as PreviewFile | null)
+const previewWritten = atom({ plugin: 'desk-look', key: 'previewWritten' } as const, null as string | null)
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
@@ -283,6 +287,7 @@ export function askAnswer(output: unknown): string | null {
 }
 
 function verbOf(tool: string): string {
+  if (tool === PREVIEW_TOOL) return 'Previewed'
   const category = categoryOf(tool)
   if (category !== 'other') return VERB[category]
   // mcp__server__tool → tool
@@ -592,6 +597,44 @@ export function clipStart(text: string, width: number): string {
 const OUTSIDE = 's:'
 
 // 데스크톱처럼 턴 끝 카드의 파일을 누르면 diff 패널을 그 파일에서 연다(접혀 있으면 펼쳐서).
+// 문서를 읽어 미리보기 상태에 둔다. 경로는 실제 경로로 바꿔 둬서 나중에 다른 모양의 경로로 온 편집도 같은 문서로 안다.
+// 못 읽으면 던지지 않고 사유를 담는다.
+async function loadPreview($: EngineInterface, asked: string): Promise<PreviewFile> {
+  const path = await $.fs.stat(asked, { resolve: true }).then(
+    stat => stat.realPath ?? asked,
+    () => asked,
+  )
+  const file: PreviewFile = await $.fs.read(path).then(
+    text => ({ path, text }),
+    (error: unknown) => ({ path, text: '', error: error instanceof Error ? error.message : String(error) }),
+  )
+  await update($, previewFile, () => file)
+  return file
+}
+
+async function openPreview($: EngineInterface, path: string, focus = false) {
+  const file = await loadPreview($, path)
+  const opened = await $.ui.open({ id: PREVIEW_PANE, title: fileName(file.path), ...(focus ? { focus: true as const } : {}) })
+  return { file, isPlaced: opened.isPlaced }
+}
+
+// 보고 있는 문서인지. 열 때 실제 경로로 바꿔 뒀으니 다른 모양의 경로도 실제 경로로 견준다.
+async function isPreviewed($: EngineInterface, path: string) {
+  const shown = await read($, previewFile)
+  if (shown === null) return false
+  if (shown.path === path) return true
+  const real = await $.fs.stat(path, { resolve: true }).then(
+    stat => stat.realPath,
+    () => undefined,
+  )
+  return real === shown.path
+}
+
+// 행 끝의 ◫ 칩: 쉴 때는 흐리고 마우스 아래에서 진해진다.
+function previewChip(els: Els, $: EngineInterface, key: string, path: string, label = T.previewChip) {
+  return <els.Button key={`preview-${key}`} plain dimColor label={label} onPress={() => void openPreview($, path).catch(() => undefined)} />
+}
+
 async function openDiffAt($: EngineInterface, path: string) {
   await refreshDiffView($, 'uncommitted')
   const inGit = matchDiffFile(await read($, diff), path)
@@ -1221,8 +1264,10 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
   const isOpen = openState[id] ?? openFirst
   const stat = diffStat(call)
   const answer = call.tool === 'AskUserQuestion' ? askAnswer(call.output) : null
+  // 마크다운 문서를 쓰거나 고친 행, preview 도구 행: 줄 끝에 미리보기 칩.
+  const doc = previewOf(call)
   // 버튼 안의 글은 칸에 맞춰 잘리지 않으니 직접 자른다(동사·칩·꺾쇠 몫을 빼고).
-  const room = Math.max(12, columns - indent - cellWidth(verbOf(call.tool)) - (stat ? 16 : 0) - 8)
+  const room = Math.max(12, columns - indent - cellWidth(verbOf(call.tool)) - (stat ? 16 : 0) - (doc ? cellWidth(T.previewChip) + 1 : 0) - 8)
   return (
     <Box flexDirection="column" paddingLeft={indent}>
       <Box columnGap={1}>
@@ -1239,6 +1284,7 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
           call.isInterrupted && <Text color={COLORS.muted}> interrupted</Text>,
           <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
         )}
+        {doc !== null && previewChip(els, $, id, doc)}
       </Box>
       {isOpen && (
         <Box marginLeft={2} borderStyle="round" borderColor={COLORS.border} paddingX={1} flexDirection="column">
@@ -1262,6 +1308,8 @@ function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], 
   const stats = calls.map(diffStat).filter((stat): stat is { added: number; removed: number } => stat !== null)
   const added = stats.reduce((sum, stat) => sum + stat.added, 0)
   const removed = stats.reduce((sum, stat) => sum + stat.removed, 0)
+  // 접힌 묶음 줄은 파일 이름을 말하지 않으니 칩에 문서 이름을 단다(둘까지). 펼치면 호출 줄마다 칩이 있다.
+  const docs = isOpen ? [] : [...new Set(calls.map(previewOf).filter((path): path is string => path !== null))].slice(0, 2)
   return (
     <Box flexDirection="column">
       <Box columnGap={1}>
@@ -1274,6 +1322,7 @@ function runLine(els: Els, $: EngineInterface, runId: string, calls: RunCall[], 
           stats.length > 0 && diffChips(els.Text, added, removed),
           <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
         )}
+        {docs.map(path => previewChip(els, $, `${runId}-${path}`, path, `◫ ${clipStart(fileName(path), 24)}`))}
       </Box>
       {isOpen && calls.map(call => callLine(els, $, call, openState, columns, 2, isEditShown(call)))}
     </Box>
@@ -1318,12 +1367,16 @@ export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
   registerAsk(on, options.askNotify !== 'off')
+  const isPreviewAuto = options.previewAutoOpen !== 'off'
 
   on('session.start', async ($, e, next) => {
     if (language === 'auto') {
       const row = (await $.config.list().catch(() => [])).find(item => item.key === 'language')
       if (setLang(langFromConfig(row?.value))) $.ui.invalidate('ui.render')
     }
+    // 도구를 못 걸어도(엔진이 거절) 아래 명령·언어 설정은 그대로 한다.
+    await $.tool.register(previewTool(isPreviewAuto)).catch(() => undefined)
+    await $.command.register({ name: 'desk-preview', description: T.cmdPreview, argumentHint: T.cmdPreviewHint })
     await $.command.register({
       name: 'desk-sessions',
       description: T.cmdSessions,
@@ -1416,6 +1469,7 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     await update($, pendingEdits, () => [])
+    await update($, previewWritten, () => null)
     const now = await $.clock.now()
     await update($, turnStartedAt, () => now)
     return next(e)
@@ -1433,6 +1487,10 @@ export const register: Register = (on, options) => {
       await update($, turnStartedAt, () => null)
       void refreshUsage($).catch(() => undefined)
       if (showPr) void refreshPr($, false).catch(() => undefined)
+      // 이번 턴에 쓴 문서가 아직 패널에 없으면 연다.
+      const doc = await read($, previewWritten)
+      await update($, previewWritten, () => null)
+      if (doc !== null && !(await isPreviewed($, doc).catch(() => false))) await openPreview($, doc).catch(() => undefined)
     } else {
       // 서브에이전트 한 번의 실행이 끝났다. 상태는 곧 엔진 목록으로 다시 맞춘다(다시 깨어날 수 있다).
       const now = await $.clock.now()
@@ -1464,6 +1522,25 @@ export const register: Register = (on, options) => {
     if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
     const ran = await claude(['update', PLUGIN_ID, '--json'])
     return { text: updateMessage(ran.exitCode, ran.stdout, ran.stderr) }
+  })
+
+  on('command.run', { command: 'desk-preview' }, async ($, e) => {
+    const asked = e.args.trim() || (await read($, previewFile))?.path
+    if (!asked) return { text: T.previewNothing }
+    const { file } = await openPreview($, asked, true)
+    return { text: file.error === undefined ? T.previewOpened(fileName(file.path)) : T.previewUnreadable(file.error) }
+  })
+
+  on('tool.call', { tool: PREVIEW_TOOL }, async ($, e) => {
+    const path = stringField(fieldsOf(e), 'path')
+    if (!path) return { deny: 'Give path: the .md file to preview.' }
+    const { file, isPlaced } = await openPreview($, path)
+    if (file.error !== undefined) return { deny: `Couldn't open ${path} for preview (${file.error}).` }
+    return {
+      result: isPlaced
+        ? `Showing ${file.path} in the preview pane.`
+        : `The terminal is too narrow for the preview pane; the person can press ◫ on this row to open ${file.path}.`,
+    }
   })
 
   on('command.run', { command: 'desk-context' }, async $ => {
@@ -1563,6 +1640,11 @@ export const register: Register = (on, options) => {
       const stat = diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false })
       if (path && stat) {
         await update($, pendingEdits, list => mergeEdit(list, { path, ...stat }))
+      }
+      // 마크다운 문서: 보고 있는 것이면 바로 다시 읽고, 메인 대화가 새로 쓴 것은 턴 끝에 열 후보로 둔다.
+      if (isMarkdown(path)) {
+        if (await isPreviewed($, path).catch(() => false)) await loadPreview($, path).catch(() => undefined)
+        else if (tool === 'Write' && isPreviewAuto && !isPrivate(path) && e.agentId === undefined) await update($, previewWritten, () => path)
       }
     }
     // 도구 결과를 git 실행 시간만큼 붙잡지 않도록 기다리지 않는다. 실패는 패널이 비어 보일 뿐이다.
@@ -1836,15 +1918,24 @@ export const register: Register = (on, options) => {
     const name = (path: string) => path.split('/').pop() ?? path
     const els = $.ui.resolve(e)
     // 파일 줄은 누르면 diff 패널의 그 파일로. 이름을 채워 칩을 오른쪽 끝에 맞춘다(테두리·여백 4칸).
+    // 마크다운 문서 줄은 끝에 ◫(미리보기)를 더 둔다. 그 두 칸은 모든 줄이 비워 둬서 칩 열이 맞는다.
+    const docSlot = card.files.some(file => isMarkdown(file.path)) ? 2 : 0
     const fileRow = (file: TurnEdit) => {
       const chips = ` +${file.added}  −${file.removed} `
-      const room = Math.max(8, width - 4 - cellWidth(chips))
+      const room = Math.max(8, width - 4 - cellWidth(chips) - docSlot)
       const label = clipStart(name(file.path), room)
-      return rowButton(
+      const row = rowButton(
         els,
         { key: `diffat-${card.durationMs}-${file.path}`, onPress: () => void openDiffAt($, file.path).catch(() => undefined) },
         label + ' '.repeat(Math.max(0, room - cellWidth(label))),
         diffChips(Text, file.added, file.removed),
+      )
+      if (docSlot === 0) return row
+      return (
+        <Box columnGap={1}>
+          {row}
+          {isMarkdown(file.path) ? previewChip(els, $, `card-${card.durationMs}-${file.path}`, file.path, '◫') : <Text> </Text>}
+        </Box>
       )
     }
 
@@ -2073,6 +2164,66 @@ export const register: Register = (on, options) => {
   })
 
   // 컨텍스트 패널: /context 의 항목별 내역을 막대로, 그 아래 사용 한도와 비용.
+  // 미리보기 패널: 머리에 문서 이름·폴더와 r(다시 읽기)·d(변경 보기), 본문은 대화 답변과 같은 렌더러의 문서 모드.
+  // 데스크톱 앱은 제 마크다운이 이미 데스크톱 모양이라 엔진 Markdown 으로 둔다.
+  on('ui.render', { component: 'Pane', requestId: PREVIEW_PANE }, async ($, e) => {
+    const file = await read($, previewFile)
+    if (e.surface !== 'terminal') {
+      const { Box, Text, Markdown } = $.ui.resolve(e)
+      if (file === null) return <Text dimColor>{T.previewNothing}</Text>
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>{file.path}</Text>
+          {file.error !== undefined ? <Text>{T.previewUnreadable(file.error)}</Text> : <Markdown text={file.text.slice(0, PREVIEW_ROOM)} />}
+        </Box>
+      )
+    }
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button } = els
+    if (file === null) return <Text color={COLORS.muted}>{T.previewNothing}</Text>
+    const face = await read($, surface)
+    const columns = (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 80
+    const isCut = file.text.length > PREVIEW_ROOM
+    const folder = file.path.slice(0, Math.max(0, file.path.length - fileName(file.path).length - 1))
+    return (
+      <Box flexDirection="column">
+        <Box columnGap={2}>
+          <Box flexShrink={0}>
+            <Text color={COLORS.text} bold>
+              {fileName(file.path)}
+            </Text>
+          </Box>
+          {/* 좁으면 폴더만 앞쪽부터 줄인다. 이름과 단축키는 늘 보인다. */}
+          <Box flexGrow={1} flexShrink={1}>
+            <Text color={COLORS.muted} wrap="truncate-start">
+              {folder}
+            </Text>
+          </Box>
+          <Box columnGap={2} flexShrink={0}>
+            <Button key="preview-reload" plain dimColor hotkey="r" label={T.previewReload} onPress={() => void loadPreview($, file.path).catch(() => undefined)} />
+            <Button key="preview-changes" plain dimColor hotkey="d" label={T.previewChanges} onPress={() => void openDiffAt($, file.path).catch(() => undefined)} />
+          </Box>
+        </Box>
+        <Text color={COLORS.border}>{'─'.repeat(Math.max(4, columns - 1))}</Text>
+        <Box marginTop={1} flexDirection="column">
+          {file.error !== undefined ? (
+            <Text color={COLORS.danger}>{T.previewUnreadable(file.error)}</Text>
+          ) : (
+            renderMarkdown(isCut ? file.text.slice(0, PREVIEW_ROOM) : file.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns - 1, {
+              document: true,
+              onCopy: (source, press) => void copyText($, source, press, 'code'),
+            })
+          )}
+        </Box>
+        {isCut && (
+          <Box marginTop={1}>
+            <Text color={COLORS.muted}>{T.previewCut(PREVIEW_ROOM.toLocaleString('en-US'))}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const [live, detail] = await Promise.all([read($, usage), read($, usageBreakdown)])

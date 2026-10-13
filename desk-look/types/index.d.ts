@@ -52,6 +52,9 @@ export type AskState = { id: string; dir: string; questions: AskQuestion[]; step
 
 export type TurnCard = { durationMs: number; files: TurnEdit[]; text?: string }
 
+// 미리보기 패널에 열린 문서. 못 읽었으면 error 에 사유.
+export type PreviewFile = { path: string; text: string; error?: string }
+
 // 세션 패널 한 줄: ~/.claude/projects 의 기록 파일 하나.
 export type SessionEntry = { id: string; updatedAt: number; cwd: string; title: string }
 
@@ -180,6 +183,9 @@ declare module 'claude-code' {
       agentClock: number
       // 셸·모니터 상세에서 보이는 출력 끝부분(끝남 알림의 출력 파일에서). 없으면 null.
       taskOutput: { id: string; text: string | null } | null
+      // 미리보기 패널에 열린 문서와, 이번 턴에 Write 로 쓴 문서(턴 끝에 연다). 없으면 null.
+      preview: PreviewFile | null
+      previewWritten: string | null
     }
   }
 }

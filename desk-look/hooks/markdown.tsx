@@ -301,8 +301,23 @@ const ALERTS: Record<string, { title: string; color: string }> = {
   CAUTION: { title: '✕ Caution', color: 'error' },
 }
 
+// 파일 맨 앞의 YAML front matter(--- … ---)를 떼어 낸다. 키: 값 줄만 모으고, 닫는 줄이 없으면 본문 그대로.
+export function splitFrontMatter(markdown: string): { fields: [string, string][]; body: string } {
+  const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
+  if (lines[0]?.trim() !== '---') return { fields: [], body: markdown }
+  const end = lines.findIndex((line, index) => index > 0 && /^(---|\.\.\.)\s*$/.test(line))
+  if (end < 0) return { fields: [], body: markdown }
+  const fields = lines
+    .slice(1, end)
+    .map(line => /^([^\s:#][^:]*):\s*(.*)$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map(match => [match[1] ?? '', (match[2] ?? '').replace(/^(["'])(.*)\1$/, '$2')] as [string, string])
+  return { fields, body: lines.slice(end + 1).join('\n') }
+}
+
 // onCopy 가 있으면 코드 블록 위 테두리 오른쪽에 마우스를 올렸을 때만 보이는 "⧉ copy" 버튼을 단다.
-export type MarkdownOptions = { onCopy?: (source: string, press: UiPressArgument) => void }
+// document 는 파일 한 편을 읽는 패널용: 제목 단계를 색·밑줄로 나누고 front matter 를 흐린 머리로 접는다.
+export type MarkdownOptions = { onCopy?: (source: string, press: UiPressArgument) => void; document?: boolean }
 
 export function renderMarkdown(markdown: string, els: Els, colors: Palette, columns: number, options: MarkdownOptions = {}) {
   const { Box, Text, Code, Link, Button } = els
@@ -383,6 +398,16 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
       const toned = tone ? { color: tone } : {}
       switch (block.kind) {
         case 'heading':
+          // 문서: H1 은 강조색, H1·H2 는 아래에 가로줄. 위는 한 줄 더 띄워 절이 갈리게 한다.
+          if (options.document && !tone) {
+            const underline = block.level <= 2
+            return (
+              <Box marginTop={index === 0 ? 0 : 2} flexDirection="column">
+                {prose(block.text, k, { bold: true, ...(block.level === 1 ? { color: colors.accent } : {}) })}
+                {underline && <Text color={colors.border}>{'─'.repeat(Math.max(4, Math.min(room, 100)))}</Text>}
+              </Box>
+            )
+          }
           return <Box marginTop={gap}>{prose(block.text, k, { bold: true, ...toned })}</Box>
         case 'paragraph':
           return <Box marginTop={gap}>{prose(block.text, k, toned)}</Box>
@@ -477,9 +502,25 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
       }
     })
 
+  const room = Math.max(20, columns)
+  if (!options.document) {
+    return <Box flexDirection="column">{blocks(parseBlocks(markdown), 'md', room)}</Box>
+  }
+  const { fields, body } = splitFrontMatter(markdown)
+  const keyWidth = Math.max(0, ...fields.map(([name]) => cellWidth(name)))
   return (
     <Box flexDirection="column">
-      {blocks(parseBlocks(markdown), 'md', Math.max(20, columns))}
+      {fields.length > 0 && (
+        <Box flexDirection="column" marginBottom={1} borderStyle="round" borderColor={colors.border} paddingX={1} alignSelf="flex-start">
+          {fields.map(([name, value]) => (
+            <Text>
+              <Text color={colors.muted}>{name + ' '.repeat(keyWidth - cellWidth(name) + 2)}</Text>
+              <Text color={colors.text}>{value}</Text>
+            </Text>
+          ))}
+        </Box>
+      )}
+      {blocks(parseBlocks(body), 'md', room)}
     </Box>
   )
 }

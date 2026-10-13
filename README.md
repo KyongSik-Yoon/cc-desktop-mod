@@ -11,7 +11,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 
 - **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
 - **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage and running background tasks, and a task checklist
-- **Five side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **Six side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
 - **English or Korean** labels, following Claude Code's own language setting by default
 
@@ -22,6 +22,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-diff [file\|branch\|commits]` | Diff pane: uncommitted changes, the whole branch, or per commit |
 | `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
 | `/desk-pr` | The current branch's pull request or merge request, with a merge button |
+| `/desk-preview [file]` | Markdown preview pane: a document drawn like the transcript |
 | `/desk-context` | Context breakdown, usage limits and session cost |
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
 | `/desk-update` | Update desk-look to the latest version |
@@ -95,6 +96,15 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 - `Merge` merges it after a second press within 5 seconds, only at the head commit the pane showed (a newer push makes the merge fail). While checks are still running it reads `Merge when pipeline succeeds` (GitLab) or `Merge when checks pass` (GitHub) and sets auto-merge instead. It shows only on an open, non-draft PR with no failing checks that the host reports as mergeable. The merge method is the repository's: GitLab follows the MR's squash setting; GitHub uses merge, else squash, else rebase, whichever the repository allows. The remote source branch is deleted (on GitHub, after an auto-merge only if the repository deletes head branches); the local branch is left alone
 - Nothing else is changed: no approvals, comments or `Ready for review`
 
+### `/desk-preview [file]`: Markdown preview
+
+- Draws a Markdown document with the transcript's own renderer: bordered tables, mermaid diagrams, alert boxes, code blocks with `⧉ copy`. Headings are set apart (`#` in the accent color, `#` and `##` underlined), and YAML front matter becomes a small key/value box at the top
+- Opens three ways: the `◫ preview` chip at the end of a tool line that wrote or edited a `.md` file (a folded group line names the file, `◫ NOTES.md`), the `◫` next to a `.md` row in the end-of-turn card, and `/desk-preview <file>` (no file reopens the last one)
+- A document Claude writes in a turn opens by itself when the turn ends, not while it is still being written. Files under a `.claude/` folder (memory, plans, skills) never open by themselves; `previewAutoOpen` turns this off
+- Follows the document: later writes and edits reload it. `r` reloads by hand, `d` opens the document in the diff pane
+- Claude can open it too (the `preview` tool), for example when asked to show a README
+- Documents over 90,000 characters are drawn up to that point, with a note. The desktop app keeps its own Markdown
+
 ### `/desk-context`: context and usage
 
 <img src="docs/context.png" alt="The /desk-context pane: context bar, per-category breakdown, usage limits and session cost" width="540">
@@ -139,6 +149,7 @@ Search for `desk-look` in `/config` to find these options.
 | `bubbleSide` | `left` (default), `right` | Where your prompt bubble sits. The attachment lines the engine draws under the bubble (`└ 1 skill available` and so on) can't be moved by a plugin and always sit on the left, so `left` keeps them aligned. `right` is like the desktop app |
 | `askNotify` | `on` (default), `off` | Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself |
 | `prBar` | `on` (default), `off` | The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds; without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting |
+| `previewAutoOpen` | `on` (default), `off` | Open a Markdown document Claude writes in the preview pane when the turn ends. `off` leaves it to the `◫` chips and `/desk-preview` |
 | `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
 
 ## Update
