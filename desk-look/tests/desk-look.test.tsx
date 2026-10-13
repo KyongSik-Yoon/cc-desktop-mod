@@ -993,7 +993,7 @@ test('에이전트 메시지는 줄 전체가 버튼', KO, async ($, on) => {
   await row.unmount()
 })
 
-import { clipStart, matchDiffFile, updateMessage } from '../hooks/register'
+import { clipStart, matchDiffFile, splitCommitDiffs, updateMessage } from '../hooks/register'
 
 test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', KO, () => {
   const files = [{ path: 'a.txt' }, { path: 'src/a.txt' }, { path: 'b.txt' }]
@@ -1650,7 +1650,7 @@ const scopeStub = ($: unknown, e: { argv: string[] }) => {
   if (argv[1] === 'diff' && argv[2] === 'HEAD') return out(DIFF_PATCH)
   if (argv[1] === 'diff' && argv[2] === 'base000') return out(DIFF_PATCH + BRANCH_PATCH)
   if (argv[1] === 'log') return out('c1sha\x1fc1\x1fAdd b\x1falice\x1f1 hour ago\nc2sha\x1fc2\x1fFix a\x1fbob\x1f2 hours ago\n')
-  if (argv[1] === 'show') return out(argv.at(-1) === 'c1sha' ? BRANCH_PATCH : '')
+  if (argv[1] === 'show') return out(argv.filter(arg => arg.endsWith('sha')).map(sha => `\x1e${sha}\n\n${sha === 'c1sha' ? BRANCH_PATCH : DIFF_PATCH}`).join('\n'))
   return out('')
 }
 
@@ -1683,6 +1683,54 @@ test('diff 패널 범위: 브랜치 전체와 커밋별', KO, async ($, on) => {
   await $.command.run({ command: 'desk-diff', args: 'a.txt' } as never)
   expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeDefined()
   await pane.unmount()
+})
+
+test('diff 패널 범위: 브랜치 전체와 커밋별에도 모두 접기·펴기 (z)', KO, async ($, on) => {
+  const shown: string[][] = []
+  on('process.run', (($: unknown, e: { argv: string[] }) => {
+    if (e.argv[1] === 'show') shown.push(e.argv.filter(arg => arg.endsWith('sha')))
+    return scopeStub($, e)
+  }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  const codes = async () => (await pane.findAll({ type: 'Code' })).length
+  const label = async () => JSON.stringify(await pane.find({ type: 'Button', key: 'fold-all' }))
+
+  await pane.press({ key: 'scope-branch' })
+  expect(await codes()).toBe(2)
+  expect(await label()).toContain('모두 접기')
+  await pane.press({ key: 'fold-all' })
+  expect(await codes()).toBe(0)
+  await pane.press({ key: 'fold-all' })
+  expect(await codes()).toBe(2)
+
+  // 커밋별: 펼친 커밋이 없어도 버튼이 있고, 커밋 줄 전체를 git show 한 번으로 편다
+  await pane.press({ key: 'scope-commits' })
+  expect(await codes()).toBe(0)
+  expect(await label()).toContain('모두 펴기')
+  await pane.press({ key: 'fold-all' })
+  expect(shown.at(-1)).toEqual(['c1sha', 'c2sha'])
+  expect(await codes()).toBe(2)
+  expect(await label()).toContain('모두 접기')
+  // 커밋은 따로 접고 펼 수 있고, 하나라도 펴져 있으면 z 는 모두 접는다
+  await pane.press({ key: 'commit-c1sha' })
+  expect(await codes()).toBe(1)
+  await pane.press({ key: 'fold-all' })
+  expect(await codes()).toBe(0)
+  await pane.press({ key: 'commit-c2sha' })
+  await pane.press({ key: 'commit-c1sha' })
+  expect(await codes()).toBe(2)
+  await pane.unmount()
+})
+
+test('커밋 여러 개의 git show 출력을 커밋별로 나눈다', () => {
+  expect(splitCommitDiffs('')).toEqual({})
+  const split = splitCommitDiffs(`\x1ec1sha\n\n${BRANCH_PATCH}\n\x1ec2sha\n\x1ec3sha\n\n${DIFF_PATCH}`)
+  expect(Object.keys(split)).toEqual(['c1sha', 'c2sha', 'c3sha'])
+  expect(split.c1sha?.map(file => file.path)).toEqual(['b.txt'])
+  expect(split.c2sha).toEqual([])
+  expect(split.c3sha?.length).toBe(1)
 })
 
 import { T, langFromConfig, langSetting } from '../hooks/i18n'

@@ -70,7 +70,7 @@ Per-file diffs in three scopes, like the desktop diff panel:
 
 - `Uncommitted`, `Branch` (the whole branch since it left the base branch, via `merge-base`) and `Commits` (click a commit to expand its diff)
 - Give a file name (the end of the path is enough) to scroll to it, or `branch` / `commits` to open in that scope
-- Click a file's header row to fold or unfold its diff; `z` folds or unfolds them all
+- Click a file's header row to fold or unfold its diff; `z` folds or unfolds them all (in `Commits`, every commit at once; several commits can stay open)
 - Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files)
 
 ### `/desk-tasks [number]`: background tasks

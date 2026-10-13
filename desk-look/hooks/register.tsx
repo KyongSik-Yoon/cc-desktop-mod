@@ -68,8 +68,7 @@ const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
   base: null,
   files: [],
   commits: [],
-  commit: null,
-  commitFiles: [],
+  commitFiles: {},
 } as DiffView)
 
 const agents = atom({ plugin: 'desk-look', key: 'agents' } as const, {} as Record<string, AgentRecord>)
@@ -719,20 +718,56 @@ async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
   }
   const log = await git(['log', LOG_FORMAT, `-n${MAX_COMMITS}`, ...(base ? [`${base.sha}..HEAD`] : [])])
   const commits = log.exitCode === 0 ? parseCommits(log.stdout) : []
-  const keep = commits.some(commit => commit.sha === view.commit) ? view.commit : null
-  await update($, diffView, previous => ({ ...previous, scope: next, base, commits, commit: keep, commitFiles: keep ? previous.commitFiles : [] }))
+  // 목록에 남은 커밋만 펼친 채로 둔다
+  const keep = new Set(commits.map(commit => commit.sha))
+  await update($, diffView, previous => ({
+    ...previous,
+    scope: next,
+    base,
+    commits,
+    commitFiles: Object.fromEntries(Object.entries(previous.commitFiles).filter(([sha]) => keep.has(sha))),
+  }))
 }
 
-// 커밋 줄을 누르면 그 커밋의 diff 를 펼치고, 다시 누르면 접는다.
+// 커밋들의 diff 를 git show 한 번으로 읽는다. 커밋마다 \x1e<sha> 줄로 시작한다.
+async function commitDiffs($: EngineInterface, shas: string[]): Promise<Record<string, FileDiff[]>> {
+  const ran = await $.process.run(['git', 'show', '--format=%x1e%H', ...GIT_DIFF, ...shas], { timeoutMs: 8000 })
+  const found = ran.exitCode === 0 ? splitCommitDiffs(ran.stdout) : {}
+  return Object.fromEntries(shas.map(sha => [sha, found[sha] ?? []]))
+}
+
+export function splitCommitDiffs(text: string): Record<string, FileDiff[]> {
+  return Object.fromEntries(
+    text
+      .split('\x1e')
+      .slice(1)
+      .map(chunk => {
+        const end = chunk.indexOf('\n')
+        return end < 0 ? [chunk, []] : [chunk.slice(0, end), parseDiff(chunk.slice(end + 1))]
+      }),
+  )
+}
+
+// 커밋 줄을 누르면 그 커밋의 diff 를 펼치고, 다시 누르면 접는다. 여러 커밋을 함께 펼쳐 둘 수 있다.
 async function pickCommit($: EngineInterface, sha: string) {
   const view = await read($, diffView)
-  if (view.commit === sha) {
-    await update($, diffView, previous => ({ ...previous, commit: null, commitFiles: [] }))
+  if (view.commitFiles[sha]) {
+    await update($, diffView, previous => ({ ...previous, commitFiles: Object.fromEntries(Object.entries(previous.commitFiles).filter(([open]) => open !== sha)) }))
     return
   }
-  const ran = await $.process.run(['git', 'show', '--format=', ...GIT_DIFF, sha], { timeoutMs: 8000 })
-  const files = ran.exitCode === 0 ? parseDiff(ran.stdout) : []
-  await update($, diffView, previous => ({ ...previous, commit: sha, commitFiles: files }))
+  const files = await commitDiffs($, [sha])
+  await update($, diffView, previous => ({ ...previous, commitFiles: { ...previous.commitFiles, ...files } }))
+}
+
+// 커밋별 탭의 모두 접기·펴기: 하나라도 펼쳐져 있으면 모두 접고, 아니면 목록의 커밋을 모두 편다.
+async function foldCommits($: EngineInterface) {
+  const view = await read($, diffView)
+  if (Object.keys(view.commitFiles).length > 0) {
+    await update($, diffView, previous => ({ ...previous, commitFiles: {} }))
+    return
+  }
+  const files = await commitDiffs($, view.commits.map(commit => commit.sha))
+  await update($, diffView, previous => ({ ...previous, commitFiles: files }))
 }
 
 async function refreshSurface($: EngineInterface) {
@@ -2187,13 +2222,13 @@ export const register: Register = (on, options) => {
     }
 
     const shownCount = files.length + outside.length
-    // 지금 보이는 파일 블록의 접기 키(fileBlock·outsideBlock 과 같은 모양). 하나라도 펴져 있으면 모두 접고, 아니면 모두 편다.
-    const foldIds =
-      view.scope === 'commits'
-        ? view.commitFiles.map(file => `c:${view.commits.find(commit => commit.sha === view.commit)?.short ?? ''}:${file.path}`)
-        : [...files.map(file => `${view.scope === 'branch' ? 'b:' : ''}${file.path}`), ...outside.map(edit => `${OUTSIDE}${edit.path}`)]
-    const anyOpen = foldIds.some(id => !armed[`fold:${id}`])
-    const foldAll = () => update($, open, state => ({ ...state, ...Object.fromEntries(foldIds.map(id => [`fold:${id}`, anyOpen])) }))
+    // 모두 접기·펴기: 하나라도 펴져 있으면 모두 접고, 아니면 모두 편다.
+    // 파일 탭은 지금 보이는 파일 블록의 접기 키(fileBlock·outsideBlock 과 같은 모양), 커밋별 탭은 커밋 줄이 대상이다.
+    const foldIds = [...files.map(file => `${view.scope === 'branch' ? 'b:' : ''}${file.path}`), ...outside.map(edit => `${OUTSIDE}${edit.path}`)]
+    const foldCount = view.scope === 'commits' ? view.commits.length : foldIds.length
+    const anyOpen = view.scope === 'commits' ? Object.keys(view.commitFiles).length > 0 : foldIds.some(id => !armed[`fold:${id}`])
+    const foldAll = () =>
+      view.scope === 'commits' ? foldCommits($) : update($, open, state => ({ ...state, ...Object.fromEntries(foldIds.map(id => [`fold:${id}`, anyOpen])) }))
     const title =
       view.scope === 'commits'
         ? view.commits.length > 0
@@ -2223,7 +2258,7 @@ export const register: Register = (on, options) => {
           {view.scope !== 'commits' && shownCount > 0 && diffChips(Text, added, removed)}
           {view.scope !== 'uncommitted' && view.base && <Text color={COLORS.muted}>{`vs ${view.base.ref}`}</Text>}
           <Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />
-          {foldIds.length > 1 && <Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />}
+          {foldCount > 1 && <Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />}
         </Box>
         {view.scope !== 'commits' && shownCount === 0 && <Text color={COLORS.muted}>{empty}</Text>}
         {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
@@ -2242,12 +2277,12 @@ export const register: Register = (on, options) => {
                 ' ',
                 <Text color={COLORS.text}>{clip(commit.subject, Math.max(10, columns - cellWidth(commit.ago) - 16))}</Text>,
                 <Text color={COLORS.muted}>{` · ${commit.ago}`}</Text>,
-                <Text color={COLORS.muted}>{view.commit === commit.sha ? ' ⌄' : ' ›'}</Text>,
+                <Text color={COLORS.muted}>{view.commitFiles[commit.sha] ? ' ⌄' : ' ›'}</Text>,
               )}
-              {view.commit === commit.sha && (
+              {view.commitFiles[commit.sha] && (
                 <Box flexDirection="column" rowGap={1} paddingLeft={2}>
-                  {view.commitFiles.length === 0 && <Text color={COLORS.muted}>{T.emptyCommit}</Text>}
-                  {view.commitFiles.map(file => fileBlock(file, `c:${commit.short}:`, false))}
+                  {view.commitFiles[commit.sha].length === 0 && <Text color={COLORS.muted}>{T.emptyCommit}</Text>}
+                  {view.commitFiles[commit.sha].map(file => fileBlock(file, `c:${commit.short}:`, false))}
                 </Box>
               )}
             </Box>

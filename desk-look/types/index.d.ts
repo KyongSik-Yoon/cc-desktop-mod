@@ -108,7 +108,7 @@ export type PrState = { status: 'loading' | 'ok' | 'none' | 'off'; branch: strin
 export type DiffScope = 'uncommitted' | 'branch' | 'commits'
 export type CommitInfo = { sha: string; short: string; subject: string; author: string; ago: string }
 // base: 비교 기준(브랜치 이름과 merge-base), 못 찾으면 null. commit: 커밋별에서 펼친 커밋.
-export type DiffView = { scope: DiffScope; base: { ref: string; sha: string } | null; files: FileDiff[]; commits: CommitInfo[]; commit: string | null; commitFiles: FileDiff[] }
+export type DiffView = { scope: DiffScope; base: { ref: string; sha: string } | null; files: FileDiff[]; commits: CommitInfo[]; commitFiles: Record<string, FileDiff[]> }
 
 // 백그라운드 작업 패널 한 줄. kind 가 없으면 에이전트: $.agent.list() 의 행에 이 세션이 이벤트로 모은 수치를 더한 것.
 // shell(백그라운드로 넘어간 Bash)·monitor(Monitor)는 엔진이 목록을 주지 않아 도구 결과와 끝남 알림으로만 안다.
