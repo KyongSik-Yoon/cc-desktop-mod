@@ -2,47 +2,121 @@
 
 **English** | [한국어](README.ko.md)
 
-**desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look like the Code tab of the Claude desktop app: prompt bubbles, full-width markdown tables, mermaid diagrams, folded tool calls, subagent cards, a plan card, a checklist, a diff pane, a background tasks pane, a pull request bar for GitHub and GitLab, and a context usage meter.
-It is a Claude Code function-hook plugin: the engine stays as it is, and only the way things are drawn on screen changes.
+**desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look and work like the Code tab of the Claude desktop app.
+It is a Claude Code function-hook plugin: the engine stays as it is, and only the way things are drawn on screen changes. Nothing changes in the Code tab of the desktop app (the `desktop` surface).
 
 ![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)
 
-## desk-look
+**At a glance**
+
+- **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
+- **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage and running background tasks, and a task checklist
+- **Five side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
+- **English or Korean** labels, following Claude Code's own language setting by default
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/desk-diff [file\|branch\|commits]` | Diff pane: uncommitted changes, the whole branch, or per commit |
+| `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
+| `/desk-pr` | The current branch's pull request or merge request |
+| `/desk-context` | Context breakdown, usage limits and session cost |
+| `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
+| `/desk-update` | Update desk-look to the latest version |
+
+## The transcript
 
 | Area | Terminal default | desk-look |
 |---|---|---|
-| Your prompt | A line starting with `>` | A gray bubble (a pill for one line, a box with rounded corners for several). Left (default) or right, set in the config |
+| Your prompt | A line starting with `>` | A gray bubble (a pill for one line, a box with rounded corners for several), left (default) or right. Pasted images show as thumbnails above it |
 | Answers | `●` bullet + engine markdown | A markdown renderer in the desktop prose style |
 | Tables | Grid tables | Full-width tables with a gray header and row separators |
 | mermaid | Code block | Box diagrams ([lovely-mermaid](https://github.com/xl0/lovely-mermaid)) with arrowheads that touch the boxes |
 | `> [!NOTE]` alerts | Blockquote | A box with a border colored by alert type |
+| Code blocks | No way to copy | Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does |
 | Tool calls | One row per call + a result block | Consecutive calls fold into one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click. Expanded, edit diffs show right away (file line numbers, three lines of context) |
 | Subagents | One `Ran an agent` line; notifications and messages only expand with ctrl+o | A card per agent (type and description; tool count, tokens, time and changed lines; click for the result). Background notifications read `✓ description completed · 5s`; click an agent message `◆ name first line ›` to expand it in place |
-| End of turn | A duration line | A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer |
 | Plan (ExitPlanMode) | Folded into one line with other tools | A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval dialog is the engine's own |
-| Tasks | Tool lines | A checklist card above the prompt, `Tasks 2/5` (✓ done, ◉ in progress, ○ to do). Only in sessions that have `TodoWrite` or `TaskCreate` |
-| Above the prompt | — | A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right (click it for the `/desk-diff` pane). While background tasks run, a `⋯ 2` chip next to the band opens the `/desk-tasks` pane. Once context passes half, a `◑ 62%` chip sits next to the band (caution color from 75%, warning color from 90%); click it for the `/desk-context` pane |
-| Progress | `✻ Simmering… (12s · ↓ 300 tokens)` | `●·· Running…  2m 29s` (a word that matches the work, clay-colored dots) |
-| Code blocks | No way to copy | Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does |
 | Questions (AskUserQuestion) | A list under the prompt | A question card right above the prompt. With an empty prompt, pick by number alone (`1`-`8` options, `0` submit, `9` the default dialog); multi-select with ☐/☑; `Other` takes two clicks to type (the first selects the row); hover an option for its preview. A notification goes out when the card opens, as the engine dialog does (`preferredNotifChannel`). The transcript records `Asked question → answer` |
+| End of turn | A duration line | A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer |
 | Command output | Plain text | Output with tables, headings, code or quotes renders as markdown, like an answer |
+
+![A question card above the prompt: numbered options, Other, and the default dialog](docs/ask.png)
+
+## Around the prompt
+
+| Area | Terminal default | desk-look |
+|---|---|---|
+| Chin band | — | A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right (click it for the `/desk-diff` pane) |
+| PR chip | — | The current branch's pull request: `#12 ✓ 5/5`, `✗ 1` failing, `● 3/5` running, `◆ 2` unresolved review threads. GitLab merge requests show as `!7` with pipeline jobs and unresolved discussions. Click it for the `/desk-pr` pane |
+| Context chip | — | Once context passes half, `◑ 62%` (caution color from 75%, warning color from 90%). Click it for the `/desk-context` pane |
+| Tasks chip | `1 shell still running` | While background tasks run, `⋯ 2`. Click it for the `/desk-tasks` pane |
+| Checklist | Tool lines | A card above the prompt, `Tasks 2/5` (✓ done, ◉ in progress, ○ to do). Only in sessions that have `TodoWrite` or `TaskCreate` |
+| Progress | `✻ Simmering… (12s · ↓ 300 tokens)` | `●·· Running…  2m 29s` (a word that matches the work, clay-colored dots) |
 | Mode indicator | Dim text at the bottom right of the prompt | A pill chip (with the omarchy theme) |
 | Hint line | `? for shortcuts` | While a question card is open, ends with the keys that answer it (`pick by number · 9 default dialog · Esc cancel`) |
-| PR bar | — | A chip next to the band for the current branch's pull request: `#12 ✓ 5/5`, `✗ 1` failing, `● 3/5` running, `◆ 2` unresolved review threads. GitHub PRs through `gh`, GitLab merge requests (`!7`, pipeline jobs, unresolved discussions) through `glab`. Click it for the `/desk-pr` pane |
-| `/desk-pr` | — | A right-side pane with the PR or MR: state, `base ← head`, `+N −M`, review decision and merge state, failing and running checks (passing ones folded), unresolved review threads. `Hand to Claude` next to a failing check or a review thread fills the prompt with it. Read-only: nothing is merged, approved or posted |
-| `/desk-diff [file]` | — | A right-side pane with per-file diffs and three scopes, like the desktop diff panel: `Uncommitted`, `Branch` (the whole branch since it left the base branch, via `merge-base`) and `Commits` (per commit: click a commit to expand its diff). Give a file name (the end of the path is enough) to scroll to it, or `branch` / `commits` to open in that scope. Click a file's header row to fold or unfold its diff. Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files) |
-| `/desk-sessions` | — | A right-side pane with recent sessions grouped by project. A search box at the top (title and folder; Enter opens the first result). Click a row or run `/desk-sessions <number>` to switch |
-| `/desk-context` | The `/context` grid | A right-side pane with a context bar (tokens / window, auto-compact point), a per-category breakdown (the same categories as `/context`; a local estimate, so no API requests), 5-hour and 7-day usage limits with time until reset, and the session cost. `↻` recalculates |
-| `/desk-tasks [number]` | Running shells and agents only show as `1 shell still running` | A right-side pane like the desktop's Background tasks: this session's agents, background shells (`run_in_background`, Ctrl+B or a timed-out command) and monitors, under `Running` and `Done`. Agents show their model, tokens, tool uses, what they are doing now (`Fetching`) and `View transcript`: the prompt, their messages, their tool calls folded as in the transcript, and their report. Shells and monitors show their command and `View details`: status, runtime, the result line and the end of the output (once it finishes). `■ Stop` on a running task stops it after a second press within 5 seconds. `z` folds `Done`, `c` clears finished tasks from the list, `Remove` clears one. Click a card or give its number. While tasks run, a `⋯ 2` chip next to the band opens the pane |
-| `/desk-update` | — | Updates desk-look to the latest version: refreshes the `cc-desktop-mod` marketplace, then `claude plugin update`. Run `/reload-plugins` afterwards to apply it (a plugin can't reload itself) |
+
+## Side panes
+
+Each pane opens on the right of the terminal, next to the transcript.
+
+### `/desk-diff [file]`: diffs
+
+![The /desk-diff pane in Branch scope: files folded or expanded, with syntax and word highlighting](docs/diff.png)
+
+Per-file diffs in three scopes, like the desktop diff panel:
+
+- `Uncommitted`, `Branch` (the whole branch since it left the base branch, via `merge-base`) and `Commits` (click a commit to expand its diff)
+- Give a file name (the end of the path is enough) to scroll to it, or `branch` / `commits` to open in that scope
+- Click a file's header row to fold or unfold its diff; `z` folds or unfolds them all
+- Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files)
+
+### `/desk-tasks [number]`: background tasks
+
+![The /desk-tasks pane with a running monitor, background shell and agent](docs/tasks.png)
+
+Like the desktop's Background tasks: this session's agents, background shells (`run_in_background`, Ctrl+B or a timed-out command) and monitors, under `Running` and `Done`.
+
+- **Agents** show their model, tokens, tool uses and what they are doing now (`Fetching`). `View transcript` shows the prompt, their messages, their tool calls folded as in the transcript, and their report
+- **Shells and monitors** show their command. `View details` shows status, runtime, the result line and the end of the output (once it finishes)
+- `■ Stop` stops a running task after a second press within 5 seconds
+- `z` folds `Done`, `c` clears finished tasks from the list, `Remove` clears one
+- Click a card or give its number to open it
+
+### `/desk-pr`: pull request
+
+The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
+
+- State, `base ← head`, `+N −M`, review decision and merge state
+- Failing and running checks (passing ones folded) and unresolved review threads
+- `Hand to Claude` next to a failing check or a review thread fills the prompt with it
+- Read-only: nothing is merged, approved or posted
+
+### `/desk-context`: context and usage
+
+<img src="docs/context.png" alt="The /desk-context pane: context bar, per-category breakdown, usage limits and session cost" width="540">
+
+Replaces the `/context` grid:
+
+- A context bar (tokens / window, the auto-compact point)
+- A per-category breakdown, the same categories as `/context` (a local estimate, so no API requests)
+- 5-hour and 7-day usage limits with time until reset, and the session cost
+- `↻` recalculates
+
+### `/desk-sessions [number]`: recent sessions
+
+Recent sessions grouped by project, with a search box at the top (title and folder; Enter opens the first result). Click a row or give its number:
+
+- **A session in the same folder**: the current window switches to that session right away (runs `/resume <id>`). If running it is blocked, the command is placed in the prompt; press Enter.
+- **A session in another folder**: copies `cd <folder> && claude --resume <id>` to the clipboard (`wl-copy`).
+
+---
 
 Tool lines, agent cards, agent messages, background task cards, session rows, question options, the context, PR and tasks chips, commit rows, and file rows in the end-of-turn card and the diff pane are buttons across the whole row, so clicking the description or the `›` works too.
 
-The mod's own labels are in English or Korean: the `language` setting picks one, and by default follows Claude Code's own language setting.
-
-Nothing changes in the Code tab of the desktop app (the `desktop` surface).
-
-### Install
+## Install
 
 desk-look follows the latest Claude Code release and is tested only there; keep Claude Code up to date. On an older version, parts the engine can't draw yet fall back to its default look.
 
@@ -54,7 +128,7 @@ At the prompt of a Claude Code terminal session:
 
 Answer `y` when asked to add the marketplace, and pick the user scope.
 
-### Settings
+## Settings
 
 Search for `desk-look` in `/config` to find these options.
 
@@ -66,7 +140,7 @@ Search for `desk-look` in `/config` to find these options.
 | `prBar` | `on` (default), `off` | The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds; without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting |
 | `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
 
-### Update
+## Update
 
 Run `/desk-update` at the prompt, or from a shell:
 
@@ -76,14 +150,7 @@ claude plugin update desk-look
 
 Then run `/reload-plugins` in your session.
 
-### Switching sessions
-
-Click a row in the `/desk-sessions` pane, or give a number as in `/desk-sessions 3`:
-
-- **A session in the same folder**: the current window switches to that session right away (runs `/resume <id>`). If running it is blocked, the command is placed in the prompt; press Enter.
-- **A session in another folder**: copies `cd <folder> && claude --resume <id>` to the clipboard (`wl-copy`).
-
-### Behavior by environment
+## Behavior by environment
 
 - **Colors**: uses engine theme keys (`text`, `inactive`, `claude` …), so both light and dark themes are followed.
 - **Gray bubble fill**: drawn only when the [omarchy](https://omarchy.org) theme (`~/.local/state/omarchy/current/theme/colors.toml`) can be read; a theme change is picked up within 3 seconds. Elsewhere the bubble is a rounded border. The rounded ends use Nerd Font half-circle glyphs and Symbols for Legacy Computing blocks. The chin band above the prompt works the same way: without the theme it draws only the chips, with no gray band.
