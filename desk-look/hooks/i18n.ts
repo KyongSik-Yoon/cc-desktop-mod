@@ -11,6 +11,12 @@ const ko = {
   copyFailed: (reason: string) => `복사하지 못했어요: ${reason}`,
   filled: '입력창에 채웠어요. 고쳐서 Enter 로 보내세요.',
   fillFailed: '입력창에 채우지 못했어요.',
+  // diff 줄 댓글
+  commentLabel: (lines: string) => `${lines}번 줄`,
+  commentPlaceholder: 'Claude 에게 바꿀 점 (다른 줄 번호를 누르면 범위)',
+  commentSave: '담기',
+  cancel: '취소',
+  commentsSent: (count: number) => `줄 댓글 ${count}개를 같이 보냈어요`,
   // 에이전트 패널
   paneAgents: '백그라운드 작업',
   cmdAgents: '데스크톱 Background tasks 처럼 이 세션의 에이전트·백그라운드 셸·모니터 패널을 연다 (번호를 주면 그 작업의 상세)',
@@ -235,6 +241,12 @@ const en: Strings = {
   copyFailed: reason => `Couldn't copy: ${reason}`,
   filled: 'Put it in the prompt. Edit it and press Enter to send.',
   fillFailed: "Couldn't fill the prompt.",
+  // diff line comments
+  commentLabel: (lines: string) => (lines.includes('–') ? `Lines ${lines}` : `Line ${lines}`),
+  commentPlaceholder: 'Tell Claude what to change (press another line number for a range)',
+  commentSave: 'add',
+  cancel: 'Cancel',
+  commentsSent: (count: number) => `Sent ${count} line comment${count === 1 ? '' : 's'} with it`,
   paneAgents: 'Background tasks',
   cmdAgents: "Open this session's agents, background shells and monitors, like the desktop Background tasks (give a number for that task's details)",
   cmdAgentsHint: '[number]',

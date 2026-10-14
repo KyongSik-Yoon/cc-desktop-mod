@@ -50,7 +50,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 
 | Area | Terminal default | desk-look |
 |---|---|---|
-| Chin band | — | A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right (click it for the `/desk-diff` pane) |
+| Chin band | — | A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right (click it for the `/desk-diff` pane), and `✎ N` while diff line comments wait for your next prompt |
 | PR chip | — | The current branch's pull request: `#12 ✓ 5/5`, `✗ 1` failing, `● 3/5` running, `◆ 2` unresolved review threads. GitLab merge requests show as `!7` with pipeline jobs and unresolved discussions. Click it for the `/desk-pr` pane |
 | Context chip | — | Once context passes half, `◑ 62%` (caution color from 75%, warning color from 90%). Click it for the `/desk-context` pane |
 | Tasks chip | `1 shell still running` | While background tasks run, `⋯ 2`. Click it for the `/desk-tasks` pane |
@@ -74,6 +74,7 @@ Per-file diffs in three scopes, like the desktop diff panel:
 - Click a file's header row to fold or unfold its diff; `z` folds or unfolds them all (in `Commits`, every commit at once; several commits can stay open)
 - Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files)
 - Drawn like the desktop diff panel when the terminal theme is known (Omarchy): a header band per file, full-width green and red rows with a colored edge, one line-number column, syntax colors on removed lines too, changed words in a darker tint, and unchanged stretches as `N unmodified lines`. Only the rows near the visible part are drawn, so a diff of thousands of lines scrolls as fast as a short one. Edits made this session outside git show each edit on its own, split by `· next edit`. Without a known theme, the engine's diff is used as before
+- Line comments, like the desktop diff panel's: click a line number to open a comment field under it, click another line number in the same file to make it a range, and press Enter to keep the comment. Kept comments stay under their lines and as a `✎ N` chip in the chin band, and go with your next prompt as context Claude reads (the file and lines, the lines themselves, and your comment), then clear. Needs a known theme, like the drawing above
 
 ### `/desk-tasks [number]`: background tasks
 

@@ -23,6 +23,13 @@ export type Runs = { firstOf: Record<string, string>; calls: Record<string, RunC
 // 붙여 넣은 이미지 파일과 PNG 헤더의 크기. 키는 [Image #N] 의 N.
 export type ImageInfo = { path: string; width: number; height: number }
 
+// diff 줄 댓글(hooks/comments.ts). 줄은 종류·옛 번호·새 번호로 기억한다(diffview 의 DiffLine 과 같은 모양).
+export type CommentLine = { kind: ' ' | '+' | '-'; text: string; oldNo: number; newNo: number }
+export type LineRef = Omit<CommentLine, 'text'>
+// patch: 패널 안 패치 하나의 키. scope: 모델에게 알릴 diff 범위(커밋 안 한 변경, 커밋 abc… 등).
+export type CommentDraft = { patch: string; path: string; scope: string; anchor: LineRef; end: LineRef }
+export type LineComment = { id: string; patch: string; path: string; scope: string; end: LineRef; lines: CommentLine[]; body: string }
+
 // 한 턴에 편집 도구로 바꾼 파일. 턴이 끝나면 소요 시간과 함께 카드로 남는다.
 export type TurnEdit = { path: string; added: number; removed: number }
 
@@ -189,6 +196,9 @@ declare module 'claude-code' {
       taskOutput: { id: string; text: string | null } | null
       // /desk-diff 패널 창 위치(ui.scroll 이 알려 준 첫 행과 보이는 행 수). 보이는 곳만 그리는 데 쓴다.
       diffWindow: { offset: number; bodyRows: number }
+      // diff 줄 댓글: 쓰는 중인 것(고른 줄 범위, 없으면 null)과 다음 프롬프트에 context 로 붙일 것.
+      commentDraft: CommentDraft | null
+      lineComments: LineComment[]
       // 미리보기 패널에 열린 문서와, 이번 턴에 Write 로 쓴 문서(턴 끝에 연다). 없으면 null.
       preview: PreviewFile | null
       previewWritten: string | null

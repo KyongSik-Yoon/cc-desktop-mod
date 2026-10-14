@@ -2450,7 +2450,8 @@ describe('데스크톱 모양 diff', () => {
   })
 
   // Omarchy 밝은 테마 파일을 읽게 하고 프롬프트 하나로 테마를 읽힌다. 터미널은 truecolor(tmux 밖).
-  const lightTheme = (on: On) => {
+  // sent 를 주면 엔진까지 간 프롬프트(글·context)를 모은다.
+  const lightTheme = (on: On, sent?: { text: string; context?: readonly string[] }[]) => {
     on('env.get', ($, e) => {
       const name = String((e as { name?: string }).name ?? e)
       return { value: (name === 'HOME' ? '/home/t' : name === 'COLORTERM' ? 'truecolor' : undefined) as never }
@@ -2460,7 +2461,10 @@ describe('데스크톱 모양 diff', () => {
       if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
       throw new Error('ENOENT')
     })
-    on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+    on('prompt.submit', ($, e) => {
+      sent?.push({ text: e.text, context: e.context })
+      return { text: e.text } as never
+    })
   }
   const BIG = Array.from({ length: 600 }, (_, i) => `+line ${i}`).join('\n')
   const THEMED_PATCH = [
@@ -2496,6 +2500,11 @@ describe('데스크톱 모양 diff', () => {
     const codes = (await pane.findAll({ type: 'Code' })).length
     expect(codes).toBeLessThan(200)
     expect(drawn).toMatch(/"height":(4\d\d|5\d\d)/)
+    // 줄 댓글용 번호 버튼은 보이는 덩어리에만(앞뒤로 미리 그리는 화면에는 달지 않는다)
+    expect(await pane.find({ type: 'Button', key: 'd-big.ts.0.p0' })).toBeDefined()
+    // 아래로 미리 그린 덩어리(100행쯤)는 그리되 버튼은 없다
+    expect(JSON.stringify(await pane.drawn())).toContain('"d-big.ts.6"')
+    expect(await pane.find({ type: 'Button', key: 'd-big.ts.6.p0' })).toBeUndefined()
     // 머리 띠 접기는 그대로
     await pane.press({ key: 'fold-big.ts' })
     expect((await pane.findAll({ type: 'Code' })).length).toBeLessThan(codes)
@@ -2506,6 +2515,62 @@ describe('데스크톱 모양 diff', () => {
     expect(await pane.find({ type: 'Text', text: '안 바뀐 줄 9개' })).toBeDefined()
     expect(await pane.find({ key: 'file-src/cart.ts' } as never)).toBeDefined()
     expect(await pane.find({ key: 'file-big.ts' } as never)).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('diff 줄 번호를 눌러 범위에 댓글을 달면 다음 프롬프트에 context 로 붙는다', KO, async ($, on) => {
+    const sent: { text: string; context?: readonly string[] }[] = []
+    lightTheme(on, sent)
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-band</Text>
+    })
+    on('process.run', (($: unknown, e: { argv: string[] }) => {
+      const stdout = e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? THEMED_PATCH : e.argv.includes('--abbrev-ref') ? 'main\n' : ''
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.now', () => ({ value: 0 }))
+    on('tool.call', () => ({ result: 'ok' }) as never)
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/src/cart.ts', old_string: 'qty', new_string: 'quantity' } as never)
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true, bodyRows: 30 } as never })
+    for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Text', text: /안 바뀐 줄/ })); tries++) await wait(10)
+    // cart.ts 행: 안 바뀐 구간, keep(10), −(11), +(11), end(12). 번호 칸이 줄마다 버튼이다.
+    const line = (row: number) => `d-src/cart.ts.${row}.p0`
+    expect(await pane.find({ type: 'Button', key: line(3) })).toBeDefined()
+    await pane.press({ key: line(3) })
+    const input = async () => JSON.stringify(await pane.find({ type: 'Input' }))
+    expect(await input()).toContain('11번 줄')
+    // 다른 줄을 누르면 범위, 고른 줄은 뒤집어 그린다
+    await pane.press({ key: line(4) })
+    expect(await input()).toContain('11–12번 줄')
+    expect(JSON.stringify(await pane.drawn())).toContain('"inverse":true')
+    const typed = (await pane.find({ type: 'Input' })) as { key?: string } | undefined
+    await pane.input({ key: typed?.key ?? '', text: '  이름을 quantity 로 통일  ' })
+    expect(await pane.find({ type: 'Input' })).toBeUndefined()
+    expect(JSON.stringify(await pane.drawn())).toContain('✎ 11–12')
+    // 아래턱에 쌓인 댓글 수
+    const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
+    expect(await band.find({ type: 'Button', key: 'comments-chip' })).toBeDefined()
+    // 다음 프롬프트에 파일:줄, 그 줄들, 댓글이 context 로 붙고 비워진다. 슬래시 명령에는 붙지 않는다.
+    await $.prompt.submit({ text: '고쳐줘', origin: { kind: 'composer' }, wait: false } as never)
+    const context = sent.at(-1)?.context?.join('\n') ?? ''
+    expect(context).toContain('src/cart.ts:11–12 (uncommitted changes)')
+    expect(context).toContain('11 + const total = price * quantity')
+    expect(context).toContain('12   end')
+    expect(context).toContain('\n이름을 quantity 로 통일')
+    expect(JSON.stringify(await pane.drawn())).not.toContain('✎ 11–12')
+    expect(await band.find({ type: 'Button', key: 'comments-chip' })).toBeUndefined()
+    await $.prompt.submit({ text: '또', origin: { kind: 'composer' }, wait: false } as never)
+    expect(sent.at(-1)?.context ?? []).toEqual([])
+    // 한 줄만 고른 상태에서 그 줄을 다시 누르면 닫힌다
+    await pane.press({ key: line(2) })
+    expect(await input()).toContain('11번 줄')
+    await pane.press({ key: line(2) })
+    expect(await pane.find({ type: 'Input' })).toBeUndefined()
+    await band.unmount()
     await pane.unmount()
   })
 

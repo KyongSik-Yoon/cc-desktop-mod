@@ -1,11 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, HERDR_GRAPHICS, IMAGE_TOKEN, LIST_IMAGES, cornerPixels, parseImages, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
-import type { DiffBlock, DiffPalette, DiffRow } from './diffview'
+import type { DiffBlock, DiffLine, DiffPalette, DiffRow } from './diffview'
+import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
+import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
@@ -72,6 +74,12 @@ const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
+// diff 줄 댓글: 쓰는 중인 것(고른 줄 범위)과 다음 프롬프트에 붙일 것. 쓰던 글은 draftText 에 둔다:
+// atom 에 두면 글자마다 diff 패널 전체를 다시 그린다. 패널이 다시 그려질 때 입력칸 값으로 돌려준다.
+const commentDraft = atom({ plugin: 'desk-look', key: 'commentDraft' } as const, null as CommentDraft | null)
+const lineComments = atom({ plugin: 'desk-look', key: 'lineComments' } as const, [] as LineComment[])
+let draftText = ''
+let commentSeq = 0
 const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
   scope: 'uncommitted',
   base: null,
@@ -768,6 +776,41 @@ async function mergeFromPane($: EngineInterface, info: PrInfo, action: MergeActi
   await refreshPr($, true).catch(() => undefined)
 }
 
+// 줄 댓글의 diff 범위: 모델이 줄 번호가 어느 판의 것인지 알게.
+function commentScope(prefix: string, base: string | undefined): string {
+  if (prefix === OUTSIDE) return 'an edit made this session, outside git'
+  if (prefix === 'b:') return base ? `branch changes since ${base}` : 'branch changes'
+  const commit = /^c:([^:]+):$/.exec(prefix)
+  return commit ? `commit ${commit[1]}` : 'uncommitted changes'
+}
+
+// 줄 번호 누름: 범위를 정하고 입력칸으로 포커스를 옮긴다(다음 그림에 생기는 입력칸을 엔진이 기다려 준다).
+// 패널 버튼을 클릭해도 패널이 키를 갖지 않아 focus 가 거절되므로, 패널을 focus 로 다시 열어 키를 가져온다.
+async function pickLine($: EngineInterface, at: LinePress) {
+  const before = await read($, commentDraft)
+  const next = pressLine(before, at)
+  if (!next || before?.patch !== next.patch) draftText = ''
+  await update($, commentDraft, () => next)
+  if (!next) return
+  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await $.ui.focus({ requestId: PANE, key: draftKey(next) }).catch(() => undefined)
+}
+
+async function cancelComment($: EngineInterface) {
+  draftText = ''
+  await update($, commentDraft, () => null)
+}
+
+// Enter: 글이 있으면 그 범위 줄들과 함께 쌓고, 비었으면 닫는다.
+async function saveComment($: EngineInterface, draft: CommentDraft, lines: DiffLine[], value: string) {
+  const body = value.trim()
+  await cancelComment($)
+  if (body === '' || lines.length === 0) return
+  const end = lines[lines.length - 1] as DiffLine
+  const id = String(++commentSeq)
+  await update($, lineComments, list => [...list, { id, patch: draft.patch, path: draft.path, scope: draft.scope, end: lineRef(end), lines, body }])
+}
+
 // "Claude에게 맡기기": 입력창이 비어 있으면 채우고, 쓰던 글이 있으면 뒤에 붙인다.
 async function fillPrompt($: EngineInterface, text: string) {
   const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
@@ -1051,6 +1094,22 @@ function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentR
   }
 }
 
+// 아래턱의 "✎ 2": 다음 프롬프트에 같이 갈 줄 댓글 수(데스크톱 입력창의 Comment 카드). 누르면 diff 패널.
+function commentsChip(els: Els, $: EngineInterface, list: LineComment[]) {
+  if (list.length === 0) return null
+  const { Text, Button } = els
+  const label = String(list.length)
+  return {
+    width: 2 + cellWidth(label),
+    node: (
+      <Button key="comments-chip" plain dimColor onPress={() => void openDiff($).catch(() => undefined)}>
+        <Text color={COLORS.link}>✎</Text>
+        {` ${label}`}
+      </Button>
+    ),
+  }
+}
+
 const AGENT_STATUS_COLOR: Record<string, string> = { completed: COLORS.success, failed: COLORS.danger }
 
 function agentFacts(agent: AgentRecord): string[] {
@@ -1143,6 +1202,17 @@ type VirtualDiff = {
   isFolded: (id: string) => boolean
   fileHeader: (file: FileDiff, prefix: string, canRevert: boolean, indent: number) => unknown
   sessionHeader: (edit: SessionEdit) => unknown
+  notes: DiffNotes
+}
+
+// 줄 댓글을 패널에 잇는 것들: 고른 범위·단 댓글, diff 범위 이름, 번호 누름, 끼울 행 두 가지(높이 1).
+type DiffNotes = {
+  draft: CommentDraft | null
+  comments: LineComment[]
+  scopeOf: (prefix: string) => string
+  onLine: (at: LinePress) => void
+  draftRow: (key: string, draft: CommentDraft, lines: DiffLine[], pad: number) => unknown
+  commentRow: (key: string, comment: LineComment, pad: number) => unknown
 }
 
 // 창이 아직 없을 때(막 열림) 한 화면으로 치는 행 수.
@@ -1152,23 +1222,58 @@ function virtualDiff(v: VirtualDiff) {
   const { Box, Text } = v.els
   type Item = { key: string; height: number; always?: boolean; node: () => unknown }
   const items: Item[] = []
+  const tops = new Map<string, number>()
+  const isOnScreen = (key: string, height: number) => {
+    const at = tops.get(key) ?? 0
+    return at + height > v.window.offset && at < v.window.offset + (v.window.bodyRows || DIFF_BODY_GUESS)
+  }
   const spacer = (key: string) => items.push({ key, height: 1, node: () => <Box key={key} height={1} /> })
-  const rowItems = ({ rows, blocks }: { rows: DiffRow[]; blocks: DiffBlock[] }, key: string, path: string, indent: number) => {
+  const rowItems = ({ rows, blocks }: { rows: DiffRow[]; blocks: DiffBlock[] }, key: string, path: string, indent: number, scope: string) => {
     const options = { path, gutter: gutterWidth(rows), columns: v.columns - indent, unmodified: T.unmodifiedLines }
-    blocks.forEach((block, index) => {
+    // 이 패치에 단 댓글과 쓰는 중인 댓글은 범위 끝 줄 뒤에 한 행씩 끼운다: 덩어리를 그 줄에서 나눈다.
+    const pad = indent + 1 + options.gutter
+    const draft = v.notes.draft?.patch === key ? v.notes.draft : null
+    const picked = draft ? rangeOf(rows, draft.anchor, draft.end) : null
+    const after = new Map<number, Item[]>()
+    const insert = (row: number, item: Item) => after.set(row, [...(after.get(row) ?? []), item])
+    v.notes.comments.forEach(comment => {
+      const row = comment.patch === key ? rowOf(rows, comment.end) : -1
+      if (row !== -1) insert(row, { key: `cm-${comment.id}`, height: 1, node: () => v.notes.commentRow(`cm-${comment.id}`, comment, pad) })
+    })
+    if (draft && picked) insert(picked[1], { key: 'cm-draft', height: 1, node: () => v.notes.draftRow('cm-draft', draft, linesIn(rows, picked), pad) })
+    const cuts = [...after.keys()].sort((a, b) => a - b)
+    const cutBlocks =
+      cuts.length === 0
+        ? blocks
+        : [...cuts, rows.length - 1].flatMap((cut, index) => diffBlocks(rows.slice(index === 0 ? 0 : (cuts[index - 1] ?? 0) + 1, cut + 1)))
+    const pick = {
+      Button: v.els.Button,
+      mark: COLORS.link,
+      isPicked: (row: number) => picked !== null && row >= picked[0] && row <= picked[1],
+      onPress: (row: number) => {
+        const at = rows[row]
+        if (at?.kind === 'line') v.notes.onLine({ patch: key, path, scope, line: at.line })
+      },
+    }
+    let row = 0
+    cutBlocks.forEach((block, index) => {
       const rowKey = `${key}.${index}`
+      const first = row
+      row += block.kind === 'gap' ? 1 : block.lines.length
       items.push({
         key: rowKey,
         height: blockHeight(block),
-        node: () =>
-          indent > 0 ? (
+        node: () => {
+          const blockOptions = block.kind === 'lines' && isOnScreen(rowKey, blockHeight(block)) ? { ...options, pick: { ...pick, first } } : options
+          if (indent === 0) return diffBlock(v.els, v.palette, block, rowKey, blockOptions)
+          return (
             <Box key={rowKey} paddingLeft={indent}>
-              {diffBlock(v.els, v.palette, block, `${rowKey}.r`, options)}
+              {diffBlock(v.els, v.palette, block, `${rowKey}.r`, blockOptions)}
             </Box>
-          ) : (
-            diffBlock(v.els, v.palette, block, rowKey, options)
-          ),
+          )
+        },
       })
+      items.push(...(after.get(row - 1) ?? []))
     })
   }
   // 안내 글은 좁은 패널에서 잘리지 않게 줄바꿈한다. 높이는 폭으로 셈해 정해 둔다(세 줄까지).
@@ -1210,7 +1315,7 @@ function virtualDiff(v: VirtualDiff) {
       items.push({ key: `fh-${id}`, height: 1, always: true, node: () => v.fileHeader(file, prefix, section.canRevert, indent) })
       if (v.isFolded(id)) continue
       if (!file.patch) note(`bin-${id}`, T.binary, indent + 2)
-      else rowItems(patchBlocks(file.patch), `d-${id}`, file.path, indent)
+      else rowItems(patchBlocks(file.patch), `d-${id}`, file.path, indent, v.notes.scopeOf(prefix))
     } else {
       const { edit } = section
       const id = `${OUTSIDE}${edit.path}`
@@ -1220,11 +1325,17 @@ function virtualDiff(v: VirtualDiff) {
       // 편집마다 따로: 서로 다른 시점의 줄 번호를 한 diff 로 잇지 않는다.
       edit.patches.forEach((patch, index) => {
         if (index > 0) note(`next-${id}-${index}`, T.nextEdit, 2)
-        rowItems(patchBlocks(patch), `s-${id}-${index}`, edit.path, 0)
+        rowItems(patchBlocks(patch), `s-${id}-${index}`, edit.path, 0, v.notes.scopeOf(OUTSIDE))
       })
     }
   }
 
+  // 누를 수 있는 번호 칸(줄마다 버튼)은 지금 보이는 덩어리에만: 앞뒤로 미리 그리는 두 화면까지 달면 스크롤이 35~45% 무거워진다.
+  let top = 0
+  for (const item of items) {
+    tops.set(item.key, top)
+    top += item.height
+  }
   const steps = windowPlan(items, v.window.offset, v.window.bodyRows || DIFF_BODY_GUESS)
   const drawn = steps.map((step, index) => ('skip' in step ? <Box key={`skip-${index}`} height={step.skip} /> : items[step.draw]?.node()))
   return <Box flexDirection="column">{drawn as never}</Box>
@@ -1621,7 +1732,13 @@ export const register: Register = (on, options) => {
         if (notices.some(notice => notice.id === view)) void refreshAgentDetail($).catch(() => undefined)
       }
     }
-    const submitted = await next(e)
+    // 줄 댓글은 사람이 친 프롬프트에 보이지 않는 context 로 붙여 보내고 비운다(슬래시 명령에는 붙이지 않는다).
+    const notes = !e.command && (origin === 'composer' || origin === 'bridge') ? await read($, lineComments) : []
+    const submitted = await next(notes.length > 0 ? { ...e, context: [...(e.context ?? []), commentContext(notes)] } : e)
+    if (notes.length > 0 && !('drop' in submitted)) {
+      await update($, lineComments, list => list.filter(item => !notes.some(sent => sent.id === item.id)))
+      $.ui.toast(T.commentsSent(notes.length))
+    }
     // 붙여 넣은 이미지가 저장된 뒤 다시 훑는다. 말풍선이 이 값을 읽어 썸네일로 다시 그려진다.
     void refreshImages($).catch(() => undefined)
     return submitted
@@ -2037,7 +2154,8 @@ export const register: Register = (on, options) => {
     const meter = contextMeter(els, $, await read($, usage), chipMode)
     const prState = showPr ? prChip(els, $, await read($, pr)) : null
     const agentState = agentsChip(els, $, await read($, agents))
-    const extras = [agentState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
+    const notesState = commentsChip(els, $, await read($, lineComments))
+    const extras = [notesState, agentState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
     const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
     const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
     // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
@@ -2494,8 +2612,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
-    const { Box, Text, Button, Code } = els
-    const [uncommitted, view, armed, info, edits, home, face, window] = await Promise.all([
+    const { Box, Text, Button, Code, Input } = els
+    const [uncommitted, view, armed, info, edits, home, face, window, draft, comments] = await Promise.all([
       read($, diff),
       read($, diffView),
       read($, open),
@@ -2504,6 +2622,8 @@ export const register: Register = (on, options) => {
       $.env.get('HOME').catch(() => undefined),
       read($, surface),
       read($, diffWindow),
+      read($, commentDraft),
+      read($, lineComments),
     ])
     // 패널 몸통 폭: viewport.columns 는 패널 폭이 아니다(구분선을 끌면 어긋나 단어 강조 조각이 일찍 잘렸다).
     const columns = (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 80
@@ -2709,6 +2829,39 @@ export const register: Register = (on, options) => {
         isFolded: id => armed[`fold:${id}`] ?? false,
         fileHeader: (file, prefix, canRevert, indent) => diffFileHeader(file.path, prefix, file.added, file.removed, file.isNew, canRevert, indent),
         sessionHeader: edit => diffFileHeader(edit.path, OUTSIDE, edit.added, edit.removed, false, false, 0, shortPath(edit.path)),
+        notes: {
+          draft,
+          comments,
+          scopeOf: prefix => commentScope(prefix, view.base?.ref),
+          onLine: at => void pickLine($, at).catch(() => undefined),
+          draftRow: (key, picked, lines, pad) => (
+            <Box key={key} height={1} paddingLeft={pad} columnGap={1}>
+              <Box flexGrow={1} flexShrink={1} overflow="hidden">
+                <Input
+                  key={draftKey(picked)}
+                  label={T.commentLabel(rangeLabel(lines))}
+                  placeholder={T.commentPlaceholder}
+                  value={draftText}
+                  submitLabel={T.commentSave}
+                  onInput={value => (draftText = value)}
+                  onSubmit={value => void saveComment($, picked, lines, value).catch(() => undefined)}
+                />
+              </Box>
+              <Button key="comment-cancel" plain dimColor label={T.cancel} onPress={() => void cancelComment($)} />
+            </Box>
+          ),
+          commentRow: (key, comment, pad) => (
+            <Box key={key} height={1} paddingLeft={pad} columnGap={1}>
+              <Box flexGrow={1} flexShrink={1} overflow="hidden">
+                <Text wrap="truncate-end">
+                  <Text color={COLORS.link}>{`✎ ${rangeLabel(comment.lines)}`}</Text>
+                  {`  ${comment.body}`}
+                </Text>
+              </Box>
+              <Button key={`comment-del-${comment.id}`} plain dimColor label="✕" onPress={() => void update($, lineComments, list => list.filter(item => item.id !== comment.id))} />
+            </Box>
+          ),
+        },
       })
     }
 

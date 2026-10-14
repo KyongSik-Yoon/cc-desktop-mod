@@ -196,10 +196,35 @@ export function gutterWidth(rows: DiffRow[]): number {
   return String(most).length + 3
 }
 
-type RowOptions = { path?: string; gutter: number; columns: number; unmodified: (count: number) => string }
+// 줄 고르기(댓글): 번호 칸을 줄마다 누를 수 있게 하고, 고른 줄은 mark 색으로 뒤집어 그린다(줄 색으로 뒤집으면 번호가 틴트에 묻힌다).
+// row 는 패치 안 행 번호(first 가 덩어리 첫 줄). 포인터가 올라가면 버튼이 뒤집혀 누를 곳이 보인다.
+export type LinePick = { Button: Els['Button']; first: number; mark: string; isPicked: (row: number) => boolean; onPress: (row: number) => void }
+type RowOptions = { path?: string; gutter: number; columns: number; unmodified: (count: number) => string; pick?: LinePick }
 
 const mark = (line: DiffLine) => (line.kind === '+' ? '+' : line.kind === '-' ? '-' : ' ')
 const lineNo = (line: DiffLine) => (line.kind === '-' ? line.oldNo : line.newNo)
+const numberText = (line: DiffLine, gutter: number) => `${String(lineNo(line)).padStart(gutter - 3)} ${mark(line)} `
+
+// 누를 수 있는 번호 칸: 줄마다 버튼 하나(색 있는 번호 글자). 막대 칸의 hover + 는 줄마다 요소가 둘 더 들어 스크롤이 무거워져 뺐다.
+function pickGutter(els: Pick<Els, 'Box' | 'Text'>, pick: LinePick, lines: DiffLine[], key: string, gutter: number, color: string) {
+  const { Box, Text } = els
+  const { Button } = pick
+  return (
+    <Box width={gutter} flexShrink={0} flexDirection="column">
+      {lines.map((line, index) => {
+        const row = pick.first + index
+        const isPicked = pick.isPicked(row)
+        return (
+          <Button key={`${key}.p${index}`} plain onPress={() => pick.onPress(row)}>
+            <Text color={isPicked ? pick.mark : color} inverse={isPicked}>
+              {numberText(line, gutter)}
+            </Text>
+          </Button>
+        )
+      })}
+    </Box>
+  )
+}
 
 // 덩어리 하나. key 는 패널 안에서 겹치지 않게 부르는 쪽이 준다. 높이는 늘 blockHeight 와 같다.
 export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette, block: DiffBlock, key: string, options: RowOptions) {
@@ -219,7 +244,7 @@ export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: Diff
   const isAdd = first.kind === '+'
   const isDel = first.kind === '-'
   const bg = isAdd ? palette.addBg : isDel ? palette.delBg : undefined
-  const numbers = lines.map(line => `${String(lineNo(line)).padStart(options.gutter - 3)} ${mark(line)} `).join('\n')
+  const numberColor = isAdd ? palette.addBar : isDel ? palette.delBar : palette.muted
   const room = Math.max(4, options.columns - 1 - options.gutter)
   const code = (text: string, codeKey: string) => <Code key={codeKey} source={text === '' ? ' ' : text} path={options.path} wrap="truncate-end" />
   const body: ReturnType<typeof code>[] = []
@@ -252,9 +277,13 @@ export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: Diff
       <Box width={1} height={lines.length} flexShrink={0}>
         {isAdd || isDel ? <Text color={isAdd ? palette.addBar : palette.delBar}>{Array(lines.length).fill('▎').join('\n')}</Text> : null}
       </Box>
-      <Box width={options.gutter} flexShrink={0}>
-        <Text color={isAdd ? palette.addBar : isDel ? palette.delBar : palette.muted}>{numbers}</Text>
-      </Box>
+      {options.pick ? (
+        pickGutter(els, options.pick, lines, key, options.gutter, numberColor)
+      ) : (
+        <Box width={options.gutter} flexShrink={0}>
+          <Text color={numberColor}>{lines.map(line => numberText(line, options.gutter)).join('\n')}</Text>
+        </Box>
+      )}
       {body}
     </Box>
   )
