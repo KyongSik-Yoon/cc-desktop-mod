@@ -1659,39 +1659,59 @@ test('PR 칩과 /desk-pr 패널: 실패한 체크를 Claude에게 맡기면 입�
   await pane.unmount()
 })
 
-test('PR 체크가 도는 동안은 턴 밖에서도 다시 읽고, 다 끝나면 멈춘다', KO, async ($, on) => {
+test('PR 체크가 도는 동안은 턴 밖에서도 다시 읽고, 그대로면 간격을 늘리고, 다 끝나면 멈춘다', KO, async ($, on) => {
   let now = 1000
   let deploy: Record<string, unknown> = { __typename: 'CheckRun', name: 'deploy', status: 'IN_PROGRESS', conclusion: null }
-  // clock.every 는 주기마다 한 번 묻는다. 15초 주기는 붙잡아 두었다가 테스트가 풀어 준다(풀리면 fn 이 돈다).
-  const ticks: Array<() => void> = []
+  // clock.after 는 걸 때 한 번 묻는다. PR 주기(15초 이상)는 붙잡아 두었다가 테스트가 풀어 준다(풀리면 fn 이 돈다).
+  const ticks: Array<{ ms: number; fire: () => void }> = []
   on('clock.now', () => ({ value: now }))
-  on('clock.every', ($, e) => new Promise(resolve => {
-    if (e.ms === 15_000) ticks.push(() => resolve({ value: undefined }))
+  on('clock.after', ($, e) => new Promise(resolve => {
+    if (e.ms >= 15_000) ticks.push({ ms: e.ms, fire: () => resolve({ value: undefined }) })
   }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
   let hold: Promise<void> | null = null
+  let reads = 0
+  let head = 'abc123'
   on('process.run', async ($, e) => {
     if (e.argv[0] === 'gh' && e.argv[1] === 'pr') {
+      reads++
       await hold
       const checks = GH_PR.statusCheckRollup.map(check => (check.name === 'deploy' ? deploy : check))
-      return { value: { exitCode: 0, stdout: JSON.stringify({ ...GH_PR, statusCheckRollup: checks }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      return { value: { exitCode: 0, stdout: JSON.stringify({ ...GH_PR, headRefOid: head, statusCheckRollup: checks }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return prStub($, e as never)
   })
+  // 붙잡아 둔 마지막 주기를 풀고 다음 주기가 걸릴 때까지 기다린다.
+  const tick = async () => {
+    now += ticks.at(-1)?.ms ?? 0
+    ticks.at(-1)?.fire()
+    await wait(50)
+  }
   await $.command.run({ command: 'desk-pr', args: '' } as never)
-  expect(ticks).toHaveLength(1)
+  expect(ticks.map(t => t.ms)).toEqual([15_000])
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-pr', viewport: VIEWPORT, props: { title: 'PR', isFocused: true } as never })
   expect(JSON.stringify(await pane.drawn())).toContain('2/4 통과')
 
-  // 턴 없이 15초가 지나 deploy 가 끝났다
+  // 체크가 그대로면(끝나지 않는 체크) 두 배씩 늘려 2분에서 멈춘다
+  for (let i = 0; i < 5; i++) await tick()
+  expect(ticks.map(t => t.ms)).toEqual([15_000, 30_000, 60_000, 120_000, 120_000, 120_000])
+  expect(reads).toBe(6)
+
+  // 새로 푸시하면 다시 15초부터
+  head = 'def456'
+  await tick()
+  expect(ticks.at(-1)?.ms).toBe(15_000)
+  await tick()
+  expect(ticks.at(-1)?.ms).toBe(30_000)
+
+  // 턴 없이 deploy 가 끝났다
   deploy = { __typename: 'CheckRun', name: 'deploy', status: 'COMPLETED', conclusion: 'SUCCESS' }
-  now += 15_000
-  ticks[0]?.()
-  await wait(50)
+  const armed = ticks.length
+  await tick()
   expect(JSON.stringify(await pane.drawn())).toContain('3/4 통과')
-  // 도는 체크가 없으니 다음 주기는 묻지 않는다(멈춤)
+  // 도는 체크가 없으니 다음 주기는 걸지 않는다(멈춤)
   await wait(50)
-  expect(ticks).toHaveLength(1)
+  expect(ticks).toHaveLength(armed)
 
   // ↻ 는 기다리지 않고 바로 다시 읽고, 읽는 동안은 … 를 보인다
   deploy = { __typename: 'CheckRun', name: 'deploy', status: 'COMPLETED', conclusion: 'FAILURE' }
@@ -1706,6 +1726,27 @@ test('PR 체크가 도는 동안은 턴 밖에서도 다시 읽고, 다 끝나�
   await wait(50)
   expect(await refreshLabel()).toBe('↻')
   expect(JSON.stringify(await pane.drawn())).toContain('2/4 통과 · 2 실패')
+  await pane.unmount()
+})
+
+test('머지·닫힌 PR 은 도는 체크가 남아 있어도 다시 읽지 않는다', KO, async ($, on) => {
+  const ticks: number[] = []
+  on('clock.now', () => ({ value: 1000 }))
+  on('clock.after', ($, e) => new Promise(() => {
+    if (e.ms >= 15_000) ticks.push(e.ms)
+  }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', async ($, e) => {
+    if (e.argv[0] === 'gh' && e.argv[1] === 'pr') {
+      return { value: { exitCode: 0, stdout: JSON.stringify({ ...GH_PR, state: 'MERGED' }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    return prStub($, e as never)
+  })
+  await $.command.run({ command: 'desk-pr', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-pr', viewport: VIEWPORT, props: { title: 'PR', isFocused: true } as never })
+  expect(JSON.stringify(await pane.drawn())).toContain('2/4 통과')
+  await wait(50)
+  expect(ticks).toEqual([])
   await pane.unmount()
 })
 

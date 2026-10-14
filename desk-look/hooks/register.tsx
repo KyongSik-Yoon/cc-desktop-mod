@@ -661,24 +661,33 @@ async function openDiffAt($: EngineInterface, path: string) {
 
 // PR 바: 턴이 끝날 때마다 다시 읽되 30초 안에는 건너뛴다(gh·glab 은 네트워크를 탄다). 도구가 없거나 어느
 // 호스트의 저장소도 아니면(isSticky) 같은 브랜치에서는 다시 묻지 않는다. 패널을 열거나 ↻ 를 누르면 바로 읽는다.
-// 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴 밖에서도 PR_POLL 마다 다시 읽고, 다 끝나면 멈춘다.
+// 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴 밖에서도 다시 읽고, 다 끝나면 멈춘다. 결과가 오지 않는 체크
+// (GitHub EXPECTED, runner 를 기다리는 job)는 끝나지 않으므로, 체크 상태가 그대로면 간격을 PR_POLL 에서 두 배씩
+// PR_POLL_MAX 까지 늘린다(gh·glab 사용 한도). 무엇이든 바뀌거나 새로 푸시하면 PR_POLL 로 돌아간다.
 const PR_TTL = 30_000
 const PR_POLL = 15_000
+const PR_POLL_MAX = 120_000
 let prFetch: Promise<void> | null = null
 let prPoll: Timer | null = null
+let prDelay = PR_POLL
+let prSeen: string | null = null
 
-const isChecking = (state: PrState | null | undefined) => state?.status === 'ok' && (state.pr?.checks.some(check => check.state === 'pending') ?? false)
+const isChecking = (state: PrState | null | undefined) =>
+  state?.status === 'ok' && state.pr?.state === 'OPEN' && state.pr.checks.some(check => check.state === 'pending')
+
+// 다음 주기: 지난번 읽은 것과 head·체크 상태가 같으면 늘리고, 다르면 처음으로.
+function pacePr(state: PrState) {
+  const seen = JSON.stringify([state.pr?.headSha, state.pr?.checks.map(check => [check.name, check.state])])
+  prDelay = seen === prSeen ? Math.min(prDelay * 2, PR_POLL_MAX) : PR_POLL
+  prSeen = seen
+}
 
 function watchPr($: EngineInterface) {
   if (prPoll !== null) return
-  prPoll = $.clock.every(PR_POLL, () => {
-    void (async () => {
-      await refreshPr($, false)
-      if (!isChecking(await read($, pr))) {
-        prPoll?.cancel()
-        prPoll = null
-      }
-    })().catch(() => undefined)
+  prPoll = $.clock.after(prDelay, () => {
+    prPoll = null
+    // 다시 읽어 체크가 아직 돌면 refreshPr 이 다음 주기를 건다.
+    void refreshPr($, false).catch(() => undefined)
   })
 }
 
@@ -704,7 +713,16 @@ async function refreshPr($: EngineInterface, force: boolean) {
     if (force || last?.branch !== branch) await update($, pr, (previous): PrState => ({ status: 'loading', branch, pr: previous?.branch === branch ? previous.pr : null, at: now }))
     const next = await fetchReview(argv => $.process.run(argv, { timeoutMs: 15_000 }), branch, now)
     await update($, pr, () => next)
-    if (isChecking(next)) watchPr($)
+    // 다음 주기는 방금 읽은 때부터 센다(↻·턴 끝에서 바뀐 것을 보면 길게 걸어 둔 타이머 대신 PR_POLL 로).
+    prPoll?.cancel()
+    prPoll = null
+    if (isChecking(next)) {
+      pacePr(next)
+      watchPr($)
+    } else {
+      prDelay = PR_POLL
+      prSeen = null
+    }
   })().finally(() => {
     prFetch = null
   })
