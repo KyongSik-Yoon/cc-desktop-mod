@@ -7,7 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
-import { diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
+import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -2292,6 +2292,14 @@ describe('데스크톱 모양 diff', () => {
     expect(drawn).toContain(150)
     // 그린 행과 건너뛴 칸의 높이 합은 늘 전체와 같다
     expect(steps.reduce((sum, step) => sum + ('skip' in step ? step.skip : 1), 0)).toBe(200)
+  })
+
+  test('같은 종류로 이어진 줄은 덩어리 하나로, 단어 강조 줄은 홀로, 덩어리는 16줄까지', KO, async () => {
+    const patch = ['@@ -1,3 +1,23 @@', ' a', ' b', '-const total = price * qty', '+const total = price * quantity', ...Array.from({ length: 20 }, (_, i) => `+line ${i}`), ' c'].join('\n')
+    const blocks = diffBlocks(diffRows(parseHunks(patch)))
+    expect(blocks.map(b => (b.kind === 'gap' ? `gap${b.count}` : `${b.lines[0]?.kind}${b.lines.length}${b.span ? '*' : ''}`))).toEqual([' 2', '-1*', '+1*', '+16', '+4', ' 1'])
+    // 높이 합은 행 수와 같다(가상 스크롤이 행 번호로 셈한다)
+    expect(blocks.reduce((sum, b) => sum + blockHeight(b), 0)).toBe(diffRows(parseHunks(patch)).length)
   })
 
   test('256색으로 그려질 때는 팔레트에 있는 색을 그대로 쓴다', KO, async () => {

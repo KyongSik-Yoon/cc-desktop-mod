@@ -4,8 +4,8 @@ import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGr
 import type { AgentDetail, AgentRecord, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, HERDR_GRAPHICS, IMAGE_TOKEN, LIST_IMAGES, cornerPixels, parseImages, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
-import { diffPalette, diffRow, diffRows, gutterWidth, isTruecolor, parseHunks, patchRows, rowHeight, windowPlan } from './diffview'
-import type { DiffPalette, DiffRow } from './diffview'
+import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
+import type { DiffBlock, DiffPalette, DiffRow } from './diffview'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
 import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
@@ -1073,19 +1073,18 @@ function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: numb
 }
 
 // diff 행 묶음(가상 스크롤 없이): 대화 속 편집 행처럼 짧은 곳에 쓴다. more 가 양수면 잘린 행 수를 흐리게.
-function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette, rows: DiffRow[], key: string, path: string | undefined, columns: number, more = 0) {
-  const gutter = gutterWidth(rows)
-  const options = { path, gutter, columns, unmodified: T.unmodifiedLines }
+function diffLines(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette, rows: DiffRow[], key: string, path: string | undefined, columns: number, more = 0) {
+  const options = { path, gutter: gutterWidth(rows), columns, unmodified: T.unmodifiedLines }
   return (
     <els.Box flexDirection="column">
-      {rows.map((row, index) => diffRow(els, palette, row, `${key}.${index}`, options))}
+      {diffBlocks(rows).map((block, index) => diffBlock(els, palette, block, `${key}.${index}`, options))}
       {more > 0 && <els.Text color={COLORS.muted}>{T.moreLines(more)}</els.Text>}
     </els.Box>
   )
 }
 
 // /desk-diff 패널 몸통(테마를 알 때): 모든 것을 높이가 정해진 항목으로 편 뒤 창(ui.scroll 이 알려 준 위치) 앞뒤 한 화면만
-// 실제로 그리고, 나머지 연달은 항목은 높이만 있는 빈 Box 하나로 둔다. 줄마다 Code 하나라 다 그리면 3000줄에 2초가 걸린다.
+// 실제로 그리고, 나머지 연달은 항목은 높이만 있는 빈 Box 하나로 둔다. 다 그리면 3000줄에 초 단위가 걸린다.
 type DiffSection =
   | { kind: 'note'; key: string; text: string; indent?: number }
   | { kind: 'element'; key: string; node: unknown }
@@ -1112,20 +1111,20 @@ function virtualDiff(v: VirtualDiff) {
   type Item = { key: string; height: number; always?: boolean; node: () => unknown }
   const items: Item[] = []
   const spacer = (key: string) => items.push({ key, height: 1, node: () => <Box key={key} height={1} /> })
-  const rowItems = (rows: DiffRow[], key: string, path: string, indent: number) => {
+  const rowItems = ({ rows, blocks }: { rows: DiffRow[]; blocks: DiffBlock[] }, key: string, path: string, indent: number) => {
     const options = { path, gutter: gutterWidth(rows), columns: v.columns - indent, unmodified: T.unmodifiedLines }
-    rows.forEach((row, index) => {
+    blocks.forEach((block, index) => {
       const rowKey = `${key}.${index}`
       items.push({
         key: rowKey,
-        height: rowHeight(row),
+        height: blockHeight(block),
         node: () =>
           indent > 0 ? (
             <Box key={rowKey} paddingLeft={indent}>
-              {diffRow(v.els, v.palette, row, `${rowKey}.r`, options)}
+              {diffBlock(v.els, v.palette, block, `${rowKey}.r`, options)}
             </Box>
           ) : (
-            diffRow(v.els, v.palette, row, rowKey, options)
+            diffBlock(v.els, v.palette, block, rowKey, options)
           ),
       })
     })
@@ -1169,7 +1168,7 @@ function virtualDiff(v: VirtualDiff) {
       items.push({ key: `fh-${id}`, height: 1, always: true, node: () => v.fileHeader(file, prefix, section.canRevert, indent) })
       if (v.isFolded(id)) continue
       if (!file.patch) note(`bin-${id}`, T.binary, indent + 2)
-      else rowItems(patchRows(file.patch), `d-${id}`, file.path, indent)
+      else rowItems(patchBlocks(file.patch), `d-${id}`, file.path, indent)
     } else {
       const { edit } = section
       const id = `${OUTSIDE}${edit.path}`
@@ -1179,7 +1178,7 @@ function virtualDiff(v: VirtualDiff) {
       // 편집마다 따로: 서로 다른 시점의 줄 번호를 한 diff 로 잇지 않는다.
       edit.patches.forEach((patch, index) => {
         if (index > 0) note(`next-${id}-${index}`, T.nextEdit, 2)
-        rowItems(patchRows(patch), `s-${id}-${index}`, edit.path, 0)
+        rowItems(patchBlocks(patch), `s-${id}-${index}`, edit.path, 0)
       })
     }
   }
@@ -1210,7 +1209,7 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall, columns: number) {
       if (!diffColors) return <Code source={cap(patch, 40)} path={filePath} format="diff" />
       // 데스크톱 모양 diff. 대화 안이라 안 바뀐 구간 표시는 빼고 40행까지.
       const rows = diffRows(parseHunks(patch), false)
-      return diffBlock({ Box, Text, Code }, diffColors, rows.slice(0, 40), `edit-${call.tool_use_id}`, filePath, columns, rows.length - 40)
+      return diffLines({ Box, Text, Code }, diffColors, rows.slice(0, 40), `edit-${call.tool_use_id}`, filePath, columns, rows.length - 40)
     }
     case 'Write':
       return <Code source={cap(stringField(fields, 'content') ?? '', 40)} path={filePath} />

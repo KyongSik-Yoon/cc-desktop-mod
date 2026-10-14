@@ -132,17 +132,39 @@ export function diffRows(hunks: Hunk[], gaps = true): DiffRow[] {
   return rows
 }
 
-// 패치 하나의 행: 스크롤할 때마다 패널이 다시 그려지므로 패치 글 기준으로 기억해 둔다.
-const rowCache = new Map<string, DiffRow[]>()
-const ROW_CACHE = 400
+// 그리는 단위: 안 바뀐 구간 표시, 또는 같은 종류(추가·삭제·문맥)로 이어진 줄 덩어리. 덩어리 하나를 배경 Box 하나와
+// 여러 줄 Code 하나로 그려 줄마다 그릴 때보다 요소가 몇 분의 일로 준다(실측: 다시 그리기 4~5배 빠름).
+// 단어 강조가 있는 줄만 홀로 둔다(조각 Code 가 필요하다). 덩어리는 RUN_LINES 줄까지: 창 밖까지 통째로 그리지 않게.
+export type DiffBlock = { kind: 'gap'; count: number } | { kind: 'lines'; lines: DiffLine[]; span?: [number, number] }
+export const RUN_LINES = 16
+export const blockHeight = (block: DiffBlock) => (block.kind === 'gap' ? GAP_ROWS : block.lines.length)
 
-export function patchRows(patch: string): DiffRow[] {
-  const hit = rowCache.get(patch)
+export function diffBlocks(rows: DiffRow[], max = RUN_LINES): DiffBlock[] {
+  const blocks: DiffBlock[] = []
+  for (const row of rows) {
+    if (row.kind === 'gap') {
+      blocks.push({ kind: 'gap', count: row.count })
+      continue
+    }
+    const last = blocks[blocks.length - 1]
+    if (!row.span && last?.kind === 'lines' && !last.span && last.lines.length < max && last.lines[0]?.kind === row.line.kind) last.lines.push(row.line)
+    else blocks.push(row.span ? { kind: 'lines', lines: [row.line], span: row.span } : { kind: 'lines', lines: [row.line] })
+  }
+  return blocks
+}
+
+// 패치 하나의 행과 덩어리: 스크롤할 때마다 패널이 다시 그려지므로 패치 글 기준으로 기억해 둔다.
+const patchCache = new Map<string, { rows: DiffRow[]; blocks: DiffBlock[] }>()
+const PATCH_CACHE = 400
+
+export function patchBlocks(patch: string): { rows: DiffRow[]; blocks: DiffBlock[] } {
+  const hit = patchCache.get(patch)
   if (hit) return hit
   const rows = diffRows(parseHunks(patch))
-  if (rowCache.size >= ROW_CACHE) rowCache.clear()
-  rowCache.set(patch, rows)
-  return rows
+  const made = { rows, blocks: diffBlocks(rows) }
+  if (patchCache.size >= PATCH_CACHE) patchCache.clear()
+  patchCache.set(patch, made)
+  return made
 }
 
 // 보이는 곳만 그리기: 항목마다 높이가 있을 때, 창(첫 행·보이는 행 수) 앞뒤 한 화면과 always 인 항목만 그리고
@@ -176,31 +198,36 @@ export function gutterWidth(rows: DiffRow[]): number {
 
 type RowOptions = { path?: string; gutter: number; columns: number; unmodified: (count: number) => string }
 
-// 행 하나. key 는 패널 안에서 겹치지 않게 부르는 쪽이 준다.
-export function diffRow(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette, row: DiffRow, key: string, options: RowOptions) {
+const mark = (line: DiffLine) => (line.kind === '+' ? '+' : line.kind === '-' ? '-' : ' ')
+const lineNo = (line: DiffLine) => (line.kind === '-' ? line.oldNo : line.newNo)
+
+// 덩어리 하나. key 는 패널 안에서 겹치지 않게 부르는 쪽이 준다. 높이는 늘 blockHeight 와 같다.
+export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette, block: DiffBlock, key: string, options: RowOptions) {
   const { Box, Text, Code } = els
-  if (row.kind === 'gap') {
+  if (block.kind === 'gap') {
     return (
       <Box key={key} height={GAP_ROWS} flexDirection="column" justifyContent="center">
         <Text color={palette.muted} wrap="truncate-end">
-          {options.unmodified(row.count)}
+          {options.unmodified(block.count)}
         </Text>
       </Box>
     )
   }
-  const { line } = row
-  const isAdd = line.kind === '+'
-  const isDel = line.kind === '-'
+  const { lines } = block
+  const first = lines[0]
+  if (!first) return <Box key={key} />
+  const isAdd = first.kind === '+'
+  const isDel = first.kind === '-'
   const bg = isAdd ? palette.addBg : isDel ? palette.delBg : undefined
-  const number = String(isDel ? line.oldNo : line.newNo).padStart(options.gutter - 3)
-  const source = line.text === '' ? ' ' : line.text
+  const numbers = lines.map(line => `${String(lineNo(line)).padStart(options.gutter - 3)} ${mark(line)} `).join('\n')
   const room = Math.max(4, options.columns - 1 - options.gutter)
   const code = (text: string, codeKey: string) => <Code key={codeKey} source={text === '' ? ' ' : text} path={options.path} wrap="truncate-end" />
-  // 바뀐 단어: 앞·가운데·뒤 세 조각. 조각마다 폭을 정해야 앞 Code 가 남은 폭을 다 먹지 않는다. 앞부분이 칸을 넘기면 강조를 뺀다.
-  const span = row.span
+  const body: ReturnType<typeof code>[] = []
+  // 바뀐 단어(한 줄 덩어리): 앞·가운데·뒤 세 조각. 조각마다 폭을 정해야 앞 Code 가 남은 폭을 다 먹지 않는다. 앞부분이 칸을 넘기면 강조를 뺀다.
+  const span = block.span
+  const source = first.text === '' ? ' ' : first.text
   const pre = span ? cellWidth(source.slice(0, span[0])) : 0
   const mid = span ? cellWidth(source.slice(span[0], span[1])) : 0
-  const body: ReturnType<typeof code>[] = []
   if (span && mid > 0 && pre < room) {
     if (pre > 0) {
       body.push(
@@ -215,12 +242,15 @@ export function diffRow(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPa
       </Box>,
     )
     if (pre + mid < room && span[1] < source.length) body.push(code(source.slice(span[1]), `${key}.cc`))
-  } else body.push(code(source, `${key}.c`))
+  } else {
+    // 빈 줄은 공백 하나로: Code 가 빈 줄을 접어 행이 모자라지 않게.
+    body.push(code(lines.map(line => (line.text === '' ? ' ' : line.text)).join('\n'), `${key}.c`))
+  }
   return (
-    <Box key={key} flexDirection="row" height={1} overflow="hidden" {...(bg ? { backgroundColor: bg } : {})}>
-      <Box width={1} flexShrink={0} {...(isAdd ? { backgroundColor: palette.addBar } : isDel ? { backgroundColor: palette.delBar } : {})} />
+    <Box key={key} flexDirection="row" height={lines.length} overflow="hidden" {...(bg ? { backgroundColor: bg } : {})}>
+      <Box width={1} height={lines.length} flexShrink={0} {...(isAdd ? { backgroundColor: palette.addBar } : isDel ? { backgroundColor: palette.delBar } : {})} />
       <Box width={options.gutter} flexShrink={0}>
-        <Text color={isAdd ? palette.addBar : isDel ? palette.delBar : palette.muted}>{`${number} ${isAdd ? '+' : isDel ? '-' : ' '} `}</Text>
+        <Text color={isAdd ? palette.addBar : isDel ? palette.delBar : palette.muted}>{numbers}</Text>
       </Box>
       {body}
     </Box>
