@@ -391,8 +391,8 @@ export function patchOf(output: unknown): string | null {
   if (!Array.isArray(hunks) || hunks.length === 0) return null
   return hunks
     .map(hunk => {
-      const h = hunk as { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }
-      return [`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, ...h.lines].join('\n')
+      const part = hunk as { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }
+      return [`@@ -${part.oldStart},${part.oldLines} +${part.newStart},${part.newLines} @@`, ...part.lines].join('\n')
     })
     .join('\n')
 }
@@ -3133,7 +3133,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
   const state = await read($, asking)
   const question = state?.questions[state.step]
   if (!state || !question) return null
-  const done = (card: ReturnType<typeof h>) => ({ card, rows })
+  const done = (card: JSX.Element) => ({ card, rows })
   const picks = state.picks[state.step] ?? []
   const text = state.texts[state.step] ?? ''
   const total = state.questions.length

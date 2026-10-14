@@ -323,7 +323,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
   const { Box, Text, Code, Link, Button } = els
   const codePadding = colors.codeBg ? 1 : 0
 
-  const inline = (nodes: Inline[], key: string): (string | ReturnType<typeof h>)[] =>
+  const inline = (nodes: Inline[], key: string): (string | JSX.Element)[] =>
     nodes.map((node, index) => {
       const k = `${key}.${index}`
       switch (node.kind) {
@@ -391,7 +391,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
     )
   }
 
-  const blocks = (list: Block[], key: string, room: number, tone?: string): ReturnType<typeof h>[] =>
+  const blocks = (list: Block[], key: string, room: number, tone?: string): JSX.Element[] =>
     list.map((block, index) => {
       const k = `${key}.${index}`
       const gap = index === 0 ? 0 : 1

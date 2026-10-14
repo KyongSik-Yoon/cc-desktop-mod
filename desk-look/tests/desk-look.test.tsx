@@ -2420,7 +2420,7 @@ describe('데스크톱 모양 diff', () => {
   const TINT = diffPalette('light', '#fafafa', 'inactive')
   test('순수 함수: hunk 읽기, 행 만들기(안 바뀐 구간·단어 강조), 창 계획', KO, async () => {
     const hunks = parseHunks('@@ -10,3 +10,3 @@\n keep\n-const total = price * qty\n+const total = price * quantity\n end\n@@ -40 +40,2 @@\n-x\n+y\n+z')
-    expect(hunks.map(h => [h.oldStart, h.oldLines, h.newStart, h.newLines])).toEqual([
+    expect(hunks.map(hunk => [hunk.oldStart, hunk.oldLines, hunk.newStart, hunk.newLines])).toEqual([
       [10, 3, 10, 3],
       [40, 1, 40, 2],
     ])
