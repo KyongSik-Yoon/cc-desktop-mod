@@ -248,7 +248,10 @@ export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: Diff
   }
   return (
     <Box key={key} flexDirection="row" height={lines.length} overflow="hidden" {...(bg ? { backgroundColor: bg } : {})}>
-      <Box width={1} height={lines.length} flexShrink={0} {...(isAdd ? { backgroundColor: palette.addBar } : isDel ? { backgroundColor: palette.delBar } : {})} />
+      {/* 막대는 칸 왼쪽 1/4 만(▎): 칸 전체를 칠하면 데스크탑의 가는 선보다 훨씬 굵어 시선을 끈다. 나머지는 줄 틴트가 비친다. */}
+      <Box width={1} height={lines.length} flexShrink={0}>
+        {isAdd || isDel ? <Text color={isAdd ? palette.addBar : palette.delBar}>{Array(lines.length).fill('▎').join('\n')}</Text> : null}
+      </Box>
       <Box width={options.gutter} flexShrink={0}>
         <Text color={isAdd ? palette.addBar : isDel ? palette.delBar : palette.muted}>{numbers}</Text>
       </Box>
