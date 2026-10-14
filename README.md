@@ -12,6 +12,8 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
 - **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage and running background tasks, and a task checklist
 - **Six side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
+- **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
 - **English or Korean** labels, following Claude Code's own language setting by default
 
@@ -74,7 +76,9 @@ Per-file diffs in three scopes, like the desktop diff panel:
 - Click a file's header row to fold or unfold its diff; `z` folds or unfolds them all (in `Commits`, every commit at once; several commits can stay open)
 - Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files)
 - Drawn like the desktop diff panel when the terminal theme is known (Omarchy): a header band per file, full-width green and red rows with a colored edge, one line-number column, syntax colors on removed lines too, changed words in a darker tint, and unchanged stretches as `N unmodified lines`. Only the rows near the visible part are drawn, so a diff of thousands of lines scrolls as fast as a short one. Edits made this session outside git show each edit on its own, split by `· next edit`. Without a known theme, the engine's diff is used as before
-- Line comments, like the desktop diff panel's: click a line number to open a comment field under it, click another line number in the same file to make it a range, and press Enter to keep the comment. Kept comments stay under their lines and as a `✎ N` chip in the chin band, and go with your next prompt as context Claude reads (the file and lines, the lines themselves, and your comment), then clear. Needs a known theme, like the drawing above
+- Line comments, like the desktop diff panel's: click a line number to open a comment field under it, click another line number in the same file to make it a range, and press Enter to keep the comment. Kept comments stay under their lines (`✕` removes one) and as a `✎ N` chip in the chin band, and go with your next prompt as context Claude reads (the file and lines, the lines themselves, and your comment), then clear. Slash commands don't take them. Needs a known theme, like the drawing above
+
+![Line comments in /desk-diff: a kept comment on lines 19–20, an open comment field on line 12, picked line numbers in blue](docs/comments.png)
 
 ### `/desk-tasks [number]`: background tasks
 
@@ -99,6 +103,8 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 - Nothing else is changed: no approvals, comments or `Ready for review`
 
 ### `/desk-preview [file]`: Markdown preview
+
+![The /desk-preview pane: a front matter box, a warning box, a table and a mermaid flowchart](docs/preview.png)
 
 - Draws a Markdown document with the transcript's own renderer: bordered tables, mermaid diagrams, alert boxes, code blocks with `⧉ copy`. Headings are set apart (`#` in the accent color, `#` and `##` underlined), and YAML front matter becomes a small key/value box at the top
 - Opens three ways: the `◫ preview` chip at the end of a tool line that wrote or edited a `.md` file (a folded group line names the file, `◫ NOTES.md`), the `◫` next to a `.md` row in the end-of-turn card, and `/desk-preview <file>` (no file reopens the last one)
@@ -170,6 +176,7 @@ Then run `/reload-plugins` in your session.
 - **Gray bubble fill**: drawn only when the [omarchy](https://omarchy.org) theme (`~/.local/state/omarchy/current/theme/colors.toml`) can be read; a theme change is picked up within 3 seconds. Elsewhere the bubble is a rounded border. The rounded ends use Nerd Font half-circle glyphs and Symbols for Legacy Computing blocks; where the terminal draws images (see below), the corners of a multi-line bubble are small images instead, so they come out properly round. The chin band above the prompt works the same way: without the theme it draws only the chips, with no gray band.
 - **Image thumbnails and round bubble corners**: drawn in kitty and Ghostty, not inside tmux or zellij. Inside herdr they need both `kitty_graphics = true` under `[experimental]` in herdr's `config.toml` and `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` for Claude Code, which otherwise asks the terminal's name and gets herdr's.
 - **Question card**: used only in sessions with a single terminal attached. With Remote Control on, the card opens only when your last message came from the terminal, and if nobody touches it for a minute it hands over to the engine's default question dialog so the mobile or web app can answer; a last message from the app opens the default dialog right away. Esc stops the turn, so it also cancels the question.
+- **Diff colors in 256-color terminals**: the blended row and word tints are used only when `COLORTERM` is `truecolor` or `24bit` outside tmux. Elsewhere (tmux turns the engine's colors down to 256) the diff uses colors from the xterm 256-color palette, so changed words still stand out from their row.
 - **Links**: inside a multiplexer that doesn't pass OSC 8 hyperlinks through, the URL is appended dimly after the name.
 
 ## Development
