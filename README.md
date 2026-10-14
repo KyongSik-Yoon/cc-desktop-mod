@@ -5,7 +5,7 @@
 **desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look and work like the Code tab of the Claude desktop app.
 It is a Claude Code function-hook plugin: the engine stays as it is, and only the way things are drawn on screen changes. Nothing changes in the Code tab of the desktop app (the `desktop` surface).
 
-![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)
+![desk-look in action: a prompt, tool calls folded into one line, the edited-files card, the Markdown preview opening by itself when the turn ends, and a line comment in the diff pane](docs/demo.gif)
 
 **At a glance**
 
@@ -30,6 +30,8 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-update` | Update desk-look to the latest version |
 
 ## The transcript
+
+![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)
 
 | Area | Terminal default | desk-look |
 |---|---|---|
