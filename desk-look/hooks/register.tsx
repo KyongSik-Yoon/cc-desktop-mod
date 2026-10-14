@@ -348,8 +348,15 @@ export function diffStat(call: Call): { added: number; removed: number } | null 
         removed: changes.reduce((sum, change) => sum + change.removed, 0),
       }
     }
-    case 'Write':
+    case 'Write': {
+      // 있던 파일을 덮어쓰면 결과에 헌크가 온다. 새 파일은 헌크가 비어 내용 줄 수를 쓴다.
+      const hunks = (call.output as { structuredPatch?: unknown } | null | undefined)?.structuredPatch
+      if (Array.isArray(hunks) && hunks.length > 0) {
+        const lines = hunks.flatMap(hunk => (hunk as { lines?: unknown }).lines).filter((line): line is string => typeof line === 'string')
+        return { added: lines.filter(line => line.startsWith('+')).length, removed: lines.filter(line => line.startsWith('-')).length }
+      }
       return { added: lineCount(fields.content), removed: 0 }
+    }
     case 'NotebookEdit':
       return { added: lineCount(fields.new_source), removed: 0 }
     default:
@@ -1938,7 +1945,7 @@ export const register: Register = (on, options) => {
     if (FILE_EDITING.has(tool) && !ran.isError) {
       const fields = fieldsOf(e)
       const path = stringField(fields, 'file_path') ?? stringField(fields, 'notebook_path')
-      const stat = diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false })
+      const stat = diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false, output: ran.result })
       if (path && stat) {
         await update($, pendingEdits, list => mergeEdit(list, { path, ...stat }))
       }

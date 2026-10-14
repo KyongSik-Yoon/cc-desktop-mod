@@ -12,7 +12,7 @@ import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolo
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
 const VIEWPORT = { columns: 100, rows: 40 }
-const call = (tool: string, input: unknown, extra: Partial<{ isErrored: boolean; output: string }> = {}) => ({
+const call = (tool: string, input: unknown, extra: Partial<{ isErrored: boolean; output: unknown }> = {}) => ({
   tool,
   input,
   isRunning: false,
@@ -279,6 +279,11 @@ test('순수 함수', KO, async () => {
   )
   expect(describeCalls([call('Bash', {}), call('mcp__x__y', {})])).toBe('Ran a command, used a tool')
   expect(diffStat(call('Edit', { old_string: 'a\nb', new_string: 'c' }))).toEqual({ added: 1, removed: 2 })
+  // Write 로 있던 파일을 덮어쓰면 결과의 헌크로 센다(내용 전체가 + 가 아니라)
+  const overwrite = { structuredPatch: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' a', '-b', '+c', '+d', ' e'] }] }
+  expect(diffStat(call('Write', { content: 'a\nc\nd\ne\n' }, { output: overwrite }))).toEqual({ added: 2, removed: 1 })
+  // 새 파일은 헌크가 비어 내용 줄 수
+  expect(diffStat(call('Write', { content: 'a\nb\n' }, { output: { type: 'create', structuredPatch: [] } }))).toEqual({ added: 2, removed: 0 })
   // 문맥 줄은 빼고 센다: 한 줄 추가는 +1 −0
   expect(lineChange('x\ny', 'x\ny\nz')).toEqual({ added: 1, removed: 0 })
   expect(lineChange('a\nhello\nb', 'a\nhi\nb')).toEqual({ added: 1, removed: 1 })
@@ -1161,6 +1166,28 @@ test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 �
   await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '고쳤어요', turnId: 't1' } as never)
   const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 3000 } })
   expect(await row.find({ type: 'Text', text: /Edited 1 file/ })).toBeDefined()
+  await row.unmount()
+})
+
+test('있던 파일을 Write 로 덮어쓰면 턴 끝 카드는 결과의 헌크로 센다', KO, async ($, on) => {
+  on('process.run', gitStub as never)
+  on('clock.now', () => ({ value: 0 }))
+  const overwrite = { type: 'update', structuredPatch: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 4, lines: [' a', '-b', '+c', '+d', ' e'] }] }
+  on('tool.call', () => ({ result: overwrite }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', () => ({ text: '고쳤어요' }) as never)
+  on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>Baked for 3s</Text>
+  })
+  await $.turn.start({ text: '고쳐 줘', turnId: 't1' } as never)
+  await $.tool.call({ tool: 'Write', file_path: '/repo/a.txt', content: 'a\nc\nd\ne\n' } as never)
+  await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '고쳤어요', turnId: 't1' } as never)
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 3000 } })
+  const drawn = JSON.stringify(await row.drawn())
+  expect(drawn).toContain('+2')
+  expect(drawn).toContain('−1')
+  expect(drawn).not.toContain('+4')
   await row.unmount()
 })
 
