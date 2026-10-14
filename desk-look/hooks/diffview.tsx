@@ -145,8 +145,8 @@ export function patchRows(patch: string): DiffRow[] {
   return rows
 }
 
-// 보이는 곳만 그리기: 항목마다 높이가 있을 때, 창(첫 행·보이는 행 수) 앞뒤 한 화면과 맨 위 두 화면, always 인 항목만 그리고
-// 나머지 연달은 항목은 높이를 합친 빈 칸 하나로. 맨 위를 늘 그리는 건 다시 연 패널이 맨 위에서 시작하는데 적어 둔 창은 예전 것일 수 있어서.
+// 보이는 곳만 그리기: 항목마다 높이가 있을 때, 창(첫 행·보이는 행 수) 앞뒤 한 화면과 always 인 항목만 그리고
+// 나머지 연달은 항목은 높이를 합친 빈 칸 하나로.
 export type WindowStep = { draw: number } | { skip: number }
 
 export function windowPlan(items: ReadonlyArray<{ height: number; always?: boolean }>, offset: number, bodyRows: number): WindowStep[] {
@@ -156,7 +156,7 @@ export function windowPlan(items: ReadonlyArray<{ height: number; always?: boole
   let row = 0
   let skipped = 0
   items.forEach((item, index) => {
-    const isShown = item.always || (row + item.height > from && row < to) || row < 2 * bodyRows
+    const isShown = item.always || (row + item.height > from && row < to)
     if (isShown) {
       if (skipped > 0) steps.push({ skip: skipped })
       skipped = 0

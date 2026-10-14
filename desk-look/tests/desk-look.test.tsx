@@ -2279,13 +2279,13 @@ describe('데스크톱 모양 diff', () => {
     expect(wordSpan('x', 'y')).toBeNull()
     expect(gutterWidth(rows)).toBe(5)
     expect(rows.reduce((sum, row) => sum + rowHeight(row), 0)).toBe(2 * 3 + 7)
-    // 창: 첫 행 100, 화면 10행 → 90~119 와 맨 위 20행, always 만
+    // 창: 첫 행 100, 화면 10행 → 앞뒤 한 화면(90~119)과 always 만. 맨 위는 그리지 않는다
     const items = Array.from({ length: 200 }, (_, i) => ({ height: 1, always: i === 150 }))
     const steps = windowPlan(items, 100, 10)
     const drawn = steps.flatMap(step => ('draw' in step ? [step.draw] : []))
-    expect(drawn[0]).toBe(0)
-    expect(drawn).toContain(19)
-    expect(drawn).not.toContain(20)
+    expect(drawn[0]).toBe(90)
+    expect(drawn).not.toContain(0)
+    expect(drawn).not.toContain(89)
     expect(drawn).toContain(90)
     expect(drawn).toContain(119)
     expect(drawn).not.toContain(120)

@@ -690,6 +690,8 @@ async function refreshPr($: EngineInterface, force: boolean) {
 async function openDiff($: EngineInterface, scope?: DiffScope) {
   await refreshDiffView($, scope)
   await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  // 맨 위에서 보여 준다. 다시 연 패널의 창과 적어 둔 위치(diffWindow)도 이 스크롤로 맞춰진다.
+  await $.ui.scroll({ to: 'start', in: PANE }).catch(() => undefined)
 }
 
 async function openPr($: EngineInterface) {
@@ -2426,10 +2428,14 @@ export const register: Register = (on, options) => {
   })
 
   // diff 패널 창이 움직이면(휠·스크롤 키·openDiffAt 의 스크롤) 위치를 적어 그 앞뒤만 다시 그린다.
+  // 그려 둔 범위는 창 앞뒤로 한 화면씩 남으므로, 적어 둔 위치에서 반 화면 안쪽으로 움직이는 동안은 다시 그리지 않는다
+  // (휠 대부분은 엔진이 창만 옮긴다). 다시 그리기는 기다리지 않는다: 옮긴 창은 이미 그려 둔 줄 위에 있다.
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const moved = await next(e)
     if (moved.deny === undefined) {
-      await update($, diffWindow, w => (w.offset === e.offset && w.bodyRows === e.bodyRows ? w : { offset: e.offset, bodyRows: e.bodyRows }))
+      void update($, diffWindow, w =>
+        w.bodyRows === e.bodyRows && Math.abs(w.offset - e.offset) * 2 <= e.bodyRows ? w : { offset: e.offset, bodyRows: e.bodyRows },
+      ).catch(() => undefined)
     }
     return moved
   })
