@@ -23,6 +23,7 @@
     "name": "KyongSik-Yoon",
     "url": "https://github.com/KyongSik-Yoon"
   },
+  "license": "MIT",
   "homepage": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
   "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
   "types": "./types/index.d.ts",

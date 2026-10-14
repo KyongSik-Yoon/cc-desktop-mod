@@ -202,3 +202,7 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 ## 서드파티
 
 - `desk-look/hooks/vendor/lovely-mermaid.js` — [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 를 묶은 파일, Apache-2.0 (`LICENSE.lovely-mermaid`)
+
+## 라이선스
+
+MIT (`LICENSE`)

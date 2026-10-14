@@ -202,3 +202,7 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 ## Third party
 
 - `desk-look/hooks/vendor/lovely-mermaid.js`: a bundle of [lovely-mermaid](https://github.com/xl0/lovely-mermaid), Apache-2.0 (`LICENSE.lovely-mermaid`)
+
+## License
+
+MIT (`LICENSE`)
