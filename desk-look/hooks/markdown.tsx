@@ -336,7 +336,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
             <Text color={colors.code}>{node.text}</Text>
           )
         case 'bold':
-          return <Text bold>{inline(node.children, k)}</Text>
+          return <Text weight="semibold">{inline(node.children, k)}</Text>
         case 'italic':
           return <Text italic>{inline(node.children, k)}</Text>
         case 'strike':
@@ -376,7 +376,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
       <Box flexDirection="row" {...(isHeader ? headerFill : {})}>
         {widths.map((width, index) => (
           <Box width={width + 2} paddingX={1} justifyContent={justify(index)} {...(isHeader ? headerFill : {})}>
-            {prose(cell(cells, index), `${rowKey}.${index}`, isHeader ? (colors.codeBg ? headerFill : { bold: true }) : {})}
+            {prose(cell(cells, index), `${rowKey}.${index}`, isHeader ? (colors.codeBg ? headerFill : { weight: 'semibold' }) : {})}
           </Box>
         ))}
       </Box>
@@ -403,12 +403,12 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
             const underline = block.level <= 2
             return (
               <Box marginTop={index === 0 ? 0 : 2} flexDirection="column">
-                {prose(block.text, k, { bold: true, ...(block.level === 1 ? { color: colors.accent } : {}) })}
+                {prose(block.text, k, { weight: 'semibold', ...(block.level === 1 ? { color: colors.accent } : {}) })}
                 {underline && <Text color={colors.border}>{'─'.repeat(Math.max(4, Math.min(room, 100)))}</Text>}
               </Box>
             )
           }
-          return <Box marginTop={gap}>{prose(block.text, k, { bold: true, ...toned })}</Box>
+          return <Box marginTop={gap}>{prose(block.text, k, { weight: 'semibold', ...toned })}</Box>
         case 'paragraph':
           return <Box marginTop={gap}>{prose(block.text, k, toned)}</Box>
         case 'rule':
@@ -473,7 +473,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
             if (alert && style) {
               return (
                 <Box marginTop={gap} flexDirection="column" borderStyle="round" borderColor={style.color} paddingX={1}>
-                  <Text color={style.color} bold>
+                  <Text color={style.color} weight="semibold">
                     {style.title}
                   </Text>
                   {blocks(parseBlocks(block.raw.slice(alert[0].length)), k, room - 4)}

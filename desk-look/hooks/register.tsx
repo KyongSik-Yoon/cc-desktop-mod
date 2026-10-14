@@ -661,8 +661,26 @@ async function openDiffAt($: EngineInterface, path: string) {
 
 // PR 바: 턴이 끝날 때마다 다시 읽되 30초 안에는 건너뛴다(gh·glab 은 네트워크를 탄다). 도구가 없거나 어느
 // 호스트의 저장소도 아니면(isSticky) 같은 브랜치에서는 다시 묻지 않는다. 패널을 열거나 ↻ 를 누르면 바로 읽는다.
+// 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴 밖에서도 PR_POLL 마다 다시 읽고, 다 끝나면 멈춘다.
 const PR_TTL = 30_000
+const PR_POLL = 15_000
 let prFetch: Promise<void> | null = null
+let prPoll: Timer | null = null
+
+const isChecking = (state: PrState | null | undefined) => state?.status === 'ok' && (state.pr?.checks.some(check => check.state === 'pending') ?? false)
+
+function watchPr($: EngineInterface) {
+  if (prPoll !== null) return
+  prPoll = $.clock.every(PR_POLL, () => {
+    void (async () => {
+      await refreshPr($, false)
+      if (!isChecking(await read($, pr))) {
+        prPoll?.cancel()
+        prPoll = null
+      }
+    })().catch(() => undefined)
+  })
+}
 
 async function refreshPr($: EngineInterface, force: boolean) {
   if (prFetch) return prFetch
@@ -677,10 +695,16 @@ async function refreshPr($: EngineInterface, force: boolean) {
       await update($, pr, (): PrState => ({ status: 'none', branch, pr: null, at: now }))
       return
     }
-    if (!force && last && last.branch === branch && ((last.status === 'off' && last.isSticky) || now - last.at < PR_TTL)) return
+    const ttl = isChecking(last) ? PR_POLL / 2 : PR_TTL
+    if (!force && last && last.branch === branch && ((last.status === 'off' && last.isSticky) || now - last.at < ttl)) {
+      // 다시 불러온 모듈은 타이머가 없다: 저장된 상태에 도는 체크가 있으면 다시 건다.
+      if (isChecking(last)) watchPr($)
+      return
+    }
     if (force || last?.branch !== branch) await update($, pr, (previous): PrState => ({ status: 'loading', branch, pr: previous?.branch === branch ? previous.pr : null, at: now }))
     const next = await fetchReview(argv => $.process.run(argv, { timeoutMs: 15_000 }), branch, now)
     await update($, pr, () => next)
+    if (isChecking(next)) watchPr($)
   })().finally(() => {
     prFetch = null
   })
@@ -1376,7 +1400,7 @@ function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record
     <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
       <Box columnGap={1}>
         <Text color={COLORS.clay}>◇</Text>
-        <Text color={COLORS.text} bold>
+        <Text color={COLORS.text} weight="semibold">
           Plan
         </Text>
         <Text color={status.color}>{status.label}</Text>
@@ -1601,6 +1625,13 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // 서브에이전트·팀원의 턴도 온다. 메인 턴의 상태는 두고, 끝났던 에이전트가 다시 돌면(SendMessage·재개) 바로 실행 중으로.
+    if (e.agentId !== undefined) {
+      const id = e.agentId
+      await patchAgent($, id, agent => (isLive(agent.status) ? {} : { status: 'running', endedAt: undefined, dismissed: undefined, activity: undefined })).catch(() => undefined)
+      if ((await read($, agents))[id] !== undefined) startAgentClock($)
+      return next(e)
+    }
     await update($, pendingEdits, () => [])
     await update($, previewWritten, () => null)
     const now = await $.clock.now()
@@ -1722,8 +1753,10 @@ export const register: Register = (on, options) => {
           type: e.subagentType,
           status: 'running',
           model: spawned.model,
-          startedAt,
+          // 다시 이어 하는 에이전트(e.resume)는 처음 시작한 때부터 센다.
+          startedAt: e.resume ? (records[id]?.startedAt ?? startedAt) : startedAt,
           endedAt: undefined,
+          dismissed: undefined,
         },
       }))
       void refreshAgents($).catch(() => undefined)
@@ -2077,7 +2110,7 @@ export const register: Register = (on, options) => {
         {head}
         <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
           <Box justifyContent="space-between">
-            <Text color={COLORS.text} bold>
+            <Text color={COLORS.text} weight="semibold">
               {`Edited ${card.files.length} file${card.files.length === 1 ? '' : 's'}`}
             </Text>
             {diffChips(Text, added, removed)}
@@ -2119,7 +2152,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1}>
-          <Text color={COLORS.text} bold>
+          <Text color={COLORS.text} weight="semibold">
             {T.recentSessions(list.length)}
           </Text>
           <Button key="sessions-refresh" plain dimColor label="↻" onPress={() => refreshSessions($)} />
@@ -2140,7 +2173,7 @@ export const register: Register = (on, options) => {
         {query.trim() !== '' && shown.length === 0 && <Text color={COLORS.muted}>{T.noMatch}</Text>}
         {groupSessions(shown, cwd).map(group => (
           <Box key={`group-${group.cwd}`} flexDirection="column">
-            <Text color={group.cwd === cwd ? COLORS.clay : COLORS.muted} bold wrap="truncate-start">
+            <Text color={group.cwd === cwd ? COLORS.clay : COLORS.muted} weight="semibold" wrap="truncate-start">
               {label(group.cwd)}
             </Text>
             {group.sessions.slice(0, PER_GROUP).map(entry => (
@@ -2194,7 +2227,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
             {back}
-            <Text color={COLORS.text} bold wrap="truncate-end">
+            <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
               {agent.description}
             </Text>
           </Box>
@@ -2223,7 +2256,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
             {back}
-            <Text color={COLORS.text} bold wrap="truncate-end">
+            <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
               {agent?.description ?? view}
             </Text>
             {agent && live && stopButton(els, $, agent, openState)}
@@ -2322,7 +2355,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         <Box columnGap={2}>
           <Box flexShrink={0}>
-            <Text color={COLORS.text} bold>
+            <Text color={COLORS.text} weight="semibold">
               {fileName(file.path)}
             </Text>
           </Box>
@@ -2369,7 +2402,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1}>
-          <Text color={COLORS.text} bold>
+          <Text color={COLORS.text} weight="semibold">
             {T.contextTitle}
           </Text>
           {percent !== null && <Text color={COLORS[meterLevel(percent)]}>{`${ring(percent)} ${percent}%`}</Text>}
@@ -2569,7 +2602,7 @@ export const register: Register = (on, options) => {
             els,
             { key: `fold-${id}`, onPress: () => toggle($, `fold:${id}`) },
             isFolded ? ' › ' : ' ⌄ ',
-            <Text color={COLORS.text} bold>
+            <Text color={COLORS.text} weight="semibold">
               {name}
             </Text>,
             folder && room > 4 && <Text color={COLORS.muted}>{` ${clipStart(folder, room)}`}</Text>,
@@ -2609,7 +2642,7 @@ export const register: Register = (on, options) => {
     const titleRow = (
       <Box key="diff-title" columnGap={1} height={1} overflow="hidden">
         <Box flexShrink={0}>
-          <Text color={COLORS.text} bold>
+          <Text color={COLORS.text} weight="semibold">
             {title}
           </Text>
         </Box>
@@ -2673,17 +2706,20 @@ export const register: Register = (on, options) => {
           <Text color={COLORS.muted}>{info?.isRepo === false ? T.notRepo : view.base ? T.noCommitsSince(view.base.ref) : T.noCommits}</Text>
         )}
         {view.scope === 'commits' &&
-          view.commits.map(commit => (
-            <Box key={`commit-${commit.sha}`} flexDirection="column">
-              {commitRow(commit)}
-              {view.commitFiles[commit.sha] && (
-                <Box flexDirection="column" rowGap={1} paddingLeft={2}>
-                  {view.commitFiles[commit.sha].length === 0 && <Text color={COLORS.muted}>{T.emptyCommit}</Text>}
-                  {view.commitFiles[commit.sha].map(file => fileBlock(file, `c:${commit.short}:`, false))}
-                </Box>
-              )}
-            </Box>
-          ))}
+          view.commits.map(commit => {
+            const changed = view.commitFiles[commit.sha]
+            return (
+              <Box key={`commit-${commit.sha}`} flexDirection="column">
+                {commitRow(commit)}
+                {changed && (
+                  <Box flexDirection="column" rowGap={1} paddingLeft={2}>
+                    {changed.length === 0 && <Text color={COLORS.muted}>{T.emptyCommit}</Text>}
+                    {changed.map(file => fileBlock(file, `c:${commit.short}:`, false))}
+                  </Box>
+                )}
+              </Box>
+            )
+          })}
       </Box>
     )
   })
@@ -2693,7 +2729,9 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button, Link } = els
     const [state, armed] = await Promise.all([read($, pr), read($, open)])
     const columns = e.viewport?.columns ?? 80
-    const refresh = <Button key="pr-refresh" plain dimColor label="↻" onPress={() => void refreshPr($, true).catch(() => undefined)} />
+    // ↻ 로 다시 읽는 동안은 … : 다 읽은 PR 이 그대로여도 다시 읽었는지 보이게(15초 자동 갱신은 바꾸지 않는다)
+    const isLoading = state?.status === 'loading'
+    const refresh = <Button key="pr-refresh" plain dimColor label={isLoading ? '…' : '↻'} onPress={() => void refreshPr($, true).catch(() => undefined)} />
     const info = state?.pr ?? null
 
     if (!info) {
@@ -2708,7 +2746,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
-            <Text color={COLORS.text} bold>
+            <Text color={COLORS.text} weight="semibold">
               PR
             </Text>
             {refresh}
@@ -2765,7 +2803,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
           <Box columnGap={1}>
             <Text color={COLORS.muted}>{`\uf407 ${prNumber(info)}`}</Text>
-            <Text color={COLORS.text} bold>
+            <Text color={COLORS.text} weight="semibold">
               {clip(info.title, Math.max(10, columns - 14))}
             </Text>
             {refresh}
@@ -2799,7 +2837,7 @@ export const register: Register = (on, options) => {
         </Box>
         <Box flexDirection="column">
           <Box columnGap={1}>
-            <Text color={COLORS.text} bold>
+            <Text color={COLORS.text} weight="semibold">
               {info.provider === 'gitlab' ? 'Pipeline' : 'Checks'}
             </Text>
             <Text color={COLORS.muted}>
@@ -2820,7 +2858,7 @@ export const register: Register = (on, options) => {
         </Box>
         <Box flexDirection="column">
           <Box columnGap={1}>
-            <Text color={COLORS.text} bold>
+            <Text color={COLORS.text} weight="semibold">
               {T.unresolved}
             </Text>
             <Text color={COLORS.muted}>{info.threads === null ? T.unreadable : T.count(info.threads.length)}</Text>
@@ -2940,9 +2978,9 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
     return done(
       <Box flexDirection="column" width={width} paddingX={1}>
         <Text wrap="truncate-end">
-          {question.header !== '' && <Text color={COLORS.clay} bold>{`${question.header} `}</Text>}
+          {question.header !== '' && <Text color={COLORS.clay} weight="semibold">{`${question.header} `}</Text>}
           {total > 1 && <Text color={COLORS.muted}>{`${state.step + 1}/${total} `}</Text>}
-          <Text color={COLORS.text} bold>
+          <Text color={COLORS.text} weight="semibold">
             {question.question}
           </Text>
         </Text>
@@ -2979,9 +3017,9 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
     return done(
       <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
         <Text wrap="truncate-end">
-          {question.header !== '' && <Text color={COLORS.clay} bold>{`${question.header} `}</Text>}
+          {question.header !== '' && <Text color={COLORS.clay} weight="semibold">{`${question.header} `}</Text>}
           {total > 1 && <Text color={COLORS.muted}>{`${state.step + 1}/${total} `}</Text>}
-          <Text color={COLORS.text} bold>
+          <Text color={COLORS.text} weight="semibold">
             {question.question}
           </Text>
         </Text>
@@ -3016,13 +3054,13 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
     <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
       <Box columnGap={1}>
         {question.header !== '' && (
-          <Text color={COLORS.clay} bold>
+          <Text color={COLORS.clay} weight="semibold">
             {question.header}
           </Text>
         )}
         {total > 1 && <Text color={COLORS.muted}>{`${state.step + 1}/${total}`}</Text>}
       </Box>
-      <Text color={COLORS.text} bold>
+      <Text color={COLORS.text} weight="semibold">
         {question.question}
       </Text>
       {question.description && <Text color={COLORS.muted}>{question.description}</Text>}
@@ -3161,7 +3199,7 @@ export function taskCard(els: Elements['terminal'], list: ReadonlyArray<TaskItem
   return (
     <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
       <Box columnGap={1}>
-        <Text color={COLORS.text} bold>
+        <Text color={COLORS.text} weight="semibold">
           Tasks
         </Text>
         <Text color={COLORS.muted}>{`${done}/${list.length}`}</Text>
@@ -3172,7 +3210,7 @@ export function taskCard(els: Elements['terminal'], list: ReadonlyArray<TaskItem
         return (
           <Text wrap="truncate-end">
             <Text color={style.color}>{`${style.mark} `}</Text>
-            <Text color={style.text} bold={item.status === 'in_progress'}>
+            <Text color={style.text} weight={item.status === 'in_progress' ? 'semibold' : undefined}>
               {label}
             </Text>
           </Text>

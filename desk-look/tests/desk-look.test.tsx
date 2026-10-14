@@ -1,5 +1,5 @@
 import type { On } from 'claude-code'
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, test, type TestBody } from 'claude-code/testing'
 
 import { setLang } from '../hooks/i18n'
 
@@ -761,7 +761,7 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
 })
 
 test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다', KO, async ($, on) => {
-  const scripts: string[][] = []
+  const scripts: (readonly string[])[] = []
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.id', () => ({ value: 'sess-1' }))
   on('clock.now', () => ({ value: 0 }))
@@ -789,7 +789,7 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
 
 // Remote Control 세션에서 마지막 입력이 터미널이면 카드를 띄운다. 기다림은 5초씩 돌아오고(시계를 5초씩 민다),
 // 카드를 1분 동안 건드리지 않으면 엔진 창으로 넘긴다. pressAt 번째 기다림에서 카드를 누른다.
-async function remoteAsk($: Parameters<Parameters<typeof test>[2]>[0], on: On, pressAt: number | null) {
+async function remoteAsk($: Parameters<TestBody>[0], on: On, pressAt: number | null) {
   let now = 1_000_000
   let rounds = 0
   let touched = false
@@ -1122,6 +1122,45 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   expect(opened).toEqual(['desk-diff'])
   expect(await pane.find({ type: 'Code' })).toBeDefined()
   await pane.unmount()
+  await row.unmount()
+})
+
+test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 파일은 남고, 끝났던 에이전트는 다시 실행 중', KO, async ($, on) => {
+  let status = 'completed'
+  let now = 0
+  on('process.run', gitStub as never)
+  on('clock.now', () => ({ value: now }))
+  on('agent.list', () => ({ value: [{ id: 'a1', description: '조사', type: 'Explore', status }] as never }))
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }) as never)
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', () => ({ text: '고쳤어요' }) as never)
+  on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>Baked for 3s</Text>
+  })
+  await $.turn.start({ text: '고쳐 줘', turnId: 't1' } as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.txt', old_string: 'a', new_string: 'b' } as never)
+  await $.agent.spawn({ prompt: '조사해 줘', description: '조사', subagentType: 'Explore' } as never)
+  await $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'x', agentId: 'a1' } as never)
+  // 서브에이전트가 끝났다가(SendMessage 로) 다시 돈다
+  await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '', turnId: 's1', agentId: 'a1' } as never)
+  // 끝난 뒤 목록 다시 읽기가 끝나고 나서 다시 깨어난다(실제로는 그 사이에 SendMessage 가 온다)
+  await wait(50)
+  status = 'running'
+  now = 60_000
+  // 2.1.299 부터 다시 이어 할 때도 agent.spawn 이 온다(resume): 처음 시작한 때와 도구 수는 그대로
+  await $.agent.spawn({ prompt: '이어서', description: '조사', subagentType: 'Explore', resume: { agentId: 'a1' } } as never)
+  await $.turn.start({ text: '이어서', turnId: 's2', agentId: 'a1' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 60 } as never })
+  const resumed = JSON.stringify(await pane.drawn())
+  expect(resumed).toContain('실행 중')
+  expect(resumed).toContain('도구 1회')
+  expect(resumed).toContain('1m')
+  await pane.unmount()
+  await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '고쳤어요', turnId: 't1' } as never)
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 3000 } })
+  expect(await row.find({ type: 'Text', text: /Edited 1 file/ })).toBeDefined()
   await row.unmount()
 })
 
@@ -1617,6 +1656,56 @@ test('PR 칩과 /desk-pr 패널: 실패한 체크를 Claude에게 맡기면 입�
   expect(filled[0]?.mode).toBe('replace')
   await pane.press({ key: 'fix-thread-0' })
   expect(filled[1]?.text).toContain('> Check the range')
+  await pane.unmount()
+})
+
+test('PR 체크가 도는 동안은 턴 밖에서도 다시 읽고, 다 끝나면 멈춘다', KO, async ($, on) => {
+  let now = 1000
+  let deploy: Record<string, unknown> = { __typename: 'CheckRun', name: 'deploy', status: 'IN_PROGRESS', conclusion: null }
+  // clock.every 는 주기마다 한 번 묻는다. 15초 주기는 붙잡아 두었다가 테스트가 풀어 준다(풀리면 fn 이 돈다).
+  const ticks: Array<() => void> = []
+  on('clock.now', () => ({ value: now }))
+  on('clock.every', ($, e) => new Promise(resolve => {
+    if (e.ms === 15_000) ticks.push(() => resolve({ value: undefined }))
+  }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  let hold: Promise<void> | null = null
+  on('process.run', async ($, e) => {
+    if (e.argv[0] === 'gh' && e.argv[1] === 'pr') {
+      await hold
+      const checks = GH_PR.statusCheckRollup.map(check => (check.name === 'deploy' ? deploy : check))
+      return { value: { exitCode: 0, stdout: JSON.stringify({ ...GH_PR, statusCheckRollup: checks }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    return prStub($, e as never)
+  })
+  await $.command.run({ command: 'desk-pr', args: '' } as never)
+  expect(ticks).toHaveLength(1)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-pr', viewport: VIEWPORT, props: { title: 'PR', isFocused: true } as never })
+  expect(JSON.stringify(await pane.drawn())).toContain('2/4 통과')
+
+  // 턴 없이 15초가 지나 deploy 가 끝났다
+  deploy = { __typename: 'CheckRun', name: 'deploy', status: 'COMPLETED', conclusion: 'SUCCESS' }
+  now += 15_000
+  ticks[0]?.()
+  await wait(50)
+  expect(JSON.stringify(await pane.drawn())).toContain('3/4 통과')
+  // 도는 체크가 없으니 다음 주기는 묻지 않는다(멈춤)
+  await wait(50)
+  expect(ticks).toHaveLength(1)
+
+  // ↻ 는 기다리지 않고 바로 다시 읽고, 읽는 동안은 … 를 보인다
+  deploy = { __typename: 'CheckRun', name: 'deploy', status: 'COMPLETED', conclusion: 'FAILURE' }
+  now += 1_000
+  let release = () => {}
+  hold = new Promise<void>(resolve => (release = resolve))
+  await pane.press({ key: 'pr-refresh' })
+  await wait(50)
+  const refreshLabel = async () => (JSON.stringify(await pane.drawn()).match(/"key":"pr-refresh","label":"([^"]*)"/) ?? [])[1]
+  expect(await refreshLabel()).toBe('…')
+  release()
+  await wait(50)
+  expect(await refreshLabel()).toBe('↻')
+  expect(JSON.stringify(await pane.drawn())).toContain('2/4 통과 · 2 실패')
   await pane.unmount()
 })
 

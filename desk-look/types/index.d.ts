@@ -144,6 +144,10 @@ export type AgentItem = { kind: 'text'; text: string } | { kind: 'user'; text: s
 export type AgentDetail = { id: string; prompt: string; items: AgentItem[] }
 
 declare module 'claude-code' {
+  // desk-look 이 $.tool.register 로 거는 도구(preview.ts previewTool). 연결된 서버에서 뽑는 MCP 타입에는 없다.
+  interface McpToolInputs {
+    'mcp__desk-look__preview': { path: string }
+  }
   interface PluginState {
     'desk-look': {
       open: Record<string, boolean>
