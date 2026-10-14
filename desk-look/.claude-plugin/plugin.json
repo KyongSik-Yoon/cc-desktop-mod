@@ -24,6 +24,9 @@
     "url": "https://github.com/KyongSik-Yoon"
   },
   "license": "MIT",
+  "icon": "./.claude-plugin/icon.svg",
+  "documentationUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod#readme",
+  "supportUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/issues",
   "homepage": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
   "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
   "types": "./types/index.d.ts",
