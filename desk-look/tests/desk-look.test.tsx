@@ -2800,3 +2800,40 @@ describe('데스크톱 모양 diff', () => {
     await after.unmount()
   })
 })
+
+test('/desk-fold: 열린 패널을 접고, 다시 치면 앞에 있던 패널을 마지막에 열어 편다', KO, async ($, on) => {
+  on('session.usage', () => ({ value: USAGE(62) as never }))
+  on('clock.now', () => ({ value: 0 }))
+  const events: string[] = []
+  const up = new Map<string, string>()
+  on('ui.open', ($, e) => {
+    events.push(`open:${e.id}:${e.title}:${e.focus === true}`)
+    up.set(e.id, e.title ?? e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', ($, e) => {
+    events.push(`close:${e.id}`)
+    up.delete(e.id)
+    return { value: undefined as never }
+  })
+  // 나중에 연 패널이 앞에 있다.
+  on('ui.panes', () => ({ value: [...up].map(([id, title], index) => ({ id, title, isShown: index === up.size - 1, isFocused: false, isPlaced: true })) }))
+  on('ui.scroll', () => ({}))
+  const run = async () => JSON.stringify(await $.command.run({ command: 'desk-fold', args: '' } as never))
+
+  expect(await run()).toContain('접을 패널도, 접어 둔 패널도 없어요')
+  await $.command.run({ command: 'desk-context', args: '' } as never)
+  await $.command.run({ command: 'desk-tasks', args: '' } as never)
+  events.length = 0
+
+  expect(await run()).toContain('패널 2개를 접었어요')
+  expect(events).toEqual(['close:desk-context', 'close:desk-tasks'])
+  expect(up.size).toBe(0)
+
+  events.length = 0
+  expect(await run()).toContain('접어 둔 패널 2개를 폈어요')
+  expect(events).toEqual(['open:desk-context:컨텍스트:false', 'open:desk-tasks:백그라운드 작업:true'])
+
+  // 편 뒤에는 다시 접는다(접어 둔 기록은 비웠다).
+  expect(await run()).toContain('패널 2개를 접었어요')
+})

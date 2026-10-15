@@ -149,6 +149,8 @@ export type AgentRecord = {
 // 에이전트 상세: 처음 받은 지시(prompt)와 그 뒤의 답변 글·도구 묶음·사용자 메시지 차례.
 export type AgentItem = { kind: 'text'; text: string } | { kind: 'user'; text: string } | { kind: 'run'; id: string; calls: RunCall[] }
 export type AgentDetail = { id: string; prompt: string; items: AgentItem[] }
+// /desk-fold 로 접어 둔 패널: 다시 펼 때의 제목, 앞에 있던 것인지, 스크롤 위치.
+export type FoldedPane = { id: string; title: string; isShown: boolean; offset: number }
 
 declare module 'claude-code' {
   // desk-look 이 $.tool.register 로 거는 도구(preview.ts previewTool). 연결된 서버에서 뽑는 MCP 타입에는 없다.
@@ -183,6 +185,8 @@ declare module 'claude-code' {
       // 컨텍스트·사용 한도(턴이 끝날 때마다), 그리고 컨텍스트 패널을 열 때 계산한 항목별 내역.
       usage: UsageInfo | null
       usageBreakdown: UsageBreakdown | null
+      // /desk-fold 로 접어 둔 패널, 접은 게 없으면 null.
+      folded: FoldedPane[] | null
       // 지금 브랜치의 PR(PR 바·/desk-pr 패널).
       pr: PrState | null
       // /desk-diff 패널이 보여 주는 범위와 그 diff.

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
@@ -45,6 +45,7 @@ const SESSIONS_PANE = 'desk-sessions'
 const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
 const AGENTS_PANE = 'desk-tasks'
+const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE])
 // /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
 const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
@@ -79,6 +80,9 @@ const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | n
 const commentDraft = atom({ plugin: 'desk-look', key: 'commentDraft' } as const, null as CommentDraft | null)
 const lineComments = atom({ plugin: 'desk-look', key: 'lineComments' } as const, [] as LineComment[])
 let draftText = ''
+// 패널마다 마지막 스크롤 위치(접을 때 적어 둔다)와, 다시 편 뒤 첫 스크롤에 되살릴 위치.
+const paneOffsets = new Map<string, number>()
+const restoreOffsets = new Map<string, number>()
 let commentSeq = 0
 const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
   scope: 'uncommitted',
@@ -93,6 +97,8 @@ const agentView = atom({ plugin: 'desk-look', key: 'agentView' } as const, null 
 const agentDetail = atom({ plugin: 'desk-look', key: 'agentDetail' } as const, null as AgentDetail | null)
 const agentClock = atom({ plugin: 'desk-look', key: 'agentClock' } as const, 0)
 const taskOutput = atom({ plugin: 'desk-look', key: 'taskOutput' } as const, null as { id: string; text: string | null } | null)
+// /desk-fold 로 접어 둔 패널. 펴면 비운다.
+const folded = atom({ plugin: 'desk-look', key: 'folded' } as const, null as FoldedPane[] | null)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
@@ -750,6 +756,46 @@ async function openDiff($: EngineInterface, scope?: DiffScope) {
   await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
   // 맨 위에서 보여 준다. 다시 연 패널의 창과 적어 둔 위치(diffWindow)도 이 스크롤로 맞춰진다.
   await $.ui.scroll({ to: 'start', in: PANE }).catch(() => undefined)
+}
+
+// 열린 패널이 있으면 접고(닫되 제목·스크롤을 적어 둔다), 없으면 접어 둔 패널을 다시 연다.
+// 내용은 store 에 그대로 남아 있어 다시 그리면 같은 화면이다. 엔진에는 패널을 남긴 채 숨기는 API 가 없다.
+async function toggleFold($: EngineInterface): Promise<string> {
+  const panes = (await $.ui.panes()).filter(pane => pane.isPlaced)
+  if (panes.length > 0) {
+    await update($, folded, () => panes.map(pane => ({ id: pane.id, title: pane.title, isShown: pane.isShown, offset: paneOffsets.get(pane.id) ?? 0 })))
+    for (const pane of panes) await $.ui.close({ id: pane.id }).catch(() => undefined)
+    return T.folded(panes.length)
+  }
+  const saved = await read($, folded)
+  if (!saved || saved.length === 0) return T.foldNothing
+  await update($, folded, () => null)
+  // 앞에 있던 패널을 마지막에 열어 앞에 오게 한다.
+  const order = [...saved.filter(pane => !pane.isShown), ...saved.filter(pane => pane.isShown)]
+  for (const pane of order) {
+    await $.ui.open({ id: pane.id, title: pane.title, ...(pane.isShown ? { focus: true as const } : {}) })
+    if (pane.offset > 0) await restoreScroll($, pane.id, pane.offset)
+  }
+  return T.unfolded(saved.length)
+}
+
+// 막 연 패널은 아직 그려지기 전이라 스크롤이 거부되거나("not this plugin's site") 빈 내용에 맞춰 0 으로 깎인다.
+// 적어 둔 위치는 ui.scroll 훅이 내용이 그려진 뒤에 offset 으로 바꿔 넣고 지운다. 지워질 때까지 잠깐 다시 한다.
+// 창이 이미 가 있는 끝으로는 움직이지 않아 훅이 불리지 않으므로 양 끝을 차례로 청한다.
+// 명령 안에서 기다린다: 명령이 끝난 뒤 백그라운드에서 돌리면 clock.sleep 이 기다려 주지 않아 그리기 전에 시도가 다 끝났다.
+async function restoreScroll($: EngineInterface, id: string, offset: number) {
+  restoreOffsets.set(id, offset)
+  try {
+    for (let tries = 0; tries < 8 && restoreOffsets.has(id); tries++) {
+      for (const to of ['end', 'start'] as const) {
+        if (!restoreOffsets.has(id)) break
+        await $.ui.scroll({ to, in: id }).catch(() => undefined)
+      }
+      if (restoreOffsets.has(id)) await $.clock.sleep(100).catch(() => undefined)
+    }
+  } finally {
+    restoreOffsets.delete(id)
+  }
 }
 
 async function openPr($: EngineInterface) {
@@ -1795,6 +1841,11 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await $.command.register({
+      name: 'desk-fold',
+      description: T.cmdFold,
+      immediate: true,
+    })
+    await $.command.register({
       name: 'desk-update',
       description: T.cmdUpdate,
     })
@@ -1949,6 +2000,8 @@ export const register: Register = (on, options) => {
         : `The terminal is too narrow for the preview pane; the person can press ◫ on this row to open ${file.path}.`,
     }
   })
+
+  on('command.run', { command: 'desk-fold' }, async $ => ({ text: await toggleFold($) }))
 
   on('command.run', { command: 'desk-context' }, async $ => {
     await openContext($)
@@ -2691,11 +2744,18 @@ export const register: Register = (on, options) => {
   // diff 패널 창이 움직이면(휠·스크롤 키·openDiffAt 의 스크롤) 위치를 적어 그 앞뒤만 다시 그린다.
   // 그려 둔 범위는 창 앞뒤로 한 화면씩 남으므로, 적어 둔 위치에서 반 화면 안쪽으로 움직이는 동안은 다시 그리지 않는다
   // (휠 대부분은 엔진이 창만 옮긴다). 다시 그리기는 기다리지 않는다: 옮긴 창은 이미 그려 둔 줄 위에 있다.
-  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    const moved = await next(e)
-    if (moved.deny === undefined) {
+  // 모든 패널의 위치도 적어 두고(/desk-fold 가 접을 때 가져간다), 다시 편 뒤 첫 스크롤은 적어 둔 위치로 바꾼다.
+  on('ui.scroll', { component: 'Pane' }, async ($, e, next) => {
+    if (!DESK_PANES.has(e.requestId)) return next(e)
+    const restore = e.contentRows > 0 ? restoreOffsets.get(e.requestId) : undefined
+    if (restore !== undefined) restoreOffsets.delete(e.requestId)
+    const asked = restore === undefined ? e : { ...e, offset: restore }
+    const moved = await next(asked)
+    if (moved.deny !== undefined) return moved
+    paneOffsets.set(e.requestId, asked.offset)
+    if (e.requestId === PANE) {
       void update($, diffWindow, w =>
-        w.bodyRows === e.bodyRows && Math.abs(w.offset - e.offset) * 2 <= e.bodyRows ? w : { offset: e.offset, bodyRows: e.bodyRows },
+        w.bodyRows === e.bodyRows && Math.abs(w.offset - asked.offset) * 2 <= e.bodyRows ? w : { offset: asked.offset, bodyRows: e.bodyRows },
       ).catch(() => undefined)
     }
     return moved

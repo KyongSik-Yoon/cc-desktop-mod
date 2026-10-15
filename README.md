@@ -27,6 +27,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-preview [file]` | Markdown preview pane: a document drawn like the transcript |
 | `/desk-context` | Context breakdown, usage limits and session cost |
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
+| `/desk-fold` | Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position |
 | `/desk-update` | Update desk-look to the latest version |
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
