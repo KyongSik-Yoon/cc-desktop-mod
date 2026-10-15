@@ -1551,7 +1551,8 @@ test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장�
   await row.unmount()
 })
 
-import { checkState, checkSummary, fetchReview, jobState, mergeAction, mergePr, prChipParts, prRepo, shortStat, toChecks, toDiscussions, toJobs, toMr, toPr, toThreads } from '../hooks/pr'
+import { checkState, checkSummary, jobState, mergeAction, prChipParts, prRepo, shortStat, toChecks, toDiscussions, toJobs, toMr, toPr, toThreads } from '../hooks/pr'
+import { fetchReview, mergePr } from '../hooks/register'
 import { baseCandidates, parseCommits, scopeOf } from '../hooks/gitview'
 
 const GH_PR = {
@@ -1645,9 +1646,9 @@ test('MR(GitLab): job·토론·줄 수를 PR 모양으로', KO, () => {
   expect(prChipParts(info).map(part => part.text)).toEqual([' !7', '✗ 1', '◆ 1'])
 })
 
-// pr.ts 는 $.process.run 을 직접 부른다: 그 자리에 표를 넣는다.
+// fetchReview·mergePr 는 $.process.run 을 직접 부른다: $ 대신 그 자리에 표를 넣는다.
 type Runner = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
-const proc = (runner: Runner) => ({ process: { run: runner } })
+const proc = (runner: Runner) => ({ process: { run: runner } }) as never
 const runner = (table: Array<[(argv: string[]) => boolean, { exitCode: number; stdout?: string; stderr?: string }]>): Runner => async (argv: string[]) => {
   const hit = table.find(([match]) => match(argv))?.[1] ?? { exitCode: 1, stderr: 'unexpected' }
   return { exitCode: hit.exitCode, stdout: hit.stdout ?? '', stderr: hit.stderr ?? '' }

@@ -17,8 +17,8 @@ import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
 import type { ContextChipMode } from './usage'
-import { checkPrompt, checkSummary, fetchReview, mergeAction, mergeLevel, mergeName, mergePr, prChipParts, prNumber, prRef, reviewName, threadPrompt } from './pr'
-import type { MergeAction } from './pr'
+import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
+import type { MergeAction, MergeResult, Ran } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
@@ -542,9 +542,7 @@ async function refreshDiff($: EngineInterface) {
   const [top, branch, tracked, untracked] = await Promise.all([
     $.process.run(['git', 'rev-parse', '--show-toplevel'], opts),
     $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], opts),
-    $.process
-      .run(['git', 'diff', 'HEAD', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], opts)
-      .then(ran => (ran.exitCode === 0 ? ran : $.process.run(['git', 'diff', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], opts))),
+    $.process.run(['git', 'diff', 'HEAD', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], opts).then(ran => (ran.exitCode === 0 ? ran : $.process.run(['git', 'diff', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], opts))),
     $.process.run(['git', 'ls-files', '--others', '--exclude-standard'], opts),
   ])
   // 새로 만든 파일은 `git diff HEAD` 에 안 잡힌다. 데스크톱처럼 보이도록 최대 20개까지 붙인다.
@@ -877,9 +875,8 @@ async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
 // 커밋들의 diff 를 git show 한 번으로 읽는다(커밋은 stdin 으로). 커밋마다 \x1e<sha> 줄로 시작한다.
 async function commitDiffs($: EngineInterface, shas: string[]): Promise<Record<string, FileDiff[]>> {
   // 시간을 넘기거나 git 을 못 띄우면 빈 커밋으로 둔다: 커밋 줄·z 는 결과를 기다리지 않아 던지면 아무도 못 받는다.
-  const ran = await $.process
-    .run(['git', 'show', '--stdin', '--format=%x1e%H', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], { timeoutMs: 8000, stdin: `${shas.join('\n')}\n` })
-    .catch(() => ({ exitCode: 1, stdout: '' }))
+  const stdin = `${shas.join('\n')}\n`
+  const ran = await $.process.run(['git', 'show', '--stdin', '--format=%x1e%H', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], { timeoutMs: 8000, stdin }).catch(() => ({ exitCode: 1, stdout: '' }))
   const found = ran.exitCode === 0 ? splitCommitDiffs(ran.stdout) : {}
   return Object.fromEntries(shas.map(sha => [sha, found[sha] ?? []]))
 }
@@ -3633,4 +3630,168 @@ function diffChips(Text: Elements['terminal']['Text'], added: number, removed: n
       <Text color={COLORS.danger} backgroundColor="diffRemovedDimmed">{` −${removed} `}</Text>
     </Text>
   )
+}
+
+// ── PR·MR 읽기와 머지(gh·glab) ─────────────────────────────────────────────────
+// 읽은 JSON 을 고치는 일은 pr.ts. 프로그램을 부르는 일은 여기서: 부르는 자리마다 명령을 고정 글자로 쓰고
+// ($.process.run([...])), $ 는 같은 파일 함수에만 넘긴다. 디렉터리 검사가 둘 다 끝까지 따라가게.
+// 테스트는 $ 대신 { process: { run } } 을 넘긴다.
+const READ_MS = 15_000
+const MERGE_MS = 30_000
+
+// gh 가 없거나(실행 실패), GitHub 저장소가 아니면 off. PR 이 없는 브랜치는 none.
+async function fetchPr($: EngineInterface, branch: string | null, at: number): Promise<PrState> {
+  const view = await $.process.run(['gh', 'pr', 'view', '--json', PR_FIELDS], { timeoutMs: READ_MS }).catch(error => ({ exitCode: 127, stdout: '', stderr: String(error) }))
+  if (view.exitCode !== 0) {
+    const reason = view.stderr.trim().split('\n')[0] ?? ''
+    return /no (open )?pull requests? found/i.test(view.stderr)
+      ? { status: 'none', branch, pr: null, at }
+      : { status: 'off', branch, pr: null, at, error: reason, isSticky: isLocalFailure(view) }
+  }
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(view.stdout) as Record<string, unknown>
+  } catch {
+    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('gh') }
+  }
+  const where = prRepo(String(raw.url ?? ''))
+  let threads: PrThread[] | null = null
+  if (where) {
+    const ran = await $.process.run(
+      [
+      'gh',
+      'api',
+      'graphql',
+      '--hostname',
+      where.host,
+      '-f',
+      `query=${THREADS_QUERY}`,
+      '-F',
+      `owner=${where.owner}`,
+      '-F',
+      `name=${where.name}`,
+      '-F',
+      `number=${Number(raw.number)}`,
+      ],
+      { timeoutMs: READ_MS },
+    ).catch(() => null)
+    if (ran?.exitCode === 0) {
+      try {
+        threads = toThreads(JSON.parse(ran.stdout))
+      } catch {
+        threads = null
+      }
+    }
+  }
+  return { status: 'ok', branch, pr: toPr(raw, threads), at }
+}
+
+// glab mr view 를 인자 없이 쓰면 같은 브랜치에 병합된 MR 이 여럿일 때 고르라며 실패한다. 그래서 열린 MR 을
+// 브랜치로 먼저 찾고 번호로 읽는다.
+async function fetchMr($: EngineInterface, branch: string | null, at: number): Promise<PrState> {
+  const failed = (error: unknown) => ({ exitCode: 127, stdout: '', stderr: String(error) })
+  const reasonOf = (stderr: string) => stderr.split('\n').map(line => line.trim()).find(line => line !== '' && line !== 'ERROR') ?? ''
+  if (branch === null) return { status: 'none', branch, pr: null, at }
+  const list = await $.process.run(['glab', 'mr', 'list', '--source-branch', branch, '--output', 'json'], { timeoutMs: READ_MS }).catch(failed)
+  if (list.exitCode !== 0) return { status: 'off', branch, pr: null, at, error: reasonOf(list.stderr), isSticky: isLocalFailure(list) }
+  let iid: number | undefined
+  try {
+    iid = (JSON.parse(list.stdout) as Array<{ iid?: number }>)[0]?.iid
+  } catch {
+    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('glab') }
+  }
+  if (iid === undefined) return { status: 'none', branch, pr: null, at }
+  const view = await $.process.run(['glab', 'mr', 'view', String(iid), '--output', 'json'], { timeoutMs: READ_MS }).catch(failed)
+  if (view.exitCode !== 0) return { status: 'off', branch, pr: null, at, error: reasonOf(view.stderr) }
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(view.stdout) as Record<string, unknown>
+  } catch {
+    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('glab') }
+  }
+  const webUrl = String(raw.web_url ?? '')
+  const host = /^https?:\/\/([^/]+)\//.exec(webUrl)?.[1]
+  const api = (path: string) =>
+    (host ? $.process.run(['glab', 'api', '--hostname', host, path], { timeoutMs: READ_MS }) : $.process.run(['glab', 'api', path], { timeoutMs: READ_MS }))
+      .then(ran => (ran.exitCode === 0 ? (JSON.parse(ran.stdout) as unknown) : null))
+      .catch(() => null)
+  const pipeline = (raw.head_pipeline ?? raw.pipeline) as { id?: number; status?: string; web_url?: string } | null
+  const refs = raw.diff_refs as { base_sha?: string; head_sha?: string } | null
+  const [jobs, discussions, stat] = await Promise.all([
+    pipeline?.id ? api(`projects/${raw.project_id}/pipelines/${pipeline.id}/jobs?per_page=100`) : Promise.resolve(null),
+    api(`projects/${raw.project_id}/merge_requests/${raw.iid}/discussions?per_page=100`),
+    refs?.base_sha && refs.head_sha
+      ? $.process.run(['git', 'diff', '--shortstat', refs.base_sha, refs.head_sha], { timeoutMs: READ_MS })
+          .then(ran => (ran.exitCode === 0 ? shortStat(ran.stdout) : null))
+          .catch(() => null)
+      : Promise.resolve(null),
+  ])
+  // job 목록을 못 읽으면 파이프라인 전체 상태 하나를 체크로
+  const checks = jobs !== null ? toJobs(jobs) : pipeline?.status ? [{ name: 'pipeline', state: jobState(pipeline), url: pipeline.web_url ?? null }] : []
+  return { status: 'ok', branch, pr: toMr(raw, checks, toDiscussions(discussions, webUrl), stat), at }
+}
+
+const firstLine = (text: string) => text.split('\n').map(line => line.trim()).find(line => line !== '' && line !== 'ERROR') ?? ''
+
+// GitHub: 저장소가 허용하는 방식(merge → squash → rebase 순)으로, 본 head 커밋일 때만. 원격 브랜치는 머지된 뒤
+// 지운다. gh 의 --delete-branch 는 로컬 브랜치까지 지우고 기본 브랜치로 체크아웃하므로 쓰지 않는다.
+// 자동 머지는 나중에 일어나서 지울 수 없다(저장소의 "Automatically delete head branches" 를 따른다).
+// GitLab: REST 로 머지한다. squash 는 MR 설정(프로젝트 기본값)을 따르고 원격 브랜치는 지운다.
+// 자동 머지 파라미터는 옛 이름(merge_when_pipeline_succeeds)과 새 이름(auto_merge)을 함께 보낸다.
+export async function mergePr($: EngineInterface, pr: PrInfo, action: MergeAction): Promise<MergeResult> {
+  const failed = (error: unknown): Ran => ({ exitCode: 127, stdout: '', stderr: String(error) })
+  if (pr.headSha === null) return { ok: false, error: T.mergeNoHead }
+  if (pr.provider === 'gitlab') {
+    if (pr.projectId === undefined) return { ok: false, error: T.mergeNoHead }
+    const host = /^https?:\/\/([^/]+)\//.exec(pr.url)?.[1]
+    const isAuto = action === 'auto'
+    const path = `projects/${pr.projectId}/merge_requests/${pr.number}/merge`
+    const sha = `sha=${pr.headSha}`
+    const whenPipeline = `merge_when_pipeline_succeeds=${isAuto}`
+    const autoMerge = `auto_merge=${isAuto}`
+    const ran = await (
+      host
+        ? $.process.run(['glab', 'api', '--hostname', host, '-X', 'PUT', path, '-f', sha, '-F', 'should_remove_source_branch=true', '-F', whenPipeline, '-F', autoMerge], { timeoutMs: MERGE_MS })
+        : $.process.run(['glab', 'api', '-X', 'PUT', path, '-f', sha, '-F', 'should_remove_source_branch=true', '-F', whenPipeline, '-F', autoMerge], { timeoutMs: MERGE_MS })
+    ).catch(failed)
+    let body: Record<string, unknown> = {}
+    try {
+      body = JSON.parse(ran.stdout) as Record<string, unknown>
+    } catch {
+      body = {}
+    }
+    if (ran.exitCode !== 0) return { ok: false, error: typeof body.message === 'string' ? body.message : firstLine(ran.stderr) }
+    return { ok: true, merged: body.state === 'merged' }
+  }
+  const where = prRepo(pr.url)
+  if (!where) return { ok: false, error: T.mergeNoHead }
+  const repo = `${where.host}/${where.owner}/${where.name}`
+  const settings = await $.process.run(['gh', 'repo', 'view', repo, '--json', 'mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,deleteBranchOnMerge'], { timeoutMs: MERGE_MS }).catch(failed)
+  let allowed: Record<string, unknown> = {}
+  try {
+    allowed = settings.exitCode === 0 ? (JSON.parse(settings.stdout) as Record<string, unknown>) : {}
+  } catch {
+    allowed = {}
+  }
+  const method = allowed.mergeCommitAllowed !== false ? 'merge' : allowed.squashMergeAllowed !== false ? 'squash' : 'rebase'
+  const how = `--${method}`
+  const ran = await (
+    action === 'auto'
+      ? $.process.run(['gh', 'pr', 'merge', String(pr.number), '-R', repo, how, '--match-head-commit', pr.headSha, '--auto'], { timeoutMs: MERGE_MS })
+      : $.process.run(['gh', 'pr', 'merge', String(pr.number), '-R', repo, how, '--match-head-commit', pr.headSha], { timeoutMs: MERGE_MS })
+  ).catch(failed)
+  if (ran.exitCode !== 0) return { ok: false, error: firstLine(ran.stderr) }
+  if (action === 'auto') return { ok: true, merged: false }
+  if (allowed.deleteBranchOnMerge === true) return { ok: true, merged: true }
+  const removed = await $.process.run(['gh', 'api', '--hostname', where.host, '-X', 'DELETE', `repos/${where.owner}/${where.name}/git/refs/heads/${pr.head}`], { timeoutMs: MERGE_MS }).catch(failed)
+  return removed.exitCode === 0 ? { ok: true, merged: true } : { ok: true, merged: true, note: T.branchKept(pr.head) }
+}
+
+// GitHub 저장소가 아니면 gh 는 네트워크 없이 곧바로 실패한다. 그때 glab 으로 다시 본다.
+export async function fetchReview($: EngineInterface, branch: string | null, at: number): Promise<PrState> {
+  const github = await fetchPr($, branch, at)
+  if (github.status !== 'off') return github
+  const gitlab = await fetchMr($, branch, at)
+  if (gitlab.status !== 'off') return gitlab
+  return { ...github, error: [github.error, gitlab.error].filter(Boolean).join(' / ') || undefined, isSticky: github.isSticky === true && gitlab.isSticky === true }
 }

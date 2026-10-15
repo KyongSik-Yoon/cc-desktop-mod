@@ -166,65 +166,12 @@ export function threadPrompt(pr: PrInfo, thread: PrThread): string {
   return `${T.threadPrompt(prRef(pr), where, thread.author)}\n${quoted}`
 }
 
-type Ran = { exitCode: number; stdout: string; stderr: string }
+export type Ran = { exitCode: number; stdout: string; stderr: string }
 
 // 다시 물어도 같을 실패: 도구가 없음(실행 실패), git 저장소가 아님, gh 가 모르는 호스트.
 export function isLocalFailure(ran: Ran): boolean {
   return ran.exitCode === 127 || /not a git repository|known GitHub host/i.test(ran.stderr)
 }
-// 프로그램을 부르는 자리마다 명령을 고정 글자로 쓴다($.process.run([...])): 디렉터리 검사가 무엇을 실행하는지 끝까지 읽게.
-// 테스트는 { process: { run } } 을 넘긴다.
-type Proc = { process: { run: (argv: string[], init?: { timeoutMs?: number }) => Promise<Ran> } }
-const READ_MS = 15_000
-const MERGE_MS = 30_000
-
-// gh 가 없거나(실행 실패), GitHub 저장소가 아니면 off. PR 이 없는 브랜치는 none.
-export async function fetchPr($: Proc, branch: string | null, at: number): Promise<PrState> {
-  const view = await $.process.run(['gh', 'pr', 'view', '--json', PR_FIELDS], { timeoutMs: READ_MS }).catch(error => ({ exitCode: 127, stdout: '', stderr: String(error) }))
-  if (view.exitCode !== 0) {
-    const reason = view.stderr.trim().split('\n')[0] ?? ''
-    return /no (open )?pull requests? found/i.test(view.stderr)
-      ? { status: 'none', branch, pr: null, at }
-      : { status: 'off', branch, pr: null, at, error: reason, isSticky: isLocalFailure(view) }
-  }
-  let raw: Record<string, unknown>
-  try {
-    raw = JSON.parse(view.stdout) as Record<string, unknown>
-  } catch {
-    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('gh') }
-  }
-  const where = prRepo(String(raw.url ?? ''))
-  let threads: PrThread[] | null = null
-  if (where) {
-    const ran = await $.process.run(
-      [
-      'gh',
-      'api',
-      'graphql',
-      '--hostname',
-      where.host,
-      '-f',
-      `query=${THREADS_QUERY}`,
-      '-F',
-      `owner=${where.owner}`,
-      '-F',
-      `name=${where.name}`,
-      '-F',
-      `number=${Number(raw.number)}`,
-      ],
-      { timeoutMs: READ_MS },
-    ).catch(() => null)
-    if (ran?.exitCode === 0) {
-      try {
-        threads = toThreads(JSON.parse(ran.stdout))
-      } catch {
-        threads = null
-      }
-    }
-  }
-  return { status: 'ok', branch, pr: toPr(raw, threads), at }
-}
-
 // ── GitLab (glab) ──────────────────────────────────────────────────────────────
 // glab mr view 는 지금 브랜치의 열린 MR 을 준다. 파이프라인 job 은 체크로, 풀 수 있는 토론 중 안 풀린 것은
 // 리뷰 스레드로 옮긴다. MR JSON 에는 줄 수가 없어서 diff_refs 의 두 커밋으로 로컬 git 에서 센다.
@@ -315,51 +262,6 @@ export function toMr(raw: Record<string, unknown>, checks: PrCheck[], threads: P
   }
 }
 
-// glab mr view 를 인자 없이 쓰면 같은 브랜치에 병합된 MR 이 여럿일 때 고르라며 실패한다. 그래서 열린 MR 을
-// 브랜치로 먼저 찾고 번호로 읽는다.
-export async function fetchMr($: Proc, branch: string | null, at: number): Promise<PrState> {
-  const failed = (error: unknown) => ({ exitCode: 127, stdout: '', stderr: String(error) })
-  const reasonOf = (stderr: string) => stderr.split('\n').map(line => line.trim()).find(line => line !== '' && line !== 'ERROR') ?? ''
-  if (branch === null) return { status: 'none', branch, pr: null, at }
-  const list = await $.process.run(['glab', 'mr', 'list', '--source-branch', branch, '--output', 'json'], { timeoutMs: READ_MS }).catch(failed)
-  if (list.exitCode !== 0) return { status: 'off', branch, pr: null, at, error: reasonOf(list.stderr), isSticky: isLocalFailure(list) }
-  let iid: number | undefined
-  try {
-    iid = (JSON.parse(list.stdout) as Array<{ iid?: number }>)[0]?.iid
-  } catch {
-    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('glab') }
-  }
-  if (iid === undefined) return { status: 'none', branch, pr: null, at }
-  const view = await $.process.run(['glab', 'mr', 'view', String(iid), '--output', 'json'], { timeoutMs: READ_MS }).catch(failed)
-  if (view.exitCode !== 0) return { status: 'off', branch, pr: null, at, error: reasonOf(view.stderr) }
-  let raw: Record<string, unknown>
-  try {
-    raw = JSON.parse(view.stdout) as Record<string, unknown>
-  } catch {
-    return { status: 'off', branch, pr: null, at, error: T.outputUnreadable('glab') }
-  }
-  const webUrl = String(raw.web_url ?? '')
-  const host = /^https?:\/\/([^/]+)\//.exec(webUrl)?.[1]
-  const api = (path: string) =>
-    (host ? $.process.run(['glab', 'api', '--hostname', host, path], { timeoutMs: READ_MS }) : $.process.run(['glab', 'api', path], { timeoutMs: READ_MS }))
-      .then(ran => (ran.exitCode === 0 ? (JSON.parse(ran.stdout) as unknown) : null))
-      .catch(() => null)
-  const pipeline = (raw.head_pipeline ?? raw.pipeline) as { id?: number; status?: string; web_url?: string } | null
-  const refs = raw.diff_refs as { base_sha?: string; head_sha?: string } | null
-  const [jobs, discussions, stat] = await Promise.all([
-    pipeline?.id ? api(`projects/${raw.project_id}/pipelines/${pipeline.id}/jobs?per_page=100`) : Promise.resolve(null),
-    api(`projects/${raw.project_id}/merge_requests/${raw.iid}/discussions?per_page=100`),
-    refs?.base_sha && refs.head_sha
-      ? $.process.run(['git', 'diff', '--shortstat', refs.base_sha, refs.head_sha], { timeoutMs: READ_MS })
-          .then(ran => (ran.exitCode === 0 ? shortStat(ran.stdout) : null))
-          .catch(() => null)
-      : Promise.resolve(null),
-  ])
-  // job 목록을 못 읽으면 파이프라인 전체 상태 하나를 체크로
-  const checks = jobs !== null ? toJobs(jobs) : pipeline?.status ? [{ name: 'pipeline', state: jobState(pipeline), url: pipeline.web_url ?? null }] : []
-  return { status: 'ok', branch, pr: toMr(raw, checks, toDiscussions(discussions, webUrl), stat), at }
-}
-
 // ── 머지 ──────────────────────────────────────────────────────────────────────
 // now 는 바로 머지, auto 는 도는 체크가 통과하면 머지(GitLab 은 파이프라인이 성공하면). 실패한 체크가 있거나
 // 충돌·Draft·리뷰 미승인 같은 막힘이 있으면 버튼을 내지 않는다. GitLab 은 파이프라인 성공이 조건이 아닌
@@ -385,68 +287,3 @@ export function mergeAction(pr: PrInfo): MergeAction | null {
 }
 
 export type MergeResult = { ok: true; merged: boolean; note?: string } | { ok: false; error: string }
-
-const firstLine = (text: string) => text.split('\n').map(line => line.trim()).find(line => line !== '' && line !== 'ERROR') ?? ''
-
-// GitHub: 저장소가 허용하는 방식(merge → squash → rebase 순)으로, 본 head 커밋일 때만. 원격 브랜치는 머지된 뒤
-// 지운다. gh 의 --delete-branch 는 로컬 브랜치까지 지우고 기본 브랜치로 체크아웃하므로 쓰지 않는다.
-// 자동 머지는 나중에 일어나서 지울 수 없다(저장소의 "Automatically delete head branches" 를 따른다).
-// GitLab: REST 로 머지한다. squash 는 MR 설정(프로젝트 기본값)을 따르고 원격 브랜치는 지운다.
-// 자동 머지 파라미터는 옛 이름(merge_when_pipeline_succeeds)과 새 이름(auto_merge)을 함께 보낸다.
-export async function mergePr($: Proc, pr: PrInfo, action: MergeAction): Promise<MergeResult> {
-  const failed = (error: unknown): Ran => ({ exitCode: 127, stdout: '', stderr: String(error) })
-  if (pr.headSha === null) return { ok: false, error: T.mergeNoHead }
-  if (pr.provider === 'gitlab') {
-    if (pr.projectId === undefined) return { ok: false, error: T.mergeNoHead }
-    const host = /^https?:\/\/([^/]+)\//.exec(pr.url)?.[1]
-    const isAuto = action === 'auto'
-    const path = `projects/${pr.projectId}/merge_requests/${pr.number}/merge`
-    const sha = `sha=${pr.headSha}`
-    const whenPipeline = `merge_when_pipeline_succeeds=${isAuto}`
-    const autoMerge = `auto_merge=${isAuto}`
-    const ran = await (
-      host
-        ? $.process.run(['glab', 'api', '--hostname', host, '-X', 'PUT', path, '-f', sha, '-F', 'should_remove_source_branch=true', '-F', whenPipeline, '-F', autoMerge], { timeoutMs: MERGE_MS })
-        : $.process.run(['glab', 'api', '-X', 'PUT', path, '-f', sha, '-F', 'should_remove_source_branch=true', '-F', whenPipeline, '-F', autoMerge], { timeoutMs: MERGE_MS })
-    ).catch(failed)
-    let body: Record<string, unknown> = {}
-    try {
-      body = JSON.parse(ran.stdout) as Record<string, unknown>
-    } catch {
-      body = {}
-    }
-    if (ran.exitCode !== 0) return { ok: false, error: typeof body.message === 'string' ? body.message : firstLine(ran.stderr) }
-    return { ok: true, merged: body.state === 'merged' }
-  }
-  const where = prRepo(pr.url)
-  if (!where) return { ok: false, error: T.mergeNoHead }
-  const repo = `${where.host}/${where.owner}/${where.name}`
-  const settings = await $.process.run(['gh', 'repo', 'view', repo, '--json', 'mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,deleteBranchOnMerge'], { timeoutMs: MERGE_MS }).catch(failed)
-  let allowed: Record<string, unknown> = {}
-  try {
-    allowed = settings.exitCode === 0 ? (JSON.parse(settings.stdout) as Record<string, unknown>) : {}
-  } catch {
-    allowed = {}
-  }
-  const method = allowed.mergeCommitAllowed !== false ? 'merge' : allowed.squashMergeAllowed !== false ? 'squash' : 'rebase'
-  const how = `--${method}`
-  const ran = await (
-    action === 'auto'
-      ? $.process.run(['gh', 'pr', 'merge', String(pr.number), '-R', repo, how, '--match-head-commit', pr.headSha, '--auto'], { timeoutMs: MERGE_MS })
-      : $.process.run(['gh', 'pr', 'merge', String(pr.number), '-R', repo, how, '--match-head-commit', pr.headSha], { timeoutMs: MERGE_MS })
-  ).catch(failed)
-  if (ran.exitCode !== 0) return { ok: false, error: firstLine(ran.stderr) }
-  if (action === 'auto') return { ok: true, merged: false }
-  if (allowed.deleteBranchOnMerge === true) return { ok: true, merged: true }
-  const removed = await $.process.run(['gh', 'api', '--hostname', where.host, '-X', 'DELETE', `repos/${where.owner}/${where.name}/git/refs/heads/${pr.head}`], { timeoutMs: MERGE_MS }).catch(failed)
-  return removed.exitCode === 0 ? { ok: true, merged: true } : { ok: true, merged: true, note: T.branchKept(pr.head) }
-}
-
-// GitHub 저장소가 아니면 gh 는 네트워크 없이 곧바로 실패한다. 그때 glab 으로 다시 본다.
-export async function fetchReview($: Proc, branch: string | null, at: number): Promise<PrState> {
-  const github = await fetchPr($, branch, at)
-  if (github.status !== 'off') return github
-  const gitlab = await fetchMr($, branch, at)
-  if (gitlab.status !== 'off') return gitlab
-  return { ...github, error: [github.error, gitlab.error].filter(Boolean).join(' / ') || undefined, isSticky: github.isSticky === true && gitlab.isSticky === true }
-}
