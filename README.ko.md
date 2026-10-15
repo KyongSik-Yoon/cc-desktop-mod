@@ -29,6 +29,8 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 | `/desk-sessions [번호]` | 프로젝트별 최근 세션과 검색, 세션 이동 |
 | `/desk-update` | desk-look 을 최신 버전으로 |
 
+패널 명령은 Claude 가 일하는 중에도 바로 실행된다. 큐에 들어가거나 턴을 멈추지 않고 패널만 연다.
+
 ## 대화 기록
 
 ![Claude Code 터미널의 desk-look: 프롬프트 말풍선, 접힌 도구 호출, 마크다운 표, mermaid 순서도, Note 상자, 고친 파일 카드](docs/screenshot.png)

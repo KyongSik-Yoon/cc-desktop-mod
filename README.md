@@ -29,6 +29,8 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
 | `/desk-update` | Update desk-look to the latest version |
 
+The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
+
 ## The transcript
 
 ![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)

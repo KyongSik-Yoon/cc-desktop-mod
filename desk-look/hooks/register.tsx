@@ -1764,29 +1764,35 @@ export const register: Register = (on, options) => {
     }
     // 도구를 못 걸어도(엔진이 거절) 아래 명령·언어 설정은 그대로 한다.
     await $.tool.register(previewTool(isPreviewAuto)).catch(() => undefined)
-    await $.command.register({ name: 'desk-preview', description: T.cmdPreview, argumentHint: T.cmdPreviewHint })
+    // 패널만 여는 명령은 턴 중에도 바로 연다(immediate). 큐에 넣지 않고, 턴 상태에 기대지 않는다.
+    await $.command.register({ name: 'desk-preview', description: T.cmdPreview, argumentHint: T.cmdPreviewHint, immediate: true })
     await $.command.register({
       name: 'desk-sessions',
       description: T.cmdSessions,
       argumentHint: T.cmdSessionsHint,
+      immediate: true,
     })
     await $.command.register({
       name: 'desk-diff',
       description: T.cmdDiff,
       argumentHint: T.cmdDiffHint,
+      immediate: true,
     })
     await $.command.register({
       name: 'desk-pr',
       description: T.cmdPr,
+      immediate: true,
     })
     await $.command.register({
       name: 'desk-context',
       description: T.cmdContext,
+      immediate: true,
     })
     await $.command.register({
       name: 'desk-tasks',
       description: T.cmdAgents,
       argumentHint: T.cmdAgentsHint,
+      immediate: true,
     })
     await $.command.register({
       name: 'desk-update',
