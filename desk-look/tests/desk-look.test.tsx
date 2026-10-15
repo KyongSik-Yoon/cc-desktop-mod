@@ -363,13 +363,17 @@ describe('v3: 테마 면과 도구 묶음', () => {
   })
 })
 
-import { CORNER_SIZE, cornerPixels, parseImages, supportsGraphics, thumbnailSize } from '../hooks/images'
+import { CORNER_SIZE, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize } from '../hooks/images'
 import { renderDiagram } from '../hooks/diagram'
 
 test('붙여 넣은 이미지 목록과 썸네일 크기', KO, async () => {
-  const listing = '/tmp/claude-1000/p/s/images/8.png  137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 1 234 0 0 1 42 \n/tmp/x/images/notes.txt 1 2\n'
-  const images = parseImages(listing)
-  expect(images).toEqual({ '8': { path: '/tmp/claude-1000/p/s/images/8.png', width: 490, height: 298 } })
+  // PNG 머리 24바이트(490×298)
+  const header = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 1, 234, 0, 0, 1, 42]
+  expect(pngSize(header)).toEqual({ width: 490, height: 298 })
+  expect(pngSize([1, 2])).toBe(null)
+  expect([imageNumber('8.png'), imageNumber('notes.txt'), imageNumber('8.png.tmp')]).toEqual(['8', null, null])
+  expect(herdrGraphicsOn('[experimental]\n  kitty_graphics = true\n')).toBe(true)
+  expect(herdrGraphicsOn('# kitty_graphics = true\nkitty_graphics = false\n')).toBe(false)
   expect(thumbnailSize({ path: '', width: 490, height: 298 }, 36)).toEqual({ columns: 36, rows: 11 })
   // 세로로 긴 그림은 행 상한에 맞춰 폭을 줄인다
   expect(thumbnailSize({ path: '', width: 300, height: 1200 }, 36)).toEqual({ columns: 6, rows: 12 })
@@ -498,18 +502,22 @@ test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', KO, async ($,
   await row.unmount()
 })
 
-import { ago, clip, filterSessions, groupSessions, numbered, parseSessions } from '../hooks/sessions'
+import { ago, clip, filterSessions, groupSessions, numbered, sessionOf } from '../hooks/sessions'
 
 test('세션 목록 읽기·묶기·표시', KO, async () => {
   setLang('ko')
-  const listing = [
-    'ab12bc38-9375-438b-b199-90724fcb83cd\t1791456080\t/home/u/repo\t\tClaude Code 모드 아이디어',
-    '83c92571-f2bb-4513-8111-da82e042ba8f\t1791455457\t/home/u/other\t직접 붙인 이름\t자동 제목',
-    '554bfb0b-ba79-4f30-bf0b-03fb9fcd7140\t1791455005\t/home/u/repo\t\t\t마지막 프롬프트',
-    '65688aaf-c25e-4243-975e-4e7a106d7071\t1791455000\t/home/u/repo\t\t\t',
-    'not-a-session\t1\t/x\t\t',
-  ].join('\n')
-  const list = parseSessions(listing)
+  // 기록 파일 줄: 작업 폴더는 앞의 첫 값, 제목은 끝의 마지막 값
+  const line = (fields: Record<string, string>) => JSON.stringify(fields)
+  const file = (cwd: string, ...tail: Record<string, string>[]) => [line({ type: 'user', cwd }), ...tail.map(line)].join('\n')
+  const read = (id: string, at: number, text: string) => sessionOf(id, at * 1000, text, text)
+  const list = [
+    read('ab12bc38-9375-438b-b199-90724fcb83cd', 1791456080, file('/home/u/repo', { type: 'ai-title', aiTitle: '옛 제목' }, { type: 'ai-title', aiTitle: 'Claude Code 모드 아이디어' })),
+    read('83c92571-f2bb-4513-8111-da82e042ba8f', 1791455457, file('/home/u/other', { type: 'custom-title', customTitle: '직접 붙인 이름' }, { type: 'ai-title', aiTitle: '자동 제목' })),
+    read('554bfb0b-ba79-4f30-bf0b-03fb9fcd7140', 1791455005, file('/home/u/repo', { type: 'last-prompt', lastPrompt: '마지막 프롬프트' })),
+    read('65688aaf-c25e-4243-975e-4e7a106d7071', 1791455000, file('/home/u/repo')),
+    read('not-a-session', 1, file('/x', { type: 'ai-title', aiTitle: 'x' })),
+  ].filter(entry => entry !== null)
+  expect(list[0]).toEqual({ id: 'ab12bc38-9375-438b-b199-90724fcb83cd', updatedAt: 1791456080000, cwd: '/home/u/repo', title: 'Claude Code 모드 아이디어' })
   expect(list.map(entry => entry.title)).toEqual(['Claude Code 모드 아이디어', '직접 붙인 이름', '마지막 프롬프트'])
   // 번호는 패널에 그리는 순서(현재 폴더 묶음이 먼저)
   expect(numbered(list, '/home/u/other', 8).map(entry => entry.title)).toEqual(['직접 붙인 이름', 'Claude Code 모드 아이디어', '마지막 프롬프트'])
@@ -525,6 +533,45 @@ test('세션 목록 읽기·묶기·표시', KO, async () => {
   expect(ago(0, 3 * 3_600_000)).toBe('3시간')
   expect(clip('가나다라마바', 7)).toBe('가나다…')
   expect(clip('짧음', 10)).toBe('짧음')
+})
+
+test('세션 목록: 기록 폴더를 훑어 최근 것부터, 큰 기록은 앞뒤만 읽는다', KO, async ($, on) => {
+  const root = '/home/u/.claude/projects'
+  const entry = (name: string, kind: 'file' | 'dir', size = 0, mtimeMs = 0) => ({ name, kind, size, mtimeMs, isLink: false })
+  const small = [JSON.stringify({ cwd: '/home/u/repo' }), JSON.stringify({ aiTitle: '작은 기록' })].join('\n')
+  const ran: string[][] = []
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('fs.list', ($, e) => {
+    const path = (e as { path?: string }).path
+    if (path === root) return { value: [entry('-home-u-repo', 'dir'), entry('stray.jsonl', 'file')] } as never
+    if (path === `${root}/-home-u-repo`)
+      return {
+        value: [
+          entry('ab12bc38-9375-438b-b199-90724fcb83cd.jsonl', 'file', small.length, 2_000),
+          entry('83c92571-f2bb-4513-8111-da82e042ba8f.jsonl', 'file', 50_000_000, 3_000),
+          entry('memory', 'dir'),
+        ],
+      } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.read', () => ({ value: small }) as never)
+  on('process.run', ($, e) => {
+    ran.push([...e.argv])
+    const stdout = e.argv[0] === 'head' ? JSON.stringify({ cwd: '/home/u/repo' }) : e.argv[0] === 'tail' ? `x"}\n${JSON.stringify({ customTitle: '큰 기록' })}\n` : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.cwd', () => ({ value: '/home/u/repo' }))
+  on('session.id', () => ({ value: 'other' }))
+  on('clock.now', () => ({ value: 4_000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-sessions', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-sessions', viewport: VIEWPORT, props: { title: '세션', isFocused: true, bodyColumns: 70 } as never })
+  const drawn = JSON.stringify(await pane.drawn())
+  expect(drawn.indexOf('큰 기록')).toBeGreaterThan(-1)
+  expect(drawn.indexOf('큰 기록')).toBeLessThan(drawn.indexOf('작은 기록'))
+  // 큰 기록만 head·tail 로, 셸 없이
+  expect(ran.map(argv => argv[0]).sort()).toEqual(['head', 'tail'])
+  await pane.unmount()
 })
 
 test('입력창 아래턱 글자', KO, () => {
@@ -728,10 +775,11 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
   on('process.run', async ($, e) => {
     const done = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (e.argv[0] === 'mktemp') return done('/tmp/ask-test\n')
-    const script = e.argv[2] ?? ''
-    if (script.includes('while [ ! -e')) return done(await waiting)
-    if (script.includes('answer.tmp')) {
-      answer(e.argv[5] ?? '')
+    // 훅은 파이프를 cat 으로 읽으며 기다리고, 카드는 tee 로 답을 넣는다
+    if (e.argv[0] === 'cat') return done(await waiting)
+    if (e.argv[0] === 'tee') {
+      expect(e.argv[1]).toBe('/tmp/ask-test/answer')
+      answer(e.init?.stdin ?? '')
       return done('')
     }
     return done('')
@@ -772,18 +820,19 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
   on('clock.now', () => ({ value: 0 }))
   on('prompt.submit', ($, e) => ({ text: e.text }) as never)
   on('tool.call', () => ({ result: 'engine' }) as never)
+  const readPaths: string[] = []
+  bridgedSession(on, readPaths)
   on('process.run', ($, e) => {
     scripts.push(e.argv)
-    const stdout = (e.argv[2] ?? '').includes('bridgeSessionId') ? 'remote\n' : ''
-    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   const result = await $.tool.call({
     tool: 'AskUserQuestion',
     questions: [{ question: '어느 쪽?', header: '방향', multiSelect: false, options: [{ label: '왼쪽' }, { label: '오른쪽' }] }],
   } as never)
   expect(result).toEqual({ result: 'engine' })
-  // 세션 id 로 상태 파일을 찾았고, 카드용 임시 폴더는 만들지 않았다
-  expect(scripts[0]?.at(-1)).toBe('sess-1')
+  // 세션 상태 파일을 읽었고, 카드용 임시 폴더는 만들지 않았다
+  expect(readPaths).toEqual(['/home/u/.claude/sessions/4242.json'])
   expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
 
   // 마지막 입력이 앱(bridge)에서 왔어도 엔진 창
@@ -791,6 +840,27 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
   expect(await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: '또?', header: '', options: [{ label: 'a' }] }] } as never)).toEqual({ result: 'engine' })
   expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
 })
+
+// Remote Control 이 붙은 세션: 세션 상태 파일(~/.claude/sessions/*.json)에 이 세션 id 와 bridgeSessionId 가 있다.
+// other 는 그 밖의 파일 읽기(없으면 undefined 로 실패).
+function bridgedSession(on: On, readPaths: string[] = [], other: (path: string) => string | undefined = () => undefined) {
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('fs.list', ($, e) =>
+    (e as { path?: string }).path === '/home/u/.claude/sessions'
+      ? ({ value: [{ name: '4242.json', kind: 'file', size: 1, mtimeMs: 0, isLink: false }, { name: 'other.json', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never)
+      : ({ value: [] } as never),
+  )
+  on('fs.read', ($, e) => {
+    const path = (e as { path: string }).path
+    if (!path.startsWith('/home/u/.claude/sessions/')) {
+      const text = other(path)
+      if (text === undefined) throw new Error('ENOENT')
+      return { value: text } as never
+    }
+    readPaths.push(path)
+    return { value: JSON.stringify({ pid: 4242, sessionId: 'sess-1', bridgeSessionId: 'cse_1' }) } as never
+  })
+}
 
 // Remote Control 세션에서 마지막 입력이 터미널이면 카드를 띄운다. 기다림은 5초씩 돌아오고(시계를 5초씩 민다),
 // 카드를 1분 동안 건드리지 않으면 엔진 창으로 넘긴다. pressAt 번째 기다림에서 카드를 누른다.
@@ -813,27 +883,27 @@ async function remoteAsk($: Parameters<TestBody>[0], on: On, pressAt: number | n
     const { Text } = $.ui.resolve(e)
     return <Text>engine-band</Text>
   })
+  // 카드가 건드림 파일(touched)에 매번 다른 글을 쓴다. 없을 때 읽으면 실패.
+  let touches = 0
+  bridgedSession(on, [], path => (path === '/tmp/ask-remote/touched' && touches > 0 ? String(touches) : undefined))
   on('process.run', async ($, e) => {
     const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (e.argv[0] === 'mktemp') return out('/tmp/ask-remote\n')
-    const script = e.argv[2] ?? ''
-    if (script.includes('bridgeSessionId')) return out('remote\n')
-    // 카드가 건드림 파일을 만든다
-    if (script.includes('/touched"') && !script.includes('while')) {
+    if (e.argv[0] === 'tee' && e.argv[1] === '/tmp/ask-remote/touched') {
       touched = true
+      touches++
       return out('')
     }
-    if (!script.includes('while [ ! -e')) return out('')
-    expect(e.argv.at(-1)).toBe('5')
+    if (e.argv[0] !== 'cat') return out('')
+    // 5초씩 기다리고, 시간이 다 되면 cat 이 죽어 호출이 거절된다
+    expect(e.init?.timeoutMs).toBe(5000)
     rounds++
     if (rounds === pressAt) {
       reached()
       await pressed
     }
     now += 5000
-    const stdout = touched ? 'touched\n' : ''
-    touched = false
-    return out(stdout, 3)
+    throw new Error('timed out')
   })
   await $.prompt.submit({ text: '터미널에서', origin: { kind: 'composer' }, wait: false } as never)
   const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never })
@@ -1136,7 +1206,6 @@ test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 �
   on('process.run', gitStub as never)
   on('clock.now', () => ({ value: now }))
   on('agent.list', () => ({ value: [{ id: 'a1', description: '조사', type: 'Explore', status }] as never }))
-  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }) as never)
   on('tool.call', () => ({ result: 'ok' }) as never)
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('turn.complete', () => ({ text: '고쳤어요' }) as never)
@@ -1146,7 +1215,9 @@ test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 �
   })
   await $.turn.start({ text: '고쳐 줘', turnId: 't1' } as never)
   await $.tool.call({ tool: 'Edit', file_path: '/repo/a.txt', old_string: 'a', new_string: 'b' } as never)
-  await $.agent.spawn({ prompt: '조사해 줘', description: '조사', subagentType: 'Explore' } as never)
+  // 에이전트는 첫 턴에 엔진 목록으로 올라온다(목록 다시 읽기는 뒤에서)
+  await $.turn.start({ text: '조사해 줘', turnId: 's0', agentId: 'a1' } as never)
+  await wait(50)
   await $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'x', agentId: 'a1' } as never)
   // 서브에이전트가 끝났다가(SendMessage 로) 다시 돈다
   await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '', turnId: 's1', agentId: 'a1' } as never)
@@ -1154,8 +1225,7 @@ test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 �
   await wait(50)
   status = 'running'
   now = 60_000
-  // 2.1.299 부터 다시 이어 할 때도 agent.spawn 이 온다(resume): 처음 시작한 때와 도구 수는 그대로
-  await $.agent.spawn({ prompt: '이어서', description: '조사', subagentType: 'Explore', resume: { agentId: 'a1' } } as never)
+  // 다시 이어 해도 처음 시작한 때와 도구 수는 그대로
   await $.turn.start({ text: '이어서', turnId: 's2', agentId: 'a1' } as never)
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 60 } as never })
   const resumed = JSON.stringify(await pane.drawn())
@@ -1248,10 +1318,12 @@ test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에
 test('저장소 안이지만 git 이 무시하는 파일도 카드에서 누르면 diff 패널에 대화 기록의 편집이 보인다', KO, async ($, on) => {
   const path = '/repo/.claude/handoff/CURRENT.md'
   const asked: string[][] = []
-  on('process.run', (($: unknown, e: { argv: string[] }) => {
+  on('process.run', (($: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
     if (e.argv[1] !== 'check-ignore') return gitStub($, e)
-    asked.push(e.argv.slice(3))
-    const stdout = e.argv.includes(path) ? `${path}\n` : ''
+    // 경로는 stdin 으로 한 줄에 하나
+    const paths = (e.init?.stdin ?? '').split('\n').filter(Boolean)
+    asked.push(paths)
+    const stdout = paths.includes(path) ? `${path}\n` : ''
     return { value: { exitCode: stdout ? 0 : 1, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -1573,10 +1645,14 @@ test('MR(GitLab): job·토론·줄 수를 PR 모양으로', KO, () => {
   expect(prChipParts(info).map(part => part.text)).toEqual([' !7', '✗ 1', '◆ 1'])
 })
 
-const run = (table: Array<[(argv: string[]) => boolean, { exitCode: number; stdout?: string; stderr?: string }]>) => async (argv: string[]) => {
+// pr.ts 는 $.process.run 을 직접 부른다: 그 자리에 표를 넣는다.
+type Runner = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+const proc = (runner: Runner) => ({ process: { run: runner } })
+const runner = (table: Array<[(argv: string[]) => boolean, { exitCode: number; stdout?: string; stderr?: string }]>): Runner => async (argv: string[]) => {
   const hit = table.find(([match]) => match(argv))?.[1] ?? { exitCode: 1, stderr: 'unexpected' }
   return { exitCode: hit.exitCode, stdout: hit.stdout ?? '', stderr: hit.stderr ?? '' }
 }
+const run = (table: Parameters<typeof runner>[0]) => proc(runner(table))
 
 test('PR·MR 읽기: GitHub 이면 gh, 아니면 glab, 없으면 none', KO, async () => {
   const github = await fetchReview(
@@ -1619,7 +1695,7 @@ test('PR·MR 읽기: GitHub 이면 gh, 아니면 glab, 없으면 none', KO, asyn
   expect(none.status).toBe('none')
 
   // 도구가 없으면(실행 실패) 다시 묻지 않고, 네트워크 오류는 다음에 다시 읽는다
-  const missing = await fetchReview(async () => Promise.reject(new Error('spawn gh ENOENT')), 'develop', 1)
+  const missing = await fetchReview(proc(async () => Promise.reject(new Error('spawn gh ENOENT'))), 'develop', 1)
   expect([missing.status, missing.isSticky]).toEqual(['off', true])
   const flaky = await fetchReview(
     run([
@@ -1802,11 +1878,11 @@ test('머지 버튼을 낼지: 바로·자동·없음', KO, () => {
 test('머지 실행: GitLab 은 REST 로 본 커밋만, GitHub 은 허용된 방식으로 하고 원격 브랜치를 지운다', KO, async () => {
   const calls: string[][] = []
   const record = (table: Parameters<typeof run>[0]) => {
-    const inner = run(table)
-    return async (argv: string[]) => {
+    const inner = runner(table)
+    return proc(async (argv: string[]) => {
       calls.push(argv)
       return inner(argv)
-    }
+    })
   }
   const auto = await mergePr(record([[argv => argv[0] === 'glab', { exitCode: 0, stdout: JSON.stringify({ state: 'opened', merge_when_pipeline_succeeds: true }) }]]), toMr(READY_MR, toJobs(RUNNING_JOB), [], null), 'auto')
   expect(auto).toEqual({ ok: true, merged: false })
@@ -1878,7 +1954,9 @@ test('diff 범위: 기준 브랜치 후보, 커밋 목록, 범위 이름', KO, (
 })
 
 const BRANCH_PATCH = 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-x\n+y\n'
-const scopeStub = ($: unknown, e: { argv: string[] }) => {
+// git show 은 커밋을 stdin 으로 받는다
+const shasOf = (e: { init?: { stdin?: string } }) => (e.init?.stdin ?? '').split('\n').filter(Boolean)
+const scopeStub = ($: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
   const argv = e.argv
   const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   if (argv[0] !== 'git') return out('', 1)
@@ -1890,7 +1968,7 @@ const scopeStub = ($: unknown, e: { argv: string[] }) => {
   if (argv[1] === 'diff' && argv[2] === 'HEAD') return out(DIFF_PATCH)
   if (argv[1] === 'diff' && argv[2] === 'base000') return out(DIFF_PATCH + BRANCH_PATCH)
   if (argv[1] === 'log') return out('c1sha\x1fc1\x1fAdd b\x1falice\x1f1 hour ago\nc2sha\x1fc2\x1fFix a\x1fbob\x1f2 hours ago\n')
-  if (argv[1] === 'show') return out(argv.filter(arg => arg.endsWith('sha')).map(sha => `\x1e${sha}\n\n${sha === 'c1sha' ? BRANCH_PATCH : DIFF_PATCH}`).join('\n'))
+  if (argv[1] === 'show') return out(shasOf(e).map(sha => `\x1e${sha}\n\n${sha === 'c1sha' ? BRANCH_PATCH : DIFF_PATCH}`).join('\n'))
   return out('')
 }
 
@@ -1927,8 +2005,8 @@ test('diff 패널 범위: 브랜치 전체와 커밋별', KO, async ($, on) => {
 
 test('diff 패널 범위: 브랜치 전체와 커밋별에도 모두 접기·펴기 (z)', KO, async ($, on) => {
   const shown: string[][] = []
-  on('process.run', (($: unknown, e: { argv: string[] }) => {
-    if (e.argv[1] === 'show') shown.push(e.argv.filter(arg => arg.endsWith('sha')))
+  on('process.run', (($: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+    if (e.argv[1] === 'show') shown.push(shasOf(e))
     return scopeStub($, e)
   }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -2089,7 +2167,17 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
     return { value: { isPlaced: true } }
   })
   on('agent.list', () => ({ value: [{ id: 'a1', description: '오늘 서울 날씨 조사', type: 'Explore', status }] as never }))
-  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }) as never)
+  const views: unknown[] = []
+  let viewDeny: string | undefined
+  on('ui.view', ($, e) => {
+    views.push(e)
+    return { value: viewDeny === undefined ? {} : { deny: viewDeny } }
+  })
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(JSON.stringify(e))
+    return { value: undefined as never }
+  })
   on('tool.call', () => ({ result: 'ok' }) as never)
   on('turn.complete', () => ({ text: '' }) as never)
   on('session.messages', ($, e) => ({
@@ -2107,7 +2195,18 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
     return <Text>engine-band</Text>
   })
 
-  await $.agent.spawn({ prompt: 'Research today weather', description: '오늘 서울 날씨 조사', subagentType: 'Explore' } as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.step', async function* ($, e) {
+    yield { kind: 'text', index: 0, text: 'ok' }
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-5-5' } } as never
+  })
+  await $.turn.start({ text: 'Research today weather', turnId: 's1', agentId: 'a1' } as never)
+  await wait(50)
+  // 모델은 단계가 시작할 때 엔진이 준 값
+  const stream = $.turn.step({ turnId: 's1', index: 0, model: 'claude-haiku-5-5', messageCount: 1, agentId: 'a1' } as never)
+  let step = await stream.next()
+  while (step.done !== true) step = await stream.next()
+  await wait(20)
   await $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'x', agentId: 'a1' } as never)
   now = 19_000
 
@@ -2119,7 +2218,8 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
   expect(opened).toEqual(['desk-tasks'])
   await band.unmount()
 
-  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 60 } as never })
+  const paneProps = { title: '백그라운드 작업', isFocused: true, bodyColumns: 60 }
+  let pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: paneProps as never })
   const list = JSON.stringify(await pane.drawn())
   expect(list).toContain('실행 중')
   expect(list).toContain('오늘 서울 날씨 조사')
@@ -2132,7 +2232,26 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
   expect(detail).toContain('today')
   expect(detail).toContain('Fetched a page')
   expect(detail).toContain('결론: 맑음')
-  await pane.press({ key: 'agent-back' })
+  // 메인 화면에서 보기: 엔진에 그 에이전트를 띄워 달라고 하고, 거절되면 이유를 알린다.
+  expect(detail).toContain('메인 화면에서 보기')
+  await pane.press({ key: 'agent-main-a1' })
+  expect(views).toEqual([{ agentId: 'a1' }])
+  viewDeny = 'no agent'
+  await pane.press({ key: 'agent-main-a1' })
+  expect(toasts.join('\n')).toContain('no agent')
+  viewDeny = undefined
+  // 메인 화면에 그 에이전트가 떠 있으면: 같은 대화를 또 그리지 않고, 버튼은 메인 대화로 돌아가기.
+  await pane.unmount()
+  const viewed = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { ...paneProps, view: { agentId: 'a1' } } as never })
+  const viewedDetail = JSON.stringify(await viewed.drawn())
+  expect(viewedDetail).toContain('메인 화면에 이 에이전트의 대화가 떠 있어요.')
+  expect(viewedDetail).not.toContain('결론: 맑음')
+  await viewed.press({ key: 'agent-main-back' })
+  expect(views.at(-1)).toEqual({})
+  await viewed.press({ key: 'agent-back' })
+  expect(JSON.stringify(await viewed.drawn())).toContain('◉ 보는 중')
+  await viewed.unmount()
+  pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: paneProps as never })
   expect(JSON.stringify(await pane.drawn())).toContain('대화 보기')
   // 번호로 바로 상세, 없는 번호는 알린다.
   expect(await $.command.run({ command: 'desk-tasks', args: '1' } as never)).toMatchObject({ text: '1번 작업: 오늘 서울 날씨 조사' })

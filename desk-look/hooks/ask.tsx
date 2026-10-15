@@ -15,24 +15,25 @@ type On = Parameters<Register>[0]
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
 
-// 훅은 자기 코드 시간 10초 안에 끝나야 하지만, 엔진 호출($)을 기다리는 동안은 시계가 멈춘다.
-// 그래서 답 파일이 생길 때까지 도는 셸을 띄워 두고 그 실행을 기다린다. 버튼이 그 파일을 쓴다.
-// process.run 은 한 번에 10분까지라, $2 초(9분)마다 빈손(종료 코드 3)으로 돌아와 다시 기다린다.
-// 빈손일 때 그사이 카드를 건드렸으면(touched 파일, TOUCH) touched 를 찍는다.
-const WAIT =
-  'end=$(( $(date +%s) + $2 )); while [ ! -e "$1/answer" ]; do [ "$(date +%s)" -ge "$end" ] && { rm "$1/touched" 2>/dev/null && echo touched; exit 3; }; sleep 0.1; done; cat "$1/answer"; rm -rf "$1"'
-export const WRITE = 'printf %s "$2" > "$1/answer.tmp" && mv "$1/answer.tmp" "$1/answer"'
-// 카드를 건드렸다는 표시. 기다리는 도구 훅은 그동안 바뀐 상태를 읽지 못해(훅이 시작할 때 값을 본다) 파일로 알린다.
-export const TOUCH = 'touch "$1/touched"'
+// 훅은 자기 코드 시간 10초 안에 끝나야 하지만, 엔진 호출($)을 기다리는 동안은 시계가 멈춘다($.clock.sleep 은 예외라 못 쓴다).
+// 그래서 임시 폴더에 이름 있는 파이프(answer)를 만들고 cat 으로 읽으며 기다린다. 카드 버튼이 tee 로 답을 써 넣으면 cat 이 끝난다.
+// process.run 은 한 번에 10분까지라, WAIT_ROUND_S 초(9분)마다 시간이 다 돼 끊기면 다시 기다린다.
+// 셸은 쓰지 않는다: 디렉터리 검사가 셸·인라인 스크립트를 리뷰어에게 넘긴다.
 const WAIT_ROUND_S = 540
 const WAIT_ROUNDS = 40
+// 카드를 건드렸다는 표시(touched 파일). 기다리는 도구 훅은 그동안 바뀐 상태를 읽지 못해(훅이 시작할 때 값을 본다) 파일로 알린다.
+// 버튼이 매번 다른 글을 써서, 훅은 글이 바뀌었는지로 안다.
 // Remote Control(Claude 앱)은 surfaces() 에 잡히지 않는다(앱이 attach 하지 않는다). 카드를 띄우면 엔진이
 // 원격 응답 요청을 보내지 않아 앱에서 답할 수 없다. 그래서 세션 상태 파일에 bridgeSessionId 가 있으면
 // 마지막 사람 입력이 터미널에서 왔을 때만 카드를 띄우고, 카드를 HANDOVER_MS 동안 아무도 건드리지 않으면
 // (자리를 떠 앱으로 보는 중) 엔진 창에 넘겨 앱에도 묻게 한다. 그동안은 HANDOVER_ROUND_S 초마다 돌아와 살핀다.
 export const HANDOVER_MS = 60_000
 const HANDOVER_ROUND_S = 5
-export const REMOTE = 'for f in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/sessions/*.json; do grep -q "\\"sessionId\\":\\"$1\\"" "$f" 2>/dev/null && grep -q "\\"bridgeSessionId\\":\\"" "$f" && { echo remote; exit 0; }; done; exit 0'
+
+// 세션 상태 파일(~/.claude/sessions/*.json) 하나가 이 세션의 것이고 Remote Control 이 붙어 있는지.
+export function isBridgedRecord(text: string, sessionId: string): boolean {
+  return sessionId !== '' && text.includes(`"sessionId":"${sessionId}"`) && text.includes('"bridgeSessionId":"')
+}
 
 export type AskReply =
   | { kind: 'answer'; answers: Record<string, string> }
@@ -90,8 +91,20 @@ export function numberProblem(question: AskQuestion, text: string): string | nul
   return null
 }
 
+// 기다리는 cat 에 답을 넘긴다(register.tsx 의 replyAsk 와 같다: $ 는 파일을 넘지 못한다).
 async function reply($: EngineInterface, dir: string, payload: AskReply) {
-  await $.process.run(['sh', '-c', WRITE, 'sh', dir, JSON.stringify(payload)], { timeoutMs: 3000 })
+  await $.process.run(['tee', `${dir}/answer`], { stdin: JSON.stringify(payload), timeoutMs: 3000 })
+}
+
+async function isBridged($: EngineInterface, sessionId: string): Promise<boolean> {
+  const [configDir, home] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), $.env.get('HOME')])
+  const base = configDir || (home ? `${home}/.claude` : '')
+  if (!base || sessionId === '') return false
+  for (const entry of await $.fs.list(`${base}/sessions`).catch(() => [])) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    if (isBridgedRecord(await $.fs.read(`${base}/sessions/${entry.name}`).catch(() => ''), sessionId)) return true
+  }
+  return false
 }
 
 // 알림 본문: 첫 질문, 여러 개면 "외 N개".
@@ -108,13 +121,17 @@ export function registerAsk(on: On, notify: boolean) {
     if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return next(e)
     if ((await read($, asking)) !== null) return next(e)
     const sessionId = await $.session.id().catch(() => '')
-    const bridged = await $.process.run(['sh', '-c', REMOTE, 'sh', sessionId], { timeoutMs: 3000 }).catch(() => null)
-    const isRemote = bridged?.stdout.trim() === 'remote'
+    const isRemote = await isBridged($, sessionId).catch(() => false)
     if (isRemote && (await read($, promptOrigin)) !== 'composer') return next(e)
 
     const made = await $.process.run(['mktemp', '-d'], { timeoutMs: 3000 }).catch(() => null)
     const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
     if (dir === '') return next(e)
+    const piped = await $.process.run(['mkfifo', `${dir}/answer`], { timeoutMs: 3000 }).catch(() => null)
+    if (piped?.exitCode !== 0) {
+      await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
+      return next(e)
+    }
     const id = e.tool_use_id ?? dir
     const shownAt = await $.clock.now()
     await update($, asking, () => ({ id, dir, questions, step: 0, picks: questions.map(() => []), texts: questions.map(() => ''), shownAt }))
@@ -122,37 +139,49 @@ export function registerAsk(on: On, notify: boolean) {
       void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
     }
 
-    // 턴을 중단하면(Esc) 기다리던 셸을 끝낸다.
+    // 턴을 중단하면(Esc) 기다리던 cat 을 끝낸다.
     const onAbort = () => void reply($, dir, { kind: 'cancel' }).catch(() => undefined)
     next.signal.addEventListener('abort', onAbort)
     const roundS = isRemote ? HANDOVER_ROUND_S : WAIT_ROUND_S
     const rounds = Math.ceil((WAIT_ROUNDS * WAIT_ROUND_S) / roundS)
     let touchedAt = shownAt
+    let touch = ''
     let isHandedOver = false
-    let ran: { exitCode: number; stdout: string } | null = null
+    let answered = ''
     for (let round = 0; round < rounds && !next.signal.aborted; round++) {
-      ran = await $.process.run(['sh', '-c', WAIT, 'sh', dir, String(roundS)], { timeoutMs: (roundS + 30) * 1000 }).catch(() => null)
-      if (ran?.exitCode !== 3) break
-      if (!isRemote) continue
+      const startedAt = await $.clock.now()
+      // 시간이 다 되면 cat 이 죽고 호출은 거절된다(null): 한 바퀴가 끝난 것
+      const ran = await $.process.run(['cat', `${dir}/answer`], { timeoutMs: roundS * 1000 }).catch(() => null)
+      if (ran !== null && ran.exitCode === 0 && ran.stdout.trim() !== '') {
+        answered = ran.stdout
+        break
+      }
       const now = await $.clock.now()
-      if (ran.stdout.includes('touched')) touchedAt = now
-      else if (now - touchedAt >= HANDOVER_MS) {
+      // 기다리지 못하고 곧바로 끝났으면(파이프가 사라졌다) 헛돌지 않고 엔진 창에 넘긴다
+      if (now - startedAt < 1000) {
+        isHandedOver = true
+        break
+      }
+      if (!isRemote) continue
+      const touched = await $.fs.read(`${dir}/touched`).catch(() => '')
+      if (touched !== touch) {
+        touch = touched
+        touchedAt = now
+      } else if (now - touchedAt >= HANDOVER_MS) {
         isHandedOver = true
         break
       }
     }
     next.signal.removeEventListener('abort', onAbort)
     await update($, asking, () => null)
-    if (isHandedOver) {
-      await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
-      return next(e)
-    }
+    await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
+    if (isHandedOver) return next(e)
 
     let answer: AskReply = { kind: 'cancel' }
     try {
-      answer = JSON.parse(ran?.stdout ?? '') as AskReply
+      answer = JSON.parse(answered) as AskReply
     } catch {
-      await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
+      answer = { kind: 'cancel' }
     }
     switch (answer.kind) {
       case 'answer':

@@ -88,7 +88,7 @@ Per-file diffs in three scopes, like the desktop diff panel:
 
 Like the desktop's Background tasks: this session's agents, background shells (`run_in_background`, Ctrl+B or a timed-out command) and monitors, under `Running` and `Done`.
 
-- **Agents** show their model, tokens, tool uses and what they are doing now (`Fetching`). `View transcript` shows the prompt, their messages, their tool calls folded as in the transcript, and their report
+- **Agents** show their model, tokens, tool uses and what they are doing now (`Fetching`). `View transcript` shows the prompt, their messages, their tool calls folded as in the transcript, and their report. `Open in main view` puts the agent's full transcript in the main view, where your next prompt goes to that agent; the card of the agent in view reads `◉ In view`, and `‹ Main conversation` goes back
 - **Shells and monitors** show their command. `View details` shows status, runtime, the result line and the end of the output (once it finishes)
 - `■ Stop` stops a running task after a second press within 5 seconds
 - `z` folds `Done`, `c` clears finished tasks from the list, `Remove` clears one

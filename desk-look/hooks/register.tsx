@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
 import type { AgentDetail, AgentRecord, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
-import { CORNER_SIZE, HERDR_GRAPHICS, IMAGE_TOKEN, LIST_IMAGES, cornerPixels, parseImages, supportsGraphics, thumbnailSize, type Corner } from './images'
+import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow } from './diffview'
@@ -10,8 +10,8 @@ import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rang
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
-import { LIST_SESSIONS, ago, clip, filterSessions, groupSessions, numbered, parseSessions } from './sessions'
-import { TOUCH as ASK_TOUCH, WRITE as ASK_WRITE, answerOf, numberProblem, registerAsk } from './ask'
+import { ago, clip, filterSessions, groupSessions, numbered, sessionOf } from './sessions'
+import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
@@ -118,9 +118,6 @@ export function mergeEdit(list: TurnEdit[], edit: TurnEdit): TurnEdit[] {
   )
 }
 
-// /desk-update 가 올리는 이 플러그인(마켓플레이스 저장소 이름 그대로).
-const MARKETPLACE = 'cc-desktop-mod'
-const PLUGIN_ID = `desk-look@${MARKETPLACE}`
 
 const lastLine = (text: string) => text.trim().split('\n').pop() ?? ''
 
@@ -458,7 +455,8 @@ export function parseDiff(text: string, isNew = false): FileDiff[] {
 }
 
 // 사용자 git 설정(diff.mnemonicPrefix·noprefix)과 상관없이 머리말을 a/ b/ 로 고정해 경로를 읽는다.
-const GIT_DIFF = ['--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/']
+// git 을 부르는 자리마다 명령 전체를 고정 글자로 쓴다(디렉터리 검사가 무엇을 실행하는지 끝까지 읽게). diff 는 늘
+// --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ 로 같은 모양을 받는다. 길이가 변하는 목록(경로·커밋)은 stdin 으로.
 
 // 컨텍스트 칩의 숫자: 인자 없는 usage() 는 상태 줄의 값이라 공짜다. 턴이 끝날 때마다 다시 읽는다.
 async function refreshUsage($: EngineInterface) {
@@ -533,8 +531,8 @@ function prChip(els: Els, $: EngineInterface, state: PrState | null) {
 }
 
 async function refreshDiff($: EngineInterface) {
-  const git = (args: string[]) => $.process.run(['git', ...args], { timeoutMs: 5000 })
-  const inside = await git(['rev-parse', '--is-inside-work-tree'])
+  const opts = { timeoutMs: 5000 }
+  const inside = await $.process.run(['git', 'rev-parse', '--is-inside-work-tree'], opts)
   if (inside.exitCode !== 0) {
     const cwd = await $.session.cwd()
     await update($, repo, () => ({ name: cwd.split('/').pop() ?? cwd, branch: null, isRepo: false }))
@@ -542,14 +540,16 @@ async function refreshDiff($: EngineInterface) {
     return
   }
   const [top, branch, tracked, untracked] = await Promise.all([
-    git(['rev-parse', '--show-toplevel']),
-    git(['rev-parse', '--abbrev-ref', 'HEAD']),
-    git(['diff', 'HEAD', ...GIT_DIFF]).then(ran => (ran.exitCode === 0 ? ran : git(['diff', ...GIT_DIFF]))),
-    git(['ls-files', '--others', '--exclude-standard']),
+    $.process.run(['git', 'rev-parse', '--show-toplevel'], opts),
+    $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], opts),
+    $.process
+      .run(['git', 'diff', 'HEAD', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], opts)
+      .then(ran => (ran.exitCode === 0 ? ran : $.process.run(['git', 'diff', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], opts))),
+    $.process.run(['git', 'ls-files', '--others', '--exclude-standard'], opts),
   ])
   // 새로 만든 파일은 `git diff HEAD` 에 안 잡힌다. 데스크톱처럼 보이도록 최대 20개까지 붙인다.
   const fresh = untracked.stdout.split('\n').filter(Boolean).slice(0, 20)
-  const freshDiffs = await Promise.all(fresh.map(path => git(['diff', '--no-index', ...GIT_DIFF, '--', '/dev/null', path])))
+  const freshDiffs = await Promise.all(fresh.map(path => $.process.run(['git', 'diff', '--no-index', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--', '/dev/null', path], opts)))
   const files = [
     ...parseDiff(tracked.stdout),
     ...freshDiffs.flatMap(ran => parseDiff(ran.stdout, true)),
@@ -557,7 +557,7 @@ async function refreshDiff($: EngineInterface) {
   // 이 세션이 고친 저장소 안 파일 중 git 이 무시하는 것은 git diff·ls-files 어디에도 안 잡힌다. 세션 기록으로 보이게 골라 둔다.
   const root = top.stdout.trim()
   const inRepo = root ? sessionEditsOf(await read($, runs)).map(edit => edit.path).filter(path => path.startsWith(`${root}/`)) : []
-  const ignored = inRepo.length ? (await git(['check-ignore', '--', ...inRepo])).stdout.split('\n').filter(Boolean) : []
+  const ignored = inRepo.length ? (await $.process.run(['git', 'check-ignore', '--stdin'], { ...opts, stdin: `${inRepo.join('\n')}\n` })).stdout.split('\n').filter(Boolean) : []
   await update($, repo, () => ({
     name: root.split('/').pop() ?? '',
     branch: branch.exitCode === 0 ? branch.stdout.trim() : null,
@@ -726,7 +726,7 @@ async function refreshPr($: EngineInterface, force: boolean) {
       return
     }
     if (force || last?.branch !== branch) await update($, pr, (previous): PrState => ({ status: 'loading', branch, pr: previous?.branch === branch ? previous.pr : null, at: now }))
-    const next = await fetchReview(argv => $.process.run(argv, { timeoutMs: 15_000 }), branch, now)
+    const next = await fetchReview($, branch, now)
     await update($, pr, () => next)
     // 다음 주기는 방금 읽은 때부터 센다(↻·턴 끝에서 바뀐 것을 보면 길게 걸어 둔 타이머 대신 PR_POLL 로).
     prPoll?.cancel()
@@ -774,7 +774,7 @@ async function mergeFromPane($: EngineInterface, info: PrInfo, action: MergeActi
   merging = true
   try {
     $.ui.toast(T.merging(prRef(info)))
-    const result = await mergePr(argv => $.process.run(argv, { timeoutMs: 30_000 }), info, action)
+    const result = await mergePr($, info, action)
     if (!result.ok) $.ui.toast(T.mergeFailed(result.error))
     else $.ui.toast([result.merged ? T.merged(prRef(info)) : T.autoMergeSet(prRef(info)), result.note].filter(Boolean).join(' · '))
   } finally {
@@ -827,13 +827,14 @@ async function fillPrompt($: EngineInterface, text: string) {
 }
 
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
-async function findBase($: EngineInterface, git: (args: string[]) => Promise<{ exitCode: number; stdout: string }>) {
-  const [originHead, state] = await Promise.all([git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']), read($, pr)])
+async function findBase($: EngineInterface) {
+  const opts = { timeoutMs: 8000 }
+  const [originHead, state] = await Promise.all([$.process.run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], opts), read($, pr)])
   const candidates = baseCandidates(state?.pr?.base ?? null, originHead.exitCode === 0 ? originHead.stdout.trim() : null)
   for (const ref of candidates) {
-    const found = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+    const found = await $.process.run(['git', 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], opts)
     if (found.exitCode !== 0) continue
-    const base = await git(['merge-base', 'HEAD', ref])
+    const base = await $.process.run(['git', 'merge-base', 'HEAD', ref], opts)
     if (base.exitCode === 0 && base.stdout.trim() !== '') return { ref, sha: base.stdout.trim() }
   }
   return null
@@ -847,18 +848,20 @@ async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
     await update($, diffView, previous => ({ ...previous, scope: next }))
     return
   }
-  const git = (args: string[]) => $.process.run(['git', ...args], { timeoutMs: 8000 })
-  const base = await findBase($, git)
+  const opts = { timeoutMs: 8000 }
+  const base = await findBase($)
   if (next === 'branch') {
     await refreshDiff($)
-    const ran = base ? await git(['diff', base.sha, ...GIT_DIFF]) : null
+    const ran = base ? await $.process.run(['git', 'diff', base.sha, '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], opts) : null
     // 브랜치 전체에도 아직 git 에 없는 새 파일을 넣는다(커밋 안 한 변경 쪽에서 이미 읽었다)
     const fresh = (await read($, diff)).filter(file => file.isNew)
     const files = ran && ran.exitCode === 0 ? [...parseDiff(ran.stdout), ...fresh] : []
     await update($, diffView, previous => ({ ...previous, scope: next, base, files }))
     return
   }
-  const log = await git(['log', LOG_FORMAT, `-n${MAX_COMMITS}`, ...(base ? [`${base.sha}..HEAD`] : [])])
+  const log = base
+    ? await $.process.run(['git', 'log', LOG_FORMAT, `-n${MAX_COMMITS}`, `${base.sha}..HEAD`], opts)
+    : await $.process.run(['git', 'log', LOG_FORMAT, `-n${MAX_COMMITS}`], opts)
   const commits = log.exitCode === 0 ? parseCommits(log.stdout) : []
   // 목록에 남은 커밋만 펼친 채로 둔다
   const keep = new Set(commits.map(commit => commit.sha))
@@ -871,10 +874,12 @@ async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
   }))
 }
 
-// 커밋들의 diff 를 git show 한 번으로 읽는다. 커밋마다 \x1e<sha> 줄로 시작한다.
+// 커밋들의 diff 를 git show 한 번으로 읽는다(커밋은 stdin 으로). 커밋마다 \x1e<sha> 줄로 시작한다.
 async function commitDiffs($: EngineInterface, shas: string[]): Promise<Record<string, FileDiff[]>> {
   // 시간을 넘기거나 git 을 못 띄우면 빈 커밋으로 둔다: 커밋 줄·z 는 결과를 기다리지 않아 던지면 아무도 못 받는다.
-  const ran = await $.process.run(['git', 'show', '--format=%x1e%H', ...GIT_DIFF, ...shas], { timeoutMs: 8000 }).catch(() => ({ exitCode: 1, stdout: '' }))
+  const ran = await $.process
+    .run(['git', 'show', '--stdin', '--format=%x1e%H', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'], { timeoutMs: 8000, stdin: `${shas.join('\n')}\n` })
+    .catch(() => ({ exitCode: 1, stdout: '' }))
   const found = ran.exitCode === 0 ? splitCommitDiffs(ran.stdout) : {}
   return Object.fromEntries(shas.map(sha => [sha, found[sha] ?? []]))
 }
@@ -926,17 +931,100 @@ async function refreshSurface($: EngineInterface) {
 // 대화 속 편집 행(callDetail)은 비동기 읽기 없이 그려서 테마를 읽을 때 같이 맞춰 둔다.
 let diffColors: DiffPalette | null = null
 
+async function readHerdrConfig($: EngineInterface): Promise<string> {
+  const [xdg, home] = await Promise.all([$.env.get('XDG_CONFIG_HOME'), $.env.get('HOME')])
+  const base = xdg || (home ? `${home}/.config` : '')
+  return base ? $.fs.read(`${base}/herdr/config.toml`).catch(() => '') : ''
+}
+
 async function refreshImages($: EngineInterface) {
-  const ran = await $.process.run(['sh', '-c', LIST_IMAGES, 'sh', await $.session.id()], { timeoutMs: 3000 })
-  const next = ran.exitCode === 0 ? parseImages(ran.stdout) : {}
+  const next = await listImages($).catch(() => ({}))
   await update($, images, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
+}
+
+// 이 세션의 images 폴더(/tmp/claude-<uid>/<프로젝트>/<세션>/images). 찾으면 기억한다: 프롬프트마다 다시 훑지 않게.
+let userId: string | null = null
+let imagesDir: string | null = null
+// 같은 그림(경로·수정 시각)은 PNG 머리를 다시 읽지 않는다.
+const imageSizes = new Map<string, { width: number; height: number } | null>()
+
+async function findImagesDir($: EngineInterface): Promise<string | null> {
+  if (imagesDir !== null) return imagesDir
+  if (userId === null) {
+    const ran = await $.process.run(['id', '-u'], { timeoutMs: 3000 })
+    userId = ran.exitCode === 0 ? ran.stdout.trim() : ''
+  }
+  if (userId === '') return null
+  const root = `/tmp/claude-${userId}`
+  const sessionId = await $.session.id()
+  for (const project of await $.fs.list(root).catch(() => [])) {
+    if (project.kind !== 'dir') continue
+    const dir = `${root}/${project.name}/${sessionId}/images`
+    if (await $.fs.exists(dir).catch(() => false)) return (imagesDir = dir)
+  }
+  return null
+}
+
+async function listImages($: EngineInterface): Promise<Record<string, ImageInfo>> {
+  const dir = await findImagesDir($)
+  if (dir === null) return {}
+  const found: Record<string, ImageInfo> = {}
+  for (const file of await $.fs.list(dir)) {
+    const number = imageNumber(file.name)
+    if (number === null || file.kind !== 'file') continue
+    const path = `${dir}/${file.name}`
+    const key = `${path}@${file.mtimeMs}`
+    if (!imageSizes.has(key)) {
+      // 앞 24바이트만 십진수로($.fs.read 는 그림 전체를 옮기고 4 MiB 가 넘으면 거절한다)
+      const ran = await $.process.run(['od', '-An', '-tu1', '-N', '24', path], { timeoutMs: 3000 }).catch(() => null)
+      imageSizes.set(key, ran?.exitCode === 0 ? pngSize(ran.stdout.trim().split(/\s+/).map(Number)) : null)
+    }
+    const size = imageSizes.get(key)
+    if (size) found[number] = { path, ...size }
+  }
+  return found
 }
 
 async function refreshSessions($: EngineInterface) {
   // 빈 세션을 걸러 낸 뒤에도 40개가 차도록 넉넉히 읽는다
-  const ran = await $.process.run(['sh', '-c', LIST_SESSIONS, 'sh', '80'], { timeoutMs: 5000 })
-  const next = ran.exitCode === 0 ? parseSessions(ran.stdout).slice(0, 40) : []
+  const next = (await listSessions($, 80).catch(() => [])).slice(0, 40)
   await update($, sessions, () => next)
+}
+
+// 기록 파일이 작으면 통째로 읽고, 크면 앞(작업 폴더)과 끝(제목)만 head·tail 로 읽는다($.fs.read 는 4 MiB 까지).
+const SESSION_WHOLE = 320 * 1024
+
+async function listSessions($: EngineInterface, count: number) {
+  const home = await $.env.get('HOME')
+  if (!home) return []
+  const root = `${home}/.claude/projects`
+  const folders = (await $.fs.list(root)).filter(entry => entry.kind === 'dir')
+  const files = (
+    await Promise.all(
+      folders.map(async folder =>
+        (await $.fs.list(`${root}/${folder.name}`).catch(() => []))
+          .filter(entry => entry.kind === 'file' && entry.name.endsWith('.jsonl'))
+          .map(entry => ({ path: `${root}/${folder.name}/${entry.name}`, id: entry.name.slice(0, -'.jsonl'.length), size: entry.size, mtimeMs: entry.mtimeMs })),
+      ),
+    )
+  )
+    .flat()
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, count)
+  const entries = await Promise.all(
+    files.map(async file => {
+      if (file.size <= SESSION_WHOLE) {
+        const text = await $.fs.read(file.path).catch(() => '')
+        return sessionOf(file.id, file.mtimeMs, text, text)
+      }
+      const [head, tail] = await Promise.all([
+        $.process.run(['head', '-c', '262144', file.path], { timeoutMs: 5000 }).catch(() => ({ stdout: '' })),
+        $.process.run(['tail', '-c', '262144', file.path], { timeoutMs: 5000 }).catch(() => ({ stdout: '' })),
+      ])
+      return sessionOf(file.id, file.mtimeMs, head.stdout, tail.stdout)
+    }),
+  )
+  return entries.filter(entry => entry !== null)
 }
 
 // 세션 줄을 눌렀을 때. 같은 폴더의 세션은 /resume <id> 를 실행해 지금 창에서 바로 넘어간다.
@@ -1007,7 +1095,7 @@ function startAgentClock($: EngineInterface) {
   })
 }
 
-// agent.spawn 없이 시작한 에이전트(포크된 스킬 /code-review 등)는 활동이 처음 보일 때 엔진 목록을 다시 읽어 올린다.
+// 에이전트(포크된 스킬 /code-review 등 포함)는 활동이 처음 보일 때 엔진 목록을 다시 읽어 올린다.
 // 목록에 없는 루프(압축·워크플로 포크)로 거듭 묻지 않도록 id 마다 한 번만. 도구 실행을 붙잡지 않게 뒤에서 한다.
 const askedAgents = new Set<string>()
 
@@ -1049,6 +1137,12 @@ async function openAgents($: EngineInterface, id: string | null = null) {
   await refreshAgents($).catch(() => undefined)
   await refreshAgentDetail($).catch(() => undefined)
   await $.ui.open({ id: AGENTS_PANE, title: T.paneAgents, focus: true })
+}
+
+// 에이전트 대화를 메인 화면에 띄운다(엔진의 작업 목록에서 고른 것처럼). 그 뒤 Enter 는 그 에이전트에게 간다. id 가 없으면 메인 대화로.
+async function viewInMain($: EngineInterface, id: string | undefined) {
+  const shown = await $.ui.view(id === undefined ? {} : { agentId: id }).catch((error: unknown) => ({ deny: String(error) }))
+  if (shown.deny) $.ui.toast(shown.deny)
 }
 
 // 작업 멈추기: Revert 처럼 5초 안에 두 번 눌러야 한다. 엔진의 TaskStop 도구를 부른다(셸·모니터·백그라운드 에이전트).
@@ -1148,7 +1242,7 @@ function stopButton(els: Els, $: EngineInterface, agent: AgentRecord, armed: Rec
 }
 
 // 목록의 카드 한 장: 데스크톱 Background tasks 처럼 제목, 종류·시간·상태, 그 아래 수치(에이전트) 또는 명령(셸·모니터).
-function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: number, now: number, columns: number, armed: Record<string, boolean>) {
+function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: number, now: number, columns: number, armed: Record<string, boolean>, inView: string | undefined) {
   const { Box, Text } = els
   const live = isLive(agent.status)
   const elapsed = agentElapsed(agent, now)
@@ -1162,6 +1256,7 @@ function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: numb
         <Text color={COLORS.muted}>{KIND_LABEL(agent)}</Text>
         {elapsed && <Text color={COLORS.muted}>{elapsed}</Text>}
         {!live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{T.agentStatus[agent.status] ?? agent.status}</Text>}
+        {agent.id === inView && <Text color={COLORS.clay}>{`◉ ${T.agentInView}`}</Text>}
       </Box>
       <Box columnGap={2} flexWrap="wrap">
         {isAgent ? (
@@ -1716,7 +1811,7 @@ export const register: Register = (on, options) => {
         $.env.get('TERM_PROGRAM'),
         $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'),
       ])
-      const herdr = HERDR_ENV === '1' && (await $.process.run(['sh', '-c', HERDR_GRAPHICS], { timeoutMs: 3000 })).stdout.trim() === 'on'
+      const herdr = HERDR_ENV === '1' && herdrGraphicsOn(await readHerdrConfig($))
       const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES }
       await update($, graphics, () => supportsGraphics(env, herdr))
     })().catch(() => undefined)
@@ -1823,10 +1918,10 @@ export const register: Register = (on, options) => {
 
   // 마켓 목록을 새로 받고 desk-look 을 올린다. 플러그인이 스스로 다시 불러올 길은 없어 /reload-plugins 는 사람이 한다.
   on('command.run', { command: 'desk-update' }, async $ => {
-    const claude = (args: string[]) => $.process.run(['claude', 'plugin', ...args], { timeoutMs: 150_000 })
-    const market = await claude(['marketplace', 'update', MARKETPLACE])
+    // 이 플러그인(desk-look@cc-desktop-mod, 마켓플레이스 저장소 이름 그대로). 명령은 고정 글자로.
+    const market = await $.process.run(['claude', 'plugin', 'marketplace', 'update', 'cc-desktop-mod'], { timeoutMs: 150_000 })
     if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
-    const ran = await claude(['update', PLUGIN_ID, '--json'])
+    const ran = await $.process.run(['claude', 'plugin', 'update', 'desk-look@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
     return { text: updateMessage(ran.exitCode, ran.stdout, ran.stderr) }
   })
 
@@ -1879,38 +1974,16 @@ export const register: Register = (on, options) => {
     return { text: T.agentsOpened }
   })
 
-  // 에이전트 패널의 수치: 띄운 시각·모델(agent.spawn), 컨텍스트 토큰(turn.step), 도구 수·하는 일(tool.call).
-  on('agent.spawn', async ($, e, next) => {
-    const startedAt = await $.clock.now()
-    const spawned = await next(e)
-    const id = spawned.agentId
-    if (id !== undefined) {
-      await update($, agents, records => ({
-        ...records,
-        [id]: {
-          toolUses: 0,
-          ...records[id],
-          id,
-          description: e.description || records[id]?.description || e.subagentType,
-          type: e.subagentType,
-          status: 'running',
-          model: spawned.model,
-          // 다시 이어 하는 에이전트(e.resume)는 처음 시작한 때부터 센다.
-          startedAt: e.resume ? (records[id]?.startedAt ?? startedAt) : startedAt,
-          endedAt: undefined,
-          dismissed: undefined,
-        },
-      }))
-      void refreshAgents($).catch(() => undefined)
-    }
-    return spawned
-  })
-
+  // 에이전트 패널의 수치: 모델·컨텍스트 토큰(turn.step), 도구 수·하는 일(tool.call). 에이전트는 첫 턴(turn.start)에 엔진 목록으로 올린다.
+  // agent.spawn 은 걸지 않는다: 디렉터리 검사가 그 훅을 권한 결정을 가져갈 수 있는 훅으로 보고 리뷰어에게 넘긴다.
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
+    // 단계의 모델은 시작할 때 이미 정해져 있다. 단계를 붙잡지 않게 기다리지 않는다.
+    if (id !== undefined) void patchAgent($, id, () => ({ model: e.model })).catch(() => undefined)
     const response = yield* next(e)
     const used = response.usage
     if (id !== undefined && used) {
+      // 첫 단계의 모델 기록이 목록 다시 읽기와 엇갈려 빠졌으면 여기서 채운다
       await patchAgent($, id, agent => ({ tokens: stepTokens(used), model: agent.model ?? used.model }))
     }
     return response
@@ -2353,6 +2426,8 @@ export const register: Register = (on, options) => {
       read($, agentClock),
     ])
     const columns = Math.max(24, e.props.bodyColumns)
+    // 메인 화면에 떠 있는 에이전트(엔진 작업 목록이나 '메인 화면에서 보기'로 연 것). 바뀌면 이 훅이 다시 돈다.
+    const inView = e.props.view?.agentId
 
     const agent = view === null ? undefined : records[view]
     const back = rowButton(els, { key: 'agent-back', dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)
@@ -2402,6 +2477,9 @@ export const register: Register = (on, options) => {
             <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
               {agent?.description ?? view}
             </Text>
+            {view === inView
+              ? rowButton(els, { key: 'agent-main-back', onPress: () => void viewInMain($, undefined) }, `‹ ${T.backToMain}`)
+              : rowButton(els, { key: `agent-main-${view}`, onPress: () => void viewInMain($, view) }, T.viewInMain)}
             {agent && live && stopButton(els, $, agent, openState)}
           </Box>
           {agent && (
@@ -2412,7 +2490,9 @@ export const register: Register = (on, options) => {
               {facts !== '' && <Text color={COLORS.muted}>{facts}</Text>}
             </Box>
           )}
-          {shown === null ? (
+          {view === inView ? (
+            <Text color={COLORS.muted}>{T.agentShownInMain}</Text>
+          ) : shown === null ? (
             <Text color={COLORS.muted}>{T.agentGone}</Text>
           ) : (
             <Box flexDirection="column" rowGap={1}>
@@ -2450,7 +2530,7 @@ export const register: Register = (on, options) => {
         {live.length > 0 && (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>{T.agentsRunning}</Text>
-            {live.map((item, index) => agentRow(els, $, item, index + 1, now, columns, openState))}
+            {live.map((item, index) => agentRow(els, $, item, index + 1, now, columns, openState, inView))}
           </Box>
         )}
         {done.length > 0 && (
@@ -2465,7 +2545,7 @@ export const register: Register = (on, options) => {
               )}
               <els.Button key="tasks-clear-done" plain dimColor hotkey="c" label={T.tasksClearDone} onPress={() => void update($, agents, records => dismissAgents(records))} />
             </Box>
-            {!doneFolded && done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns, openState))}
+            {!doneFolded && done.map((item, index) => agentRow(els, $, item, live.length + index + 1, now, columns, openState, inView))}
           </Box>
         )}
       </Box>
@@ -3059,13 +3139,16 @@ export function askHint(question: { kind: string; multiSelect: boolean }): strin
 }
 
 // 질문 카드(입력창 위 띠). 묻는 상태와 도구 호출 훅은 ask.tsx, 그리기와 버튼은 여기($ 는 파일을 넘지 못한다).
+// 답은 기다리는 cat 의 파이프(answer)에 tee 로 넘긴다(ask.tsx).
 async function replyAsk($: EngineInterface, dir: string, payload: AskReply) {
-  await $.process.run(['sh', '-c', ASK_WRITE, 'sh', dir, JSON.stringify(payload)], { timeoutMs: 3000 })
+  await $.process.run(['tee', `${dir}/answer`], { stdin: JSON.stringify(payload), timeoutMs: 3000 })
 }
 
 // 카드를 건드렸다고 알린다: Remote Control 세션에서 엔진 창으로 넘기는 시계를 다시 센다(ask.tsx).
+// 매번 다른 글을 써서 기다리는 훅이 바뀐 것을 안다(답과 같은 tee 로).
+let askTouches = 0
 function touchAsk($: EngineInterface, dir: string) {
-  void $.process.run(['sh', '-c', ASK_TOUCH, 'sh', dir], { timeoutMs: 3000 }).catch(() => undefined)
+  void $.process.run(['tee', `${dir}/touched`], { stdin: String(++askTouches), timeoutMs: 3000 }).catch(() => undefined)
 }
 
 // 지금 질문에 답을 정하고 다음 질문으로, 마지막이면 답을 보낸다.

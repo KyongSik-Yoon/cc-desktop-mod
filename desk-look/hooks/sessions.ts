@@ -2,30 +2,16 @@ import type { SessionEntry } from '../types'
 import { cellWidth } from './markdown'
 import { T } from './i18n'
 
-// ~/.claude/projects/<프로젝트>/<세션>.jsonl 에서 최근 세션을 뽑는다.
-// 한 줄에 세션 id, 마지막 활동(초), 작업 폴더, 사용자가 붙인 제목, 자동 제목, 마지막 프롬프트를 탭으로 나눠 출력한다.
-// 기록 파일은 수십 MB 까지 커지므로 제목은 끝에서부터(tac) 첫 일치만 읽는다.
-export const LIST_SESSIONS = `ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null | head -n "$1" | while IFS= read -r f; do
-  id=$(basename "$f" .jsonl)
-  mtime=$(stat -c %Y "$f")
-  cwd=$(grep -m1 -o '"cwd":"[^"]*"' "$f" | cut -d'"' -f4)
-  custom=$(tac "$f" | grep -m1 -o '"customTitle":"[^"]*"' | cut -d'"' -f4)
-  ai=$(tac "$f" | grep -m1 -o '"aiTitle":"[^"]*"' | cut -d'"' -f4)
-  last=$(tac "$f" | grep -m1 -o '"lastPrompt":"[^"]*"' | cut -d'"' -f4 | cut -c1-120)
-  printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$id" "$mtime" "$cwd" "$custom" "$ai" "$last"
-done`
-
-export function parseSessions(listing: string): SessionEntry[] {
-  const out: SessionEntry[] = []
-  for (const line of listing.split('\n')) {
-    const [id, mtime, cwd, custom, ai, last] = line.split('\t')
-    if (!id || !mtime || !/^[0-9a-f-]{36}$/.test(id)) continue
-    // 제목도 프롬프트도 없는 세션은 대화가 한 번도 없었던 빈 세션이라 목록에서 뺀다
-    const title = custom || ai || last
-    if (!title) continue
-    out.push({ id, updatedAt: Number(mtime) * 1000, cwd: cwd ?? '', title })
-  }
-  return out
+// ~/.claude/projects/<프로젝트>/<세션>.jsonl 하나에서 세션 줄 하나. 작업 폴더는 파일 앞(head)의 첫 값,
+// 사용자가 붙인 제목·자동 제목·마지막 프롬프트는 파일 끝(tail)의 마지막 값을 쓴다(기록 파일은 수십 MB 까지 커진다).
+// 제목도 프롬프트도 없는 세션은 대화가 한 번도 없었던 빈 세션이라 null.
+export function sessionOf(id: string, updatedAt: number, head: string, tail: string): SessionEntry | null {
+  if (!/^[0-9a-f-]{36}$/.test(id)) return null
+  const field = (key: string) => new RegExp(`"${key}":"([^"]*)"`, 'g')
+  const last = (key: string) => [...tail.matchAll(field(key))].at(-1)?.[1] ?? ''
+  const title = last('customTitle') || last('aiTitle') || last('lastPrompt').slice(0, 120)
+  if (!title) return null
+  return { id, updatedAt, cwd: field('cwd').exec(head)?.[1] ?? '', title }
 }
 
 // 패널에 그리는 순서(묶음 순서)대로 번호를 매긴다. 현재 세션은 번호 없이 ● 로 그리므로 뺀다.

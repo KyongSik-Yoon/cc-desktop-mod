@@ -1,27 +1,18 @@
 import type { ImageInfo } from '../types'
 
-// 붙여 넣은 이미지는 세션 임시 폴더의 images/N.png 에 [Image #N] 번호 그대로 저장된다.
-// 각 파일 경로와 PNG 헤더 앞 24바이트(IHDR 의 가로·세로)를 한 줄씩 출력한다.
-export const LIST_IMAGES = `d=$(ls -d /tmp/claude-$(id -u)/*/"$1"/images 2>/dev/null | head -1)
-[ -n "$d" ] || exit 0
-for f in "$d"/*.png; do
-  [ -f "$f" ] || continue
-  printf '%s ' "$f"; head -c 24 "$f" | od -An -tu1 | tr -s ' \\n' '  '; echo
-done`
+// 붙여 넣은 이미지는 세션 임시 폴더(/tmp/claude-<uid>/<프로젝트>/<세션>/images)의 N.png 에 [Image #N] 번호 그대로 저장된다.
+// 파일 이름의 번호. N.png 가 아니면 null.
+export function imageNumber(name: string): string | null {
+  return /^(\d+)\.png$/.exec(name)?.[1] ?? null
+}
 
-export function parseImages(listing: string): Record<string, ImageInfo> {
-  const images: Record<string, ImageInfo> = {}
-  for (const line of listing.split('\n')) {
-    const [path, ...rest] = line.trim().split(/\s+/)
-    const number = path ? /\/(\d+)\.png$/.exec(path)?.[1] : undefined
-    const bytes = rest.map(Number)
-    if (!path || number === undefined || bytes.length < 24) continue
-    const word = (at: number) => bytes.slice(at, at + 4).reduce((value, byte) => value * 256 + byte, 0)
-    const width = word(16)
-    const height = word(20)
-    if (width > 0 && height > 0) images[number] = { path, width, height }
-  }
-  return images
+// PNG 앞 24바이트(IHDR)의 가로·세로. 짧거나 0 이면 null.
+export function pngSize(bytes: ArrayLike<number>): { width: number; height: number } | null {
+  if (bytes.length < 24) return null
+  const word = (at: number) => Array.from({ length: 4 }, (_, i) => bytes[at + i] ?? 0).reduce((value, byte) => value * 256 + byte, 0)
+  const width = word(16)
+  const height = word(20)
+  return width > 0 && height > 0 ? { width, height } : null
 }
 
 // 썸네일 칸 수. 터미널 셀은 세로가 가로의 약 두 배라 행 수는 절반으로 센다.
@@ -37,9 +28,10 @@ export function thumbnailSize(image: ImageInfo, maxColumns: number, maxRows = 12
 
 export const IMAGE_TOKEN = /\[Image #(\d+)\]/g
 
-// herdr 는 설정의 [experimental] kitty_graphics = true 일 때만 kitty 그래픽을 바깥 터미널로 넘긴다.
-// 켜져 있으면 on 을 출력한다.
-export const HERDR_GRAPHICS = `grep -Eqs '^[[:space:]]*kitty_graphics[[:space:]]*=[[:space:]]*true' "\${XDG_CONFIG_HOME:-$HOME/.config}/herdr/config.toml" && echo on`
+// herdr 는 설정(~/.config/herdr/config.toml)의 [experimental] kitty_graphics = true 일 때만 kitty 그래픽을 바깥 터미널로 넘긴다.
+export function herdrGraphicsOn(config: string): boolean {
+  return /^[ \t]*kitty_graphics[ \t]*=[ \t]*true/m.test(config)
+}
 
 // kitty 그래픽 프로토콜을 그릴 수 있는 환경인지. tmux·zellij 는 통과시키지 않아 그림 대신 alt 글자가
 // 나오므로 그리지 않는다. herdr 는 kitty_graphics 를 켰을 때만(herdrGraphics) 넘기는데, 엔진은 터미널 이름을
