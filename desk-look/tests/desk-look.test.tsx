@@ -1302,7 +1302,11 @@ test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에
   for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Code' })); tries++) await wait(10)
   await pane.press({ key: 'fold-s:/tmp/x/note.md' })
   expect(await pane.find({ type: 'Code' })).toBeUndefined()
-  // 접어 둔 파일도 카드에서 누르면 펼친다
+  // git 밖 묶음을 통째로 접으면 머리 줄(개수 포함)만 남는다
+  await pane.press({ key: 'fold-outside' })
+  expect(await pane.find({ type: 'Button', key: 'fold-s:/tmp/x/note.md' })).toBeUndefined()
+  expect(JSON.stringify(await pane.drawn())).toContain(' · 1')
+  // 접어 둔 묶음·파일도 카드에서 누르면 펼친다
   await row.press({ key: 'diffat-4000-/tmp/x/note.md' })
   for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Code' })); tries++) await wait(10)
   expect(await pane.find({ type: 'Text', text: /git 저장소가 아니라서/ })).toBeUndefined()
@@ -2759,6 +2763,13 @@ describe('데스크톱 모양 diff', () => {
     const drawn = JSON.stringify(await pane.drawn())
     expect(drawn).toContain(`"backgroundColor":"${TINT.addBg}"`)
     expect(drawn).not.toContain('"format":"diff"')
+    // 묶음을 접으면 머리 줄만, 다시 누르면 편다
+    await pane.press({ key: 'fold-outside' })
+    expect(await pane.find({ type: 'Text', text: 'n.ts' })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: '· 다음 편집' })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /git 밖 파일/ })).toBeDefined()
+    await pane.press({ key: 'fold-outside' })
+    expect(await pane.find({ type: 'Text', text: 'n.ts' })).toBeDefined()
     await pane.unmount()
   })
 

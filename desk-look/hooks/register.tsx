@@ -612,6 +612,8 @@ export function clipStart(text: string, width: number): string {
 
 // diff 패널에서 세션 기록으로 보이는 파일의 키 앞머리.
 const OUTSIDE = 's:'
+// git 밖 편집 묶음 전체의 접기 키. 파일 접기 키(fold:경로)와 겹치지 않게 따로 둔다.
+const OUTSIDE_GROUP = 'group:outside'
 
 // 데스크톱처럼 턴 끝 카드의 파일을 누르면 diff 패널을 그 파일에서 연다(접혀 있으면 펼쳐서).
 // 문서를 읽어 미리보기 상태에 둔다. 경로는 실제 경로로 바꿔 둬서 나중에 다른 모양의 경로로 온 편집도 같은 문서로 안다.
@@ -663,7 +665,8 @@ async function openDiffAt($: EngineInterface, path: string) {
     $.ui.toast(T.notInDiff)
     return
   }
-  await update($, open, state => ({ ...state, [`fold:${target}`]: false }))
+  // git 밖 파일이면 묶음도 편다: 접힌 묶음 안의 파일 머리 띠는 그리지 않아 스크롤해 갈 곳이 없다.
+  await update($, open, state => ({ ...state, [`fold:${target}`]: false, ...(inGit === null ? { [OUTSIDE_GROUP]: false } : {}) }))
   // 막 연 패널은 아직 그려지기 전이라 스크롤이 거부된다("not this plugin's site"). 그려질 때까지 잠깐 다시 한다.
   for (let tries = 0; tries < 8; tries++) {
     const moved = await $.ui.scroll({ to: { key: `file-${target}` }, in: PANE, block: 'start' }).catch(() => ({ deny: 'failed' }))
@@ -2714,6 +2717,9 @@ export const register: Register = (on, options) => {
     const files = view.scope === 'branch' ? view.files : uncommitted
     // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
     const outside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
+    // git 밖 편집 묶음을 접으면 머리 줄만 남는다. 개수·+/− 합계에는 그대로 센다.
+    const outsideFolded = armed[OUTSIDE_GROUP] ?? false
+    const outsideShown = outsideFolded ? [] : outside
     const added = [...files, ...outside].reduce((sum, file) => sum + file.added, 0)
     const removed = [...files, ...outside].reduce((sum, file) => sum + file.removed, 0)
     const shortPath = (path: string) => (home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)
@@ -2783,7 +2789,7 @@ export const register: Register = (on, options) => {
     const shownCount = files.length + outside.length
     // 모두 접기·펴기: 하나라도 펴져 있으면 모두 접고, 아니면 모두 편다.
     // 파일 탭은 지금 보이는 파일 블록의 접기 키(fileBlock·outsideBlock 과 같은 모양), 커밋별 탭은 커밋 줄이 대상이다.
-    const foldIds = [...files.map(file => `${view.scope === 'branch' ? 'b:' : ''}${file.path}`), ...outside.map(edit => `${OUTSIDE}${edit.path}`)]
+    const foldIds = [...files.map(file => `${view.scope === 'branch' ? 'b:' : ''}${file.path}`), ...outsideShown.map(edit => `${OUTSIDE}${edit.path}`)]
     const foldCount = view.scope === 'commits' ? view.commits.length : foldIds.length
     const anyOpen = view.scope === 'commits' ? Object.keys(view.commitFiles).length > 0 : foldIds.some(id => !armed[`fold:${id}`])
     const foldAll = () =>
@@ -2846,6 +2852,15 @@ export const register: Register = (on, options) => {
       )
     }
 
+    // git 밖 편집 묶음의 머리 줄: 누르면 묶음 전체를 접고 편다.
+    const outsideHeader = rowButton(
+      els,
+      { key: 'fold-outside', onPress: () => toggle($, OUTSIDE_GROUP) },
+      outsideFolded ? '› ' : '⌄ ',
+      <Text color={COLORS.muted}>{T.outsideEdits}</Text>,
+      <Text color={COLORS.muted}>{` · ${outside.length}`}</Text>,
+    )
+
     const tabs = (
       <Box key="diff-tabs" columnGap={2} height={1} overflow="hidden">
         {SCOPES.map(scope => (
@@ -2897,8 +2912,8 @@ export const register: Register = (on, options) => {
           ...(view.scope !== 'commits'
             ? files.map(file => ({ kind: 'file' as const, file, prefix: view.scope === 'branch' ? 'b:' : '', canRevert: view.scope === 'uncommitted', indent: 0 }))
             : []),
-          ...(outside.length > 0 ? [{ kind: 'note' as const, key: 'outside', text: T.outsideEdits }] : []),
-          ...outside.map(edit => ({ kind: 'session' as const, edit })),
+          ...(outside.length > 0 ? [{ kind: 'element' as const, key: 'outside', node: outsideHeader }] : []),
+          ...outsideShown.map(edit => ({ kind: 'session' as const, edit })),
           ...(view.scope === 'commits' && view.commits.length === 0
             ? [{ kind: 'note' as const, key: 'no-commits', text: info?.isRepo === false ? T.notRepo : view.base ? T.noCommitsSince(view.base.ref) : T.noCommits }]
             : []),
@@ -2955,8 +2970,8 @@ export const register: Register = (on, options) => {
         {titleRow}
         {view.scope !== 'commits' && shownCount === 0 && <Text color={COLORS.muted}>{empty}</Text>}
         {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
-        {outside.length > 0 && <Text color={COLORS.muted}>{T.outsideEdits}</Text>}
-        {outside.map(outsideBlock)}
+        {outside.length > 0 && outsideHeader}
+        {outsideShown.map(outsideBlock)}
         {view.scope === 'commits' && view.commits.length === 0 && (
           <Text color={COLORS.muted}>{info?.isRepo === false ? T.notRepo : view.base ? T.noCommitsSince(view.base.ref) : T.noCommits}</Text>
         )}
