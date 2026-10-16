@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, AsanaDetail, AsanaServer, AsanaState, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaSearch, AsanaServer, AsanaState, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
@@ -19,7 +19,7 @@ import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsC
 import type { ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
 import type { MergeAction, MergeResult, Ran } from './pr'
-import { asanaPrompt, commentCall, dueChip, findAsanaServer, groupTasks, isPaneTool, listCall, localDay, resultData, storiesCall, taskCall, toDetail, toTasks, toUsers, updateCall, updateProblem, usersCall } from './asana'
+import { asanaPrompt, commentCall, dueChip, findAsanaServer, groupTasks, isPaneTool, listCall, localDay, resultData, searchCall, storiesCall, taskCall, toDetail, toTasks, toUsers, updateCall, updateProblem, usersCall } from './asana'
 import type { AsanaCall } from './asana'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
@@ -108,9 +108,13 @@ const taskOutput = atom({ plugin: 'desk-look', key: 'taskOutput' } as const, nul
 const asana = atom({ plugin: 'desk-look', key: 'asana' } as const, null as AsanaState | null)
 const asanaView = atom({ plugin: 'desk-look', key: 'asanaView' } as const, null as AsanaView | null)
 const asanaUsers = atom({ plugin: 'desk-look', key: 'asanaUsers' } as const, null as { query: string; status: 'loading' | 'ok' | 'failed'; users: AsanaUser[] } | null)
+// 목록 위 검색창: 찾은 결과(null 이면 내 태스크), 입력 중인 글자, 지울 때마다 늘려 입력칸을 새로 그리는 번호.
+const asanaSearch = atom({ plugin: 'desk-look', key: 'asanaSearch' } as const, null as AsanaSearch | null)
 let asanaDraft = ''
 let asanaQuery = ''
 let asanaSent = 0
+let asanaFindText = ''
+let asanaFindRound = 0
 // /desk-fold 로 접어 둔 패널. 펴면 비운다.
 const folded = atom({ plugin: 'desk-look', key: 'folded' } as const, null as FoldedPane[] | null)
 
@@ -946,6 +950,24 @@ async function closeAsanaTask($: EngineInterface) {
   await update($, asanaView, () => null)
 }
 
+// 빈 글자로 찾으면 검색을 끝내고 내 태스크로 돌아간다. 늦게 온 옛 검색 결과는 버린다.
+async function searchAsana($: EngineInterface, server: AsanaServer, value: string) {
+  const query = value.trim()
+  if (query === '') return clearAsanaSearch($)
+  asanaFindText = value
+  await update($, asanaSearch, (): AsanaSearch => ({ query, status: 'loading', tasks: [] }))
+  const got = await callAsana($, server, searchCall(server, query))
+  await update($, asanaSearch, (search): AsanaSearch | null =>
+    search?.query !== query ? search : got.ok ? { query, status: 'ok', tasks: toTasks(got.data) } : { query, status: 'failed', tasks: [], error: got.error },
+  )
+}
+
+async function clearAsanaSearch($: EngineInterface) {
+  asanaFindText = ''
+  asanaFindRound++
+  await update($, asanaSearch, () => null)
+}
+
 async function postAsanaComment($: EngineInterface, server: AsanaServer, gid: string, value: string) {
   const text = value.trim()
   if (text === '') return
@@ -1008,12 +1030,14 @@ async function armAssign($: EngineInterface, server: AsanaServer, task: AsanaDet
 const BY_HOOK = () => undefined
 
 async function pressAsana($: EngineInterface, key: string): Promise<boolean> {
+  const [state, view, search] = await Promise.all([read($, asana), read($, asanaView), read($, asanaSearch)])
+  const server = state?.server
+  // ↻ 는 보이는 목록을 다시 읽는다: 검색 중이면 그 검색, 아니면 내 태스크.
   if (key === 'asana-refresh') {
-    await refreshAsana($)
+    if (search && server) await searchAsana($, server, search.query)
+    else await refreshAsana($)
     return true
   }
-  const [state, view] = await Promise.all([read($, asana), read($, asanaView)])
-  const server = state?.server
   if (!server) return false
   if (key.startsWith('asana-task-')) {
     await openAsanaTask($, server, key.slice('asana-task-'.length))
@@ -1042,9 +1066,13 @@ async function pressAsana($: EngineInterface, key: string): Promise<boolean> {
 }
 
 async function submitAsana($: EngineInterface, key: string, value: string): Promise<boolean> {
-  if (key !== 'asana-user-search' && !key.startsWith('asana-write-')) return false
+  if (key !== 'asana-user-search' && !key.startsWith('asana-write-') && !key.startsWith('asana-search-')) return false
   const [state, view] = await Promise.all([read($, asana), read($, asanaView)])
   const server = state?.server
+  if (server && key.startsWith('asana-search-')) {
+    await searchAsana($, server, value)
+    return true
+  }
   if (!server || !view) return false
   if (key === 'asana-user-search') await findAsanaUsers($, server, value)
   else await postAsanaComment($, server, view.gid, value)
@@ -3274,7 +3302,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text, Button, Input, Link } = els
-    const [state, view, armed, found, now] = await Promise.all([read($, asana), read($, asanaView), read($, open), read($, asanaUsers), $.clock.now()])
+    const [state, view, armed, found, search, now] = await Promise.all([read($, asana), read($, asanaView), read($, open), read($, asanaUsers), read($, asanaSearch), $.clock.now()])
     const columns = Math.max(24, e.props.bodyColumns)
     const server = state?.server ?? null
     const today = localDay(now)
@@ -3423,26 +3451,44 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const tasks = state?.tasks ?? []
+    // 검색 중이면 찾은 태스크를, 아니면 내 태스크를 같은 모양(프로젝트 묶음)으로 보인다.
+    const tasks = (search ?? state)?.tasks ?? []
     const message =
-      state === null || (state.status === 'loading' && tasks.length === 0)
+      state === null || (state.status === 'loading' && tasks.length === 0 && search === null)
         ? T.asanaLoading
         : state.status === 'none'
           ? T.asanaNoServer
-          : state.status === 'failed'
-            ? T.asanaFailed(state.error ?? '')
-            : tasks.length === 0
-              ? T.asanaEmpty
-              : null
+          : search?.status === 'loading'
+            ? T.asanaSearching
+            : (search ?? state).status === 'failed'
+              ? T.asanaFailed((search ?? state).error ?? '')
+              : tasks.length === 0
+                ? search
+                  ? T.asanaNoMatch
+                  : T.asanaEmpty
+                : null
     const room = Math.max(16, columns - 10)
+    const owner = (name: string | null) => name !== null && <Text color={COLORS.muted}>{` ${clip(name, 12)}`}</Text>
     return (
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1}>
-          <Text color={COLORS.text} weight="semibold">
-            {T.asanaMine(tasks.length)}
+          <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
+            {search ? T.asanaFound(clip(search.query, Math.max(8, columns - 20)), tasks.length) : T.asanaMine(tasks.length)}
           </Text>
-          <Button key="asana-refresh" plain dimColor label={state?.status === 'loading' ? '…' : '↻'} onPress={BY_HOOK} />
+          <Button key="asana-refresh" plain dimColor label={(search ?? state)?.status === 'loading' ? '…' : '↻'} onPress={BY_HOOK} />
+          {search && <Button key="asana-search-clear" plain dimColor label={T.asanaSearchClear} onPress={() => void clearAsanaSearch($)} />}
         </Box>
+        {state?.server && (
+          <Input
+            key={`asana-search-${asanaFindRound}`}
+            label={T.asanaSearchLabel}
+            placeholder={T.asanaSearchPlaceholder}
+            value={asanaFindText}
+            submitLabel={T.asanaFind}
+            onInput={value => (asanaFindText = value)}
+            onSubmit={BY_HOOK}
+          />
+        )}
         {message !== null && <Text color={COLORS.muted}>{message}</Text>}
         {groupTasks(tasks).map(group => (
           <Box key={`asana-group-${group.project ?? ''}`} flexDirection="column">
@@ -3453,7 +3499,8 @@ export const register: Register = (on, options) => {
               rowButton(
                 els,
                 { key: `asana-task-${task.gid}`, onPress: BY_HOOK },
-                clip(task.name, room),
+                clip(task.name, task.assignee === null ? room : Math.max(12, room - 13)),
+                owner(task.assignee),
                 due(task.dueOn),
               ),
             )}

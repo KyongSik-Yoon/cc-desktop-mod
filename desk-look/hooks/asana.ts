@@ -3,13 +3,14 @@ import { T } from './i18n'
 
 // /desk-asana: 내게 할당된 Asana 태스크. 엔진에 이미 붙은 Asana MCP 서버를 그대로 쓴다($.mcp.call, 엔진의 연결·인증).
 // 서버 이름은 사람마다 달라 도구 목록에서 찾는다: Asana 공식 v2 서버(get_my_tasks)를 먼저, 없으면 claude.ai 커넥터(asana_*).
-// v1 의 내 태스크 검색(asana_search_tasks)은 Premium 워크스페이스에서만 된다.
+// 검색(v2 search_tasks, v1 asana_search_tasks)은 Premium 워크스페이스에서만 된다. v1 은 내 태스크 목록도 이 검색이다.
 // 사용자 지정 작업 유형의 상태(Open·In Progress…)는 두 서버 모두 바꾸는 도구가 없어(v2 update_tasks 는 키를 버린다) 보여 주기만 한다.
 
 export const ASANA_TOOLS = {
-  v2: { list: 'get_my_tasks', task: 'get_task', comment: 'add_comment', update: 'update_tasks', users: 'search_objects' },
+  v2: { list: 'get_my_tasks', search: 'search_tasks', task: 'get_task', comment: 'add_comment', update: 'update_tasks', users: 'search_objects' },
   v1: {
     list: 'asana_search_tasks',
+    search: 'asana_search_tasks',
     task: 'asana_get_task',
     stories: 'asana_get_stories_for_task',
     comment: 'asana_create_task_story',
@@ -21,6 +22,8 @@ export const ASANA_TOOLS = {
 // 상세에 보이는 댓글 수. v2 get_task 는 최근 것부터 이만큼, v1 은 활동 100개에서 댓글만 골라 끝에서 이만큼.
 export const COMMENT_LIMIT = 30
 const LIST_FIELDS = 'name,due_on,memberships.project.name,memberships.section.name,permalink_url'
+// 검색 결과는 남의 태스크도 섞이니 담당자 이름까지.
+const SEARCH_FIELDS = `${LIST_FIELDS},assignee.name`
 const TASK_FIELDS = [
   'name,notes,completed,due_on,permalink_url,assignee.name',
   'memberships.project.name,memberships.section.name',
@@ -57,6 +60,11 @@ export function listCall(server: AsanaServer): AsanaCall {
   return server.dialect === 'v2'
     ? { tool: ASANA_TOOLS.v2.list, args: { completed_since: 'now', limit: 100, opt_fields: LIST_FIELDS } }
     : { tool: ASANA_TOOLS.v1.list, args: { assignee_any: 'me', completed: false, limit: 100, sort_by: 'modified_at', opt_fields: LIST_FIELDS } }
+}
+
+// 워크스페이스 전체에서 글자로 찾는다(이름·설명·댓글). 열린 태스크만, 최근에 바뀐 것부터.
+export function searchCall(server: AsanaServer, text: string): AsanaCall {
+  return { tool: ASANA_TOOLS[server.dialect].search, args: { text, completed: false, limit: 50, sort_by: 'modified_at', opt_fields: SEARCH_FIELDS } }
 }
 
 export function taskCall(server: AsanaServer, gid: string): AsanaCall {
@@ -147,6 +155,7 @@ export function toTasks(json: unknown): AsanaTask[] {
         project: str(place?.project?.name),
         section: str(place?.section?.name),
         url: str(raw.permalink_url),
+        assignee: str(raw.assignee?.name),
       }
     })
 }

@@ -2850,7 +2850,7 @@ test('/desk-fold: 열린 패널을 접고, 다시 치면 앞에 있던 패널을
 })
 
 describe('Asana 패널', () => {
-  const V2 = ['get_my_tasks', 'get_task', 'add_comment', 'update_tasks', 'search_objects'].map(tool => `mcp__asana-v2__${tool}`)
+  const V2 = ['get_my_tasks', 'search_tasks', 'get_task', 'add_comment', 'update_tasks', 'search_objects'].map(tool => `mcp__asana-v2__${tool}`)
   const V1 = ['asana_search_tasks', 'asana_get_task', 'asana_get_stories_for_task', 'asana_create_task_story', 'asana_update_task', 'asana_typeahead_search'].map(
     tool => `mcp__claude_ai_asana__${tool}`,
   )
@@ -2914,7 +2914,7 @@ describe('Asana 패널', () => {
     expect(dueChip('2026-10-16', '2026-10-16')?.level).toBe('warning')
     expect(dueChip('2027-01-02', '2026-10-16')).toEqual({ text: '2027/1/2', level: 'muted' })
     expect(dueChip(null, '2026-10-16')).toBeNull()
-    const task = (gid: string, project: string | null) => ({ gid, name: gid, dueOn: null, project, section: null, url: null })
+    const task = (gid: string, project: string | null) => ({ gid, name: gid, dueOn: null, project, section: null, url: null, assignee: null })
     expect(groupTasks([task('a', null), task('b', 'P'), task('c', 'Q'), task('d', 'P')]).map(g => [g.project, g.tasks.map(t => t.gid)])).toEqual([
       ['P', ['b', 'd']],
       ['Q', ['c']],
@@ -3004,6 +3004,57 @@ describe('Asana 패널', () => {
 
     await pane.press({ key: 'asana-back' })
     expect(JSON.stringify(await pane.drawn())).toContain('내 태스크')
+    await pane.unmount()
+  })
+
+  test('검색창: 워크스페이스 태스크를 담당자와 함께, 상세에서 돌아오면 검색 결과, ✕ 나 빈 검색이면 내 태스크', KO, async ($, on) => {
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    on('clock.now', () => ({ value: Date.parse('2026-10-16T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    on('mcp.call', ($, e) => {
+      calls.push({ tool: e.tool, args: e.args })
+      if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: '내 일', memberships: [] }] })
+      if (e.tool === 'search_tasks') {
+        return text({ data: [{ gid: '7', name: 'JDK 25 문의', assignee: { gid: 'u9', name: 'Nomin' }, memberships: [{ project: { name: 'JENNIFER5 Support' } }] }] })
+      }
+      return text({ data: { gid: '7', name: 'JDK 25 문의', assignee: { gid: 'u9', name: 'Nomin' } } })
+    })
+
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
+    await pane.input({ key: 'asana-search-0', text: ' JDK ' })
+    await wait(50)
+    expect(calls.find(call => call.tool === 'search_tasks')?.args).toMatchObject({ text: 'JDK', completed: false })
+    expect(String(calls.find(call => call.tool === 'search_tasks')?.args.opt_fields)).toContain('assignee.name')
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('검색 \\"JDK\\" 1')
+    expect(drawn).toContain('JENNIFER5 Support')
+    expect(drawn).toContain(' Nomin')
+    expect(drawn).not.toContain('내 일')
+
+    await pane.press({ key: 'asana-task-7' })
+    await wait(50)
+    expect(calls.at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: '7' } })
+    await pane.press({ key: 'asana-back' })
+    expect(JSON.stringify(await pane.drawn())).toContain('JDK 25 문의')
+
+    // ↻ 는 검색을 다시 한다
+    await pane.press({ key: 'asana-refresh' })
+    await wait(50)
+    expect(calls.filter(call => call.tool === 'search_tasks').length).toBe(2)
+
+    await pane.press({ key: 'asana-search-clear' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('내 태스크 1')
+    expect(drawn).toContain('내 일')
+
+    await pane.input({ key: 'asana-search-1', text: 'JDK' })
+    await wait(50)
+    await pane.input({ key: 'asana-search-1', text: '  ' })
+    await wait(50)
+    expect(JSON.stringify(await pane.drawn())).toContain('내 태스크 1')
     await pane.unmount()
   })
 

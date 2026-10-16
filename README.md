@@ -15,7 +15,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
 - **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
-- **Asana**: the tasks assigned to you, their comments, and adding a comment, through the Asana MCP server Claude Code already has connected
+- **Asana**: the tasks assigned to you and a search across the workspace, their comments, and adding a comment, through the Asana MCP server Claude Code already has connected
 - **English or Korean** labels, following Claude Code's own language setting by default
 
 ## Commands
@@ -25,7 +25,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-diff [file\|branch\|commits]` | Diff pane: uncommitted changes, the whole branch, or per commit |
 | `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
 | `/desk-pr` | The current branch's pull request or merge request, with a merge button |
-| `/desk-asana` | The Asana tasks assigned to you: details, comments, adding a comment, assignee and dropdown fields |
+| `/desk-asana` | The Asana tasks assigned to you, or a search across the workspace: details, comments, adding a comment, assignee and dropdown fields |
 | `/desk-preview [file]` | Markdown preview pane: a document drawn like the transcript |
 | `/desk-context` | Context breakdown, usage limits and session cost |
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
@@ -114,7 +114,8 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 Your open Asana tasks, read through the Asana MCP server Claude Code already has connected (no token or setting of its own). It uses Asana's official V2 server (`https://mcp.asana.com/v2/mcp`, the one with `get_my_tasks`) when one is connected, otherwise the claude.ai Asana connector; on the connector, listing your tasks needs a Premium workspace (Asana's task search). With neither, the pane says to connect Asana in `/mcp`.
 
 - The list groups your incomplete tasks by project, with the due date at the end of the row (red when overdue)
-- Click a task for its details: the task type's status (`● Open`), projects and sections, assignee, due date, custom fields, the description and the latest 30 comments (on the claude.ai connector, the comments among the task's first 100 activity entries). `↻` reloads, `← Tasks` goes back
+- The `Search` box above it finds open tasks anywhere in the workspace you can see, by name, description or comment (the 50 most recently changed), shown the same way with each task's assignee; `✕ My tasks` or an empty search goes back to your tasks. Search needs a Premium workspace (Asana's task search)
+- Click a task for its details: the task type's status (`● Open`), projects and sections, assignee, due date, custom fields, the description and the latest 30 comments (on the claude.ai connector, the comments among the task's first 100 activity entries). `↻` reloads, `← Tasks` goes back to the list or the search
 - Write a comment in the box at the bottom and press Enter to add it on Asana
 - `Change` next to the assignee finds people by name or email (or `Me`); handing the task to someone takes a second press within 5 seconds
 - `›` next to a dropdown custom field lists its options; press one to set it

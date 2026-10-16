@@ -117,7 +117,8 @@ export type PrState = { status: 'loading' | 'ok' | 'none' | 'off'; branch: strin
 // /desk-asana: 엔진에 붙은 Asana MCP 서버로 읽는 내 태스크. v2 는 Asana 공식 v2 서버(get_my_tasks),
 // v1 은 claude.ai 커넥터(asana_* 도구). name 은 $.mcp.call 이 받는 서버 이름(도구 이름의 가운데).
 export type AsanaServer = { name: string; dialect: 'v2' | 'v1' }
-export type AsanaTask = { gid: string; name: string; dueOn: string | null; project: string | null; section: string | null; url: string | null }
+// assignee 는 검색 결과에만 있다(내 태스크 목록은 모두 나).
+export type AsanaTask = { gid: string; name: string; dueOn: string | null; project: string | null; section: string | null; url: string | null; assignee: string | null }
 export type AsanaComment = { gid: string; author: string; at: string; text: string }
 // 드롭다운(enum) 필드만 options 가 있다(패널에서 바꿀 수 있는 것). 수식 필드는 바꾸지 않는다.
 export type AsanaField = { gid: string; name: string; value: string | null; options: Array<{ gid: string; name: string }> | null }
@@ -139,6 +140,8 @@ export type AsanaDetail = {
 export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; error?: string }
 export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task: AsanaDetail | null; error?: string }
 export type AsanaUser = { gid: string; name: string; email: string | null }
+// 패널 검색창: 이 글자로 찾은 워크스페이스 태스크. null 이면 내 태스크 목록.
+export type AsanaSearch = { query: string; status: 'loading' | 'ok' | 'failed'; tasks: AsanaTask[]; error?: string }
 
 // diff 패널의 범위: 커밋 안 한 변경, 기본 브랜치에서 갈라진 뒤 전부, 커밋 하나씩.
 export type DiffScope = 'uncommitted' | 'branch' | 'commits'
@@ -218,6 +221,7 @@ declare module 'claude-code' {
       asana: AsanaState | null
       asanaView: AsanaView | null
       asanaUsers: { query: string; status: 'loading' | 'ok' | 'failed'; users: AsanaUser[] } | null
+      asanaSearch: AsanaSearch | null
       // /desk-diff 패널이 보여 주는 범위와 그 diff.
       diffView: DiffView
       // /desk-agents 패널: 이 세션의 에이전트, 상세로 연 에이전트 id(목록이면 null)와 그 대화, 경과 시간 시계(ms).
