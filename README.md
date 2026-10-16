@@ -11,10 +11,11 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 
 - **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
 - **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage and running background tasks, and a task checklist
-- **Six side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **Seven side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), your Asana tasks (`/desk-asana`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
 - **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
 - **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
+- **Asana**: the tasks assigned to you, their comments, and adding a comment, through the Asana MCP server Claude Code already has connected
 - **English or Korean** labels, following Claude Code's own language setting by default
 
 ## Commands
@@ -24,6 +25,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-diff [file\|branch\|commits]` | Diff pane: uncommitted changes, the whole branch, or per commit |
 | `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
 | `/desk-pr` | The current branch's pull request or merge request, with a merge button |
+| `/desk-asana` | The Asana tasks assigned to you: details, comments, adding a comment, assignee and dropdown fields |
 | `/desk-preview [file]` | Markdown preview pane: a document drawn like the transcript |
 | `/desk-context` | Context breakdown, usage limits and session cost |
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
@@ -106,6 +108,19 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 - `Hand to Claude` next to a failing check or a review thread fills the prompt with it
 - `Merge` merges it after a second press within 5 seconds, only at the head commit the pane showed (a newer push makes the merge fail). While checks are still running it reads `Merge when pipeline succeeds` (GitLab) or `Merge when checks pass` (GitHub) and sets auto-merge instead. It shows only on an open, non-draft PR with no failing checks that the host reports as mergeable. The merge method is the repository's: GitLab follows the MR's squash setting; GitHub uses merge, else squash, else rebase, whichever the repository allows. The remote source branch is deleted (on GitHub, after an auto-merge only if the repository deletes head branches); the local branch is left alone
 - Nothing else is changed: no approvals, comments or `Ready for review`
+
+### `/desk-asana`: Asana tasks
+
+Your open Asana tasks, read through the Asana MCP server Claude Code already has connected (no token or setting of its own). It uses Asana's official V2 server (`https://mcp.asana.com/v2/mcp`, the one with `get_my_tasks`) when one is connected, otherwise the claude.ai Asana connector; on the connector, listing your tasks needs a Premium workspace (Asana's task search). With neither, the pane says to connect Asana in `/mcp`.
+
+- The list groups your incomplete tasks by project, with the due date at the end of the row (red when overdue)
+- Click a task for its details: the task type's status (`● Open`), projects and sections, assignee, due date, custom fields, the description and the latest 30 comments (on the claude.ai connector, the comments among the task's first 100 activity entries). `↻` reloads, `← Tasks` goes back
+- Write a comment in the box at the bottom and press Enter to add it on Asana
+- `Change` next to the assignee finds people by name or email (or `Me`); handing the task to someone takes a second press within 5 seconds
+- `›` next to a dropdown custom field lists its options; press one to set it
+- `Hand to Claude` fills the prompt with the task's title, link, status, description and recent comments
+- The task type's status (Open, In Progress…) is shown but cannot be changed: neither Asana MCP server has a tool for it
+- These Asana calls are made only when you press something in the pane, and desk-look allows them itself so that auto mode does not refuse them; Claude's own Asana calls go through Claude Code's permission check as before
 
 ### `/desk-preview [file]`: Markdown preview
 

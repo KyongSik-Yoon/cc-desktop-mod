@@ -7,6 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
+import { dueChip, findAsanaServer, groupTasks, isPaneTool, toDetail, updateCall, updateProblem } from '../hooks/asana'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -2846,4 +2847,170 @@ test('/desk-fold: 열린 패널을 접고, 다시 치면 앞에 있던 패널을
 
   // 편 뒤에는 다시 접는다(접어 둔 기록은 비웠다).
   expect(await run()).toContain('패널 2개를 접었어요')
+})
+
+describe('Asana 패널', () => {
+  const V2 = ['get_my_tasks', 'get_task', 'add_comment', 'update_tasks', 'search_objects'].map(tool => `mcp__asana-v2__${tool}`)
+  const V1 = ['asana_search_tasks', 'asana_get_task', 'asana_get_stories_for_task', 'asana_create_task_story', 'asana_update_task', 'asana_typeahead_search'].map(
+    tool => `mcp__claude_ai_asana__${tool}`,
+  )
+
+  test('서버는 v2(get_my_tasks)를 먼저, 없으면 claude.ai 커넥터를 쓰고, 패널이 쓰는 도구가 다 있어야 한다', () => {
+    expect(findAsanaServer(['Read', ...V1, ...V2])).toEqual({ name: 'asana-v2', dialect: 'v2' })
+    expect(findAsanaServer(V1)).toEqual({ name: 'claude_ai_asana', dialect: 'v1' })
+    expect(findAsanaServer(V2.filter(name => !name.endsWith('add_comment')))).toBeNull()
+    expect(findAsanaServer(['mcp__other__get_my_tasks'])).toBeNull()
+    expect(isPaneTool('mcp__asana-v2__get_task')).toBe(true)
+    expect(isPaneTool('mcp__claude_ai_asana__asana_create_task_story')).toBe(true)
+    expect(isPaneTool('mcp__asana-v2__delete_task')).toBe(false)
+    expect(isPaneTool('get_task')).toBe(false)
+  })
+
+  test('상세는 v2 댓글과 v1 활동에서 댓글만 고르고, 드롭다운 필드만 바꿀 수 있게 둔다', () => {
+    const task = {
+      data: {
+        gid: '1',
+        name: 'JDK 25',
+        notes: '본문',
+        completed: false,
+        assignee: { gid: 'u1', name: 'Sam' },
+        memberships: [{ project: { name: 'Support' }, section: { name: '이슈' } }],
+        custom_type_status_option: { name: 'Open' },
+        custom_fields: [
+          { gid: 'f1', name: 'Issue Type', type: 'enum', display_value: '질문', enum_options: [{ gid: 'o1', name: '질문' }, { gid: 'o2', name: '옛것', enabled: false }] },
+          { gid: 'f2', name: '고객사', type: 'text', display_value: 'NH' },
+        ],
+        comments: [{ gid: 'c1', text: '확인바랍니다', created_at: '2026-10-14T07:33:47Z', created_by: { name: 'Nomin' }, resource_subtype: 'comment_added' }],
+      },
+    }
+    const v2 = toDetail(task)
+    expect(v2?.status).toBe('Open')
+    expect(v2?.places).toEqual(['Support › 이슈'])
+    expect(v2?.comments.map(c => c.author)).toEqual(['Nomin'])
+    expect(v2?.fields[0]?.options).toEqual([{ gid: 'o1', name: '질문' }])
+    expect(v2?.fields[1]?.options).toBeNull()
+    const stories = {
+      data: [
+        { gid: 's1', text: 'X added this task', resource_subtype: 'added_to_project', created_by: { name: 'X' } },
+        { gid: 's2', text: '첫 댓글', resource_subtype: 'comment_added', created_by: { name: 'Y' }, created_at: '2026-10-15T00:00:00Z' },
+      ],
+    }
+    expect(toDetail(task, stories)?.comments.map(c => c.text)).toEqual(['첫 댓글'])
+  })
+
+  test('바꾸기 호출 모양과, v2 가 키를 버려 0건이면 실패로 본다', () => {
+    const v2 = { name: 'asana-v2', dialect: 'v2' } as const
+    const v1 = { name: 'claude_ai_asana', dialect: 'v1' } as const
+    expect(updateCall(v2, '1', { field: 'f1', option: 'o1' })).toEqual({ tool: 'update_tasks', args: { tasks: [{ task: '1', custom_fields: { f1: 'o1' } }] } })
+    expect(updateCall(v1, '1', { field: 'f1', option: 'o1' })).toEqual({ tool: 'asana_update_task', args: { task_id: '1', custom_fields: '{"f1":"o1"}' } })
+    expect(updateCall(v1, '1', { assignee: 'me' }).args).toEqual({ task_id: '1', assignee: 'me' })
+    expect(updateProblem(v2, { data: [], failed: [], summary: 'Updated 0 of 1 tasks.' })).toBe('Updated 0 of 1 tasks.')
+    expect(updateProblem(v2, { data: [{ gid: '1' }], failed: [] })).toBeNull()
+    expect(updateProblem(v2, { data: [], failed: [{ errors: ['Not a user'] }] })).toContain('Not a user')
+  })
+
+  test('마감일 칩과 프로젝트 묶음', () => {
+    expect(dueChip('2026-10-15', '2026-10-16')).toEqual({ text: '10/15', level: 'danger' })
+    expect(dueChip('2026-10-16', '2026-10-16')?.level).toBe('warning')
+    expect(dueChip('2027-01-02', '2026-10-16')).toEqual({ text: '2027/1/2', level: 'muted' })
+    expect(dueChip(null, '2026-10-16')).toBeNull()
+    const task = (gid: string, project: string | null) => ({ gid, name: gid, dueOn: null, project, section: null, url: null })
+    expect(groupTasks([task('a', null), task('b', 'P'), task('c', 'Q'), task('d', 'P')]).map(g => [g.project, g.tasks.map(t => t.gid)])).toEqual([
+      ['P', ['b', 'd']],
+      ['Q', ['c']],
+      [null, ['a']],
+    ])
+  })
+
+  test('목록 → 상세 → 댓글 달기·Claude 에게 맡기기·담당자 두 번 눌러 넘기기', KO, async ($, on) => {
+    const calls: Array<{ server: string; tool: string; args: Record<string, unknown> }> = []
+    const filled: string[] = []
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    on('clock.now', () => ({ value: Date.parse('2026-10-16T03:00:00Z') }))
+    on('clock.after', () => new Promise(() => undefined) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('ui.toast', () => ({ value: undefined as never }))
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+    on('prompt.fill', ($, e) => {
+      filled.push((e as { text: string }).text)
+      return { isFilled: true } as never
+    })
+    on('tool.list', () => ({ value: [...V1, ...V2].map(name => ({ name, description: '', mcp: true })) }))
+    on('mcp.call', ($, e) => {
+      calls.push({ server: e.server, tool: e.tool, args: e.args })
+      switch (e.tool) {
+        case 'get_my_tasks':
+          return text({
+            data: [
+              { gid: '1', name: 'JDK 25 문의', due_on: '2026-10-10', memberships: [{ project: { name: 'Support' } }] },
+              { gid: '2', name: '혼자 하는 일', due_on: null, memberships: [] },
+            ],
+          })
+        case 'get_task':
+          return text({
+            data: {
+              gid: '1',
+              name: 'JDK 25 문의',
+              notes: '운영 제약 확인',
+              assignee: { gid: 'u1', name: 'Sam' },
+              custom_type_status_option: { name: 'Open' },
+              permalink_url: 'https://app.asana.com/x/1',
+              comments: [{ gid: 'c1', text: '확인바랍니다', created_by: { name: 'Nomin' }, resource_subtype: 'comment_added' }],
+            },
+          })
+        case 'search_objects':
+          return text({ data: [{ gid: 'u9', name: 'Nomin', email: 'nomin@example.com' }] })
+        case 'update_tasks':
+          return text({ data: [{ gid: '1' }], failed: [] })
+        default:
+          return text({ data: { gid: 'new' } })
+      }
+    })
+
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    expect(calls[0]).toMatchObject({ server: 'asana-v2', tool: 'get_my_tasks' })
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('내 태스크 2')
+    expect(drawn).toContain('Support')
+    expect(drawn).toContain('프로젝트 없음')
+    expect(drawn).toContain('10/10')
+
+    await pane.press({ key: 'asana-task-1' })
+    await wait(50)
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('● Open')
+    expect(drawn).toContain('운영 제약 확인')
+    expect(drawn).toContain('확인바랍니다')
+
+    await pane.press({ key: 'asana-claude' })
+    expect(filled[0]).toContain('Asana 태스크 "JDK 25 문의"')
+    expect(filled[0]).toContain('- Nomin: 확인바랍니다')
+
+    await pane.input({ key: 'asana-write-1-0', text: '확인했습니다\n내일 답변' })
+    await wait(50)
+    expect(calls.find(call => call.tool === 'add_comment')?.args).toEqual({ task_id: '1', text: '확인했습니다\n내일 답변' })
+
+    // 담당자: 찾고, 한 번 누르면 확인 문구, 다시 눌러야 넘긴다
+    await pane.press({ key: 'asana-assign' })
+    await pane.input({ key: 'asana-user-search', text: 'nom' })
+    await wait(50)
+    await pane.press({ key: 'asana-user-u9' })
+    expect(calls.some(call => call.tool === 'update_tasks')).toBe(false)
+    expect(JSON.stringify(await pane.drawn())).toContain('Nomin 에게 넘길까요?')
+    await pane.press({ key: 'asana-user-u9' })
+    await wait(50)
+    expect(calls.find(call => call.tool === 'update_tasks')?.args).toEqual({ tasks: [{ task: '1', assignee: 'u9' }] })
+
+    await pane.press({ key: 'asana-back' })
+    expect(JSON.stringify(await pane.drawn())).toContain('내 태스크')
+    await pane.unmount()
+  })
+
+  test('Asana 서버가 없으면 연결하라고 알린다', KO, async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('tool.list', () => ({ value: [{ name: 'Read', description: '', mcp: false }] }))
+    const result = JSON.stringify(await $.command.run({ command: 'desk-asana', args: '' } as never))
+    expect(result).toContain('Asana MCP 서버가 연결돼 있지 않아요')
+  })
 })

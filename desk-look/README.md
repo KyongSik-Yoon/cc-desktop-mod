@@ -4,7 +4,7 @@ A Claude Code mod that makes the terminal UI look and work like the Code tab of 
 
 - Prompt bubbles, desktop-style markdown (full-width tables, mermaid diagrams, alert boxes), tool calls folded into one clickable line, cards for subagents, plans, questions and each turn's edited files
 - A band above the prompt with the repository, branch, `+N −M`, pull request checks, context usage and background tasks
-- Side panes: diffs with line comments (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- Side panes: diffs with line comments (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), your Asana tasks (`/desk-asana`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
 - English or Korean labels
 
 Screenshots, settings and details: https://github.com/KyongSik-Yoon/cc-desktop-mod
@@ -25,7 +25,7 @@ desk-look makes no network requests itself and collects no data. Everything it r
 
 **Reads**: the omarchy theme colors (`~/.local/state/omarchy/current/theme/colors.toml`), Markdown files you open in the preview pane, recent session files (`~/.claude/projects`) for `/desk-sessions`, session state files (`~/.claude/sessions`) to see whether Remote Control is attached to this session, the list of this session's pasted images (`/tmp/claude-<uid>/…/images`), herdr's `kitty_graphics` setting (`~/.config/herdr/config.toml`), and the conversation and usage data Claude Code hands to the mod, to draw the transcript, cards and panes.
 
-**Sends**: only through `gh` and `glab`, to GitHub or GitLab, for the pull request reads and merges above. Diff line comments you write in `/desk-diff` are attached to your next prompt as context, so they go to Claude with that prompt like the rest of it.
+**Sends**: only through `gh` and `glab`, to GitHub or GitLab, for the pull request reads and merges above, and through the Asana MCP server Claude Code already has connected (with Claude Code's own connection and login), only when you open `/desk-asana` or press something in it: it reads your tasks, a task's details and comments, and people matching a name you search for, and adds a comment, changes the assignee or sets a dropdown field when you submit or press those. Diff line comments you write in `/desk-diff` are attached to your next prompt as context, so they go to Claude with that prompt like the rest of it.
 
 ## Hooks and what they do
 
@@ -36,6 +36,8 @@ Every hook below passes the event on with `next(e)` and only watches the result,
 - `prompt.submit`: note whether a prompt came from the terminal or Remote Control (for the question card), read background-task notifications, and attach pending diff line comments to a typed prompt as context (never to a slash command)
 - `tool.call`: count each edit's added and removed lines for the end-of-turn card. For `AskUserQuestion` it shows the question card and returns the answer you pick (or hands the question to Claude Code's own dialog, or reports that you closed it). For desk-look's own `preview` tool it opens the preview pane and returns what it opened
 - `command.run`: handles desk-look's own `/desk-*` commands only
+- `ui.press`, `ui.input`: take the presses and submits in the `/desk-asana` pane that call Asana, so the calls run from desk-look's hook (see `tool.check`)
+- `tool.check`: answers `allow` for a call desk-look itself made (`next.origin` is desk-look) to one of the Asana tools the `/desk-asana` pane uses (`get_my_tasks`, `get_task`, `add_comment`, `update_tasks`, `search_objects`, and the claude.ai connector's `asana_search_tasks`, `asana_get_task`, `asana_get_stories_for_task`, `asana_create_task_story`, `asana_update_task`, `asana_typeahead_search`). Claude Code otherwise asks for a plugin's own MCP calls too, and auto mode refuses them because no prompt asked for them. Every other call, including Claude's own Asana calls, is passed on unchanged
 
 **Calls it makes on its own**, each after you press something: `/resume <id>` when you pick a session in the same folder in `/desk-sessions` (or it places the command in the prompt for you), `TaskStop` when you press `■ Stop` twice on a background task, and switching the main view to an agent's transcript (or back) when you press `Open in main view` (`Main conversation`) in the background tasks pane. It also registers its `/desk-*` commands and the `preview` tool, and reads Claude Code's `language` setting.
 

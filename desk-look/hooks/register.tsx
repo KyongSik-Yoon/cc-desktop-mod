@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaServer, AsanaState, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
@@ -19,6 +19,8 @@ import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsC
 import type { ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
 import type { MergeAction, MergeResult, Ran } from './pr'
+import { asanaPrompt, commentCall, dueChip, findAsanaServer, groupTasks, isPaneTool, listCall, localDay, resultData, storiesCall, taskCall, toDetail, toTasks, toUsers, updateCall, updateProblem, usersCall } from './asana'
+import type { AsanaCall } from './asana'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
@@ -45,7 +47,8 @@ const SESSIONS_PANE = 'desk-sessions'
 const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
 const AGENTS_PANE = 'desk-tasks'
-const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE])
+const ASANA_PANE = 'desk-asana'
+const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE, ASANA_PANE])
 // /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
 const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
@@ -100,6 +103,14 @@ const agentView = atom({ plugin: 'desk-look', key: 'agentView' } as const, null 
 const agentDetail = atom({ plugin: 'desk-look', key: 'agentDetail' } as const, null as AgentDetail | null)
 const agentClock = atom({ plugin: 'desk-look', key: 'agentClock' } as const, 0)
 const taskOutput = atom({ plugin: 'desk-look', key: 'taskOutput' } as const, null as { id: string; text: string | null } | null)
+// /desk-asana: 내 태스크 목록, 펼친 태스크 하나(null 이면 목록), 담당자 바꾸기에서 찾은 사람들.
+// 쓰던 댓글·찾는 이름은 줄 댓글처럼 변수에 둔다(atom 이면 글자마다 패널 전체를 다시 그린다).
+const asana = atom({ plugin: 'desk-look', key: 'asana' } as const, null as AsanaState | null)
+const asanaView = atom({ plugin: 'desk-look', key: 'asanaView' } as const, null as AsanaView | null)
+const asanaUsers = atom({ plugin: 'desk-look', key: 'asanaUsers' } as const, null as { query: string; status: 'loading' | 'ok' | 'failed'; users: AsanaUser[] } | null)
+let asanaDraft = ''
+let asanaQuery = ''
+let asanaSent = 0
 // /desk-fold 로 접어 둔 패널. 펴면 비운다.
 const folded = atom({ plugin: 'desk-look', key: 'folded' } as const, null as FoldedPane[] | null)
 
@@ -874,6 +885,170 @@ async function fillPrompt($: EngineInterface, text: string) {
   const isEmpty = box.text.trim() === ''
   const filled = await $.prompt.fill({ text: isEmpty ? text : `\n\n${text}`, mode: isEmpty ? 'replace' : 'append' }).catch(() => null)
   $.ui.toast(filled?.isFilled ? T.filled : T.fillFailed)
+}
+
+// /desk-asana 의 Asana 호출(asana.ts 참고). MCP 서버는 세션이 시작된 뒤에 붙으므로 열 때마다 도구 목록에서 찾는다.
+// 엔진이 거절하면(서버가 끊김, 권한) 던지는 대신 오류 글로 돌려준다.
+async function callAsana($: EngineInterface, server: AsanaServer, call: AsanaCall) {
+  try {
+    return resultData(await $.mcp.call(server.name, call.tool, call.args))
+  } catch (error) {
+    return { ok: false as const, error: (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '' }
+  }
+}
+
+async function findAsana($: EngineInterface): Promise<AsanaServer | null> {
+  const tools = await $.tool.list().catch(() => [])
+  return findAsanaServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
+}
+
+let asanaFetch: Promise<void> | null = null
+
+// 목록을 다시 읽는다. 읽는 동안은 전에 읽은 목록을 그대로 보인다(↻ 가 … 로).
+async function refreshAsana($: EngineInterface) {
+  if (asanaFetch) return asanaFetch
+  asanaFetch = (async () => {
+    await update($, asana, (state): AsanaState => ({ status: 'loading', server: state?.server ?? null, tasks: state?.tasks ?? [] }))
+    const server = await findAsana($)
+    if (server === null) {
+      await update($, asana, (): AsanaState => ({ status: 'none', server: null, tasks: [] }))
+      return
+    }
+    const got = await callAsana($, server, listCall(server))
+    await update($, asana, (): AsanaState => (got.ok ? { status: 'ok', server, tasks: toTasks(got.data) } : { status: 'failed', server, tasks: [], error: got.error }))
+  })().finally(() => {
+    asanaFetch = null
+  })
+  return asanaFetch
+}
+
+async function openAsana($: EngineInterface) {
+  const shown = refreshAsana($).catch(() => undefined)
+  await $.ui.open({ id: ASANA_PANE, title: 'Asana', focus: true })
+  await shown
+}
+
+// 태스크 하나를 펼친다(같은 태스크를 다시 읽는 동안은 전 내용을 그대로 보인다).
+async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
+  await update($, asanaView, (view): AsanaView => ({ gid, status: 'loading', task: view?.gid === gid ? view.task : null }))
+  const got = await callAsana($, server, taskCall(server, gid))
+  const stories = got.ok && server.dialect === 'v1' ? await callAsana($, server, storiesCall(gid)) : null
+  const task = got.ok ? toDetail(got.data, stories?.ok ? stories.data : undefined) : null
+  const error = got.ok ? (task ? undefined : 'unexpected result') : got.error
+  await update($, asanaView, (view): AsanaView | null => (view?.gid !== gid ? view : task ? { gid, status: 'ok', task } : { gid, status: 'failed', task: null, error }))
+}
+
+async function closeAsanaTask($: EngineInterface) {
+  asanaDraft = ''
+  asanaQuery = ''
+  await update($, asanaUsers, () => null)
+  await update($, open, state => ({ ...state, 'asana:assign': false }))
+  await update($, asanaView, () => null)
+}
+
+async function postAsanaComment($: EngineInterface, server: AsanaServer, gid: string, value: string) {
+  const text = value.trim()
+  if (text === '') return
+  const got = await callAsana($, server, commentCall(server, gid, text))
+  if (!got.ok) {
+    $.ui.toast(T.asanaCommentFailed(got.error))
+    return
+  }
+  asanaDraft = ''
+  asanaSent++
+  $.ui.toast(T.asanaCommented)
+  await openAsanaTask($, server, gid)
+}
+
+async function findAsanaUsers($: EngineInterface, server: AsanaServer, value: string) {
+  const query = value.trim()
+  asanaQuery = value
+  if (query === '') return
+  await update($, asanaUsers, () => ({ query, status: 'loading' as const, users: [] }))
+  const got = await callAsana($, server, usersCall(server, query))
+  await update($, asanaUsers, () => (got.ok ? { query, status: 'ok' as const, users: toUsers(got.data) } : { query, status: 'failed' as const, users: [] }))
+}
+
+// 담당자·드롭다운 필드 바꾸기. 담당자는 다른 사람에게 넘기면 내 목록에서 빠지므로 머지처럼 두 번 눌러야 한다.
+const ASSIGN_ARM_MS = 5000
+
+async function changeAsana($: EngineInterface, server: AsanaServer, task: AsanaDetail, change: { assignee: string; name: string } | { field: string; option: string }) {
+  const got = await callAsana($, server, updateCall(server, task.gid, 'field' in change ? change : { assignee: change.assignee }))
+  const problem = got.ok ? updateProblem(server, got.data) : got.error
+  if (problem !== null) {
+    $.ui.toast(T.asanaUpdateFailed(problem))
+    return
+  }
+  if ('assignee' in change) {
+    $.ui.toast(T.asanaAssigned(change.name))
+    asanaQuery = ''
+    await update($, asanaUsers, () => null)
+    await update($, open, state => ({ ...state, 'asana:assign': false }))
+    void refreshAsana($).catch(() => undefined)
+  } else {
+    await update($, open, state => ({ ...state, [`asana:field:${change.field}`]: false }))
+  }
+  await openAsanaTask($, server, task.gid)
+}
+
+async function armAssign($: EngineInterface, server: AsanaServer, task: AsanaDetail, user: { gid: string; name: string }, isArmed: boolean) {
+  const key = `asana:arm:${user.gid}`
+  if (!isArmed) {
+    await update($, open, state => ({ ...state, [key]: true }))
+    $.clock.after(ASSIGN_ARM_MS, () => void update($, open, state => ({ ...state, [key]: false })))
+    return
+  }
+  await update($, open, state => ({ ...state, [key]: false }))
+  await changeAsana($, server, task, { assignee: user.gid, name: user.name })
+}
+
+// Asana 를 부르는 버튼은 onPress 가 아니라 ui.press 훅이 받는다. onPress 는 desk-look 자신의 환경에서 돌아, 그 안의
+// $.mcp.call 에는 desk-look 의 tool.check 가 불리지 않는다(자기 frame 아래에서는 훅이 돌지 않는다). 그러면 권한을
+// 엔진이 정해 auto mode 분류기가 거절한다. 훅은 따로 frame 이라 tool.check 가 돈다. 입력칸 제출도 같다(submitAsana).
+const BY_HOOK = () => undefined
+
+async function pressAsana($: EngineInterface, key: string): Promise<boolean> {
+  if (key === 'asana-refresh') {
+    await refreshAsana($)
+    return true
+  }
+  const [state, view] = await Promise.all([read($, asana), read($, asanaView)])
+  const server = state?.server
+  if (!server) return false
+  if (key.startsWith('asana-task-')) {
+    await openAsanaTask($, server, key.slice('asana-task-'.length))
+    return true
+  }
+  if (key === 'asana-reload' && view) {
+    await openAsanaTask($, server, view.gid)
+    return true
+  }
+  const task = view?.task
+  if (!task) return false
+  if (key.startsWith('asana-user-')) {
+    const gid = key.slice('asana-user-'.length)
+    const user = gid === 'me' ? { gid, name: T.asanaMe } : (await read($, asanaUsers))?.users.find(item => item.gid === gid)
+    if (!user) return false
+    const armed = await read($, open)
+    await armAssign($, server, task, user, armed[`asana:arm:${gid}`] ?? false)
+    return true
+  }
+  const picked = /^asana-option-(\w+)-(\w+)$/.exec(key)
+  if (picked) {
+    await changeAsana($, server, task, { field: picked[1] as string, option: picked[2] as string })
+    return true
+  }
+  return false
+}
+
+async function submitAsana($: EngineInterface, key: string, value: string): Promise<boolean> {
+  if (key !== 'asana-user-search' && !key.startsWith('asana-write-')) return false
+  const [state, view] = await Promise.all([read($, asana), read($, asanaView)])
+  const server = state?.server
+  if (!server || !view) return false
+  if (key === 'asana-user-search') await findAsanaUsers($, server, value)
+  else await postAsanaComment($, server, view.gid, value)
+  return true
 }
 
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
@@ -1833,6 +2008,11 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await $.command.register({
+      name: 'desk-asana',
+      description: T.cmdAsana,
+      immediate: true,
+    })
+    await $.command.register({
       name: 'desk-context',
       description: T.cmdContext,
       immediate: true,
@@ -2049,6 +2229,31 @@ export const register: Register = (on, options) => {
       await patchAgent($, id, agent => ({ tokens: stepTokens(used), model: agent.model ?? used.model }))
     }
     return response
+  })
+
+  on('command.run', { command: 'desk-asana' }, async $ => {
+    await openAsana($)
+    const state = await read($, asana)
+    return { text: state?.status === 'none' ? T.asanaNoServer : T.asanaOpened }
+  })
+
+  // /desk-asana 가 부르는 Asana 도구는 사람이 패널에서 누른 것이라 허용한다. 엔진은 플러그인의 $.mcp.call 에도
+  // 권한을 물어(auto mode 분류기는 요청한 프롬프트가 없다고 거절, 기본 모드는 누를 때마다 창) 패널을 쓸 수 없다.
+  // origin 은 호스트가 채우는 값이라 desk-look 이 부른 것만 가린다. 모델의 Asana 호출은 그대로 엔진이 정한다.
+  on('tool.check', async ($, e, next) => {
+    if (next.origin.plugin === 'desk-look' && isPaneTool(e.tool)) return { decision: 'allow' }
+    return next(e)
+  })
+
+  // /desk-asana 의 버튼·입력칸 중 Asana 를 부르는 것은 훅이 받는다(pressAsana 위 설명).
+  on('ui.press', async ($, e, next) => {
+    if (e.plugin !== 'desk-look' || !e.element.startsWith('asana-') || !(await pressAsana($, e.element))) return next(e)
+    return { element: e.element }
+  })
+
+  on('ui.input', async ($, e, next) => {
+    if (e.plugin !== 'desk-look' || e.kind !== 'submit' || !(await submitAsana($, e.element, e.value))) return next(e)
+    return { element: e.element, value: e.value }
   })
 
   on('command.run', { command: 'desk-pr' }, async $ => {
@@ -3060,6 +3265,200 @@ export const register: Register = (on, options) => {
               </Box>
             )
           })}
+      </Box>
+    )
+  })
+
+  // Asana 패널: 내 태스크를 프로젝트별로, 하나를 누르면 상세(상태·담당자·드롭다운 필드·설명·댓글)와 댓글 달기.
+  on('ui.render', { component: 'Pane', requestId: ASANA_PANE }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button, Input, Link } = els
+    const [state, view, armed, found, now] = await Promise.all([read($, asana), read($, asanaView), read($, open), read($, asanaUsers), $.clock.now()])
+    const columns = Math.max(24, e.props.bodyColumns)
+    const server = state?.server ?? null
+    const today = localDay(now)
+    const due = (dueOn: string | null) => {
+      const chip = dueChip(dueOn, today)
+      return chip && <Text color={COLORS[chip.level]}>{` ${chip.text}`}</Text>
+    }
+
+    if (view !== null && server !== null) {
+      const task = view.task
+      const head = (
+        <Box columnGap={1}>
+          <Button key="asana-back" plain dimColor label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
+          <Button key="asana-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={BY_HOOK} />
+        </Box>
+      )
+      if (task === null) {
+        return (
+          <Box flexDirection="column" rowGap={1}>
+            {head}
+            <Text color={COLORS.muted}>{view.status === 'failed' ? T.asanaFailed(view.error ?? '') : T.asanaLoading}</Text>
+          </Box>
+        )
+      }
+      const isAssigning = armed['asana:assign'] ?? false
+      const userRow = (user: { gid: string; name: string; email?: string | null }) => {
+        const isArmed = armed[`asana:arm:${user.gid}`] ?? false
+        return rowButton(
+          els,
+          { key: `asana-user-${user.gid}`, dimColor: !isArmed, onPress: BY_HOOK },
+          isArmed ? T.asanaAssignConfirm(user.name) : user.name,
+          !isArmed && user.email ? <Text color={COLORS.muted}>{` ${user.email}`}</Text> : null,
+        )
+      }
+      const fields = task.fields.filter(field => field.value !== null || field.options !== null)
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          {head}
+          <Box flexDirection="column">
+            <Text color={COLORS.text} weight="semibold">
+              {task.name}
+            </Text>
+            <Box columnGap={1}>
+              {task.status !== null ? (
+                <Text color={task.completed ? COLORS.success : COLORS.accent}>{`● ${task.status}`}</Text>
+              ) : (
+                task.completed && <Text color={COLORS.success}>{T.asanaDone}</Text>
+              )}
+              {task.places.length > 0 && (
+                <Text color={COLORS.muted} wrap="truncate-end">
+                  {task.places.join(' · ')}
+                </Text>
+              )}
+            </Box>
+            <Box columnGap={2}>
+              <Button key="asana-claude" plain label={T.handToClaude} onPress={() => void fillPrompt($, asanaPrompt(task))} />
+              {task.url && <Link href={task.url}>{T.asanaOpenOn}</Link>}
+            </Box>
+          </Box>
+          <Box flexDirection="column">
+            <Box columnGap={1}>
+              <Text color={COLORS.muted}>{T.asanaAssignee}</Text>
+              <Text color={task.assignee ? COLORS.text : COLORS.muted}>{task.assignee?.name ?? T.asanaNobody}</Text>
+              <Button key="asana-assign" plain dimColor label={isAssigning ? T.cancel : T.asanaChange} onPress={() => void toggle($, 'asana:assign')} />
+            </Box>
+            {isAssigning && (
+              <Box flexDirection="column" paddingLeft={2}>
+                <Input
+                  key="asana-user-search"
+                  label={T.asanaFindLabel}
+                  placeholder={T.asanaFindPlaceholder}
+                  value={asanaQuery}
+                  submitLabel={T.asanaFind}
+                  autoFocus
+                  onInput={value => (asanaQuery = value)}
+                  onSubmit={BY_HOOK}
+                />
+                {userRow({ gid: 'me', name: T.asanaMe })}
+                {found?.status === 'loading' && <Text color={COLORS.muted}>{T.asanaFinding}</Text>}
+                {found?.status === 'failed' && <Text color={COLORS.danger}>{T.asanaFindFailed}</Text>}
+                {found?.status === 'ok' && found.users.length === 0 && <Text color={COLORS.muted}>{T.asanaNoPeople}</Text>}
+                {found?.status === 'ok' && found.users.map(userRow)}
+              </Box>
+            )}
+            {task.dueOn !== null && (
+              <Box columnGap={1}>
+                <Text color={COLORS.muted}>{T.asanaDueLabel}</Text>
+                <Text color={COLORS.text}>{task.dueOn}</Text>
+                {due(task.dueOn)}
+              </Box>
+            )}
+            {fields.map(field => {
+              const isPicking = armed[`asana:field:${field.gid}`] ?? false
+              return (
+                <Box key={`asana-fieldrow-${field.gid}`} flexDirection="column">
+                  <Box columnGap={1}>
+                    <Text color={COLORS.muted}>{clip(field.name, Math.max(8, Math.floor(columns / 3)))}</Text>
+                    <Text color={field.value ? COLORS.text : COLORS.muted}>{field.value ?? '—'}</Text>
+                    {field.options && (
+                      <Button key={`asana-field-${field.gid}`} plain dimColor label={isPicking ? '⌄' : '›'} onPress={() => void toggle($, `asana:field:${field.gid}`)} />
+                    )}
+                  </Box>
+                  {isPicking && field.options && (
+                    <Box paddingLeft={2} columnGap={2} flexWrap="wrap">
+                      {field.options.map(option => (
+                        <Button
+                          key={`asana-option-${field.gid}-${option.gid}`}
+                          plain
+                          dimColor={option.name !== field.value}
+                          label={option.name === field.value ? `✓ ${option.name}` : option.name}
+                          onPress={BY_HOOK}
+                        />
+                      ))}
+                    </Box>
+                  )}
+                </Box>
+              )
+            })}
+          </Box>
+          {task.notes.trim() !== '' && <Text color={COLORS.text}>{task.notes.trim()}</Text>}
+          <Box flexDirection="column" rowGap={1}>
+            <Text color={COLORS.text} weight="semibold">
+              {T.asanaComments(task.comments.length)}
+            </Text>
+            {task.comments.map(comment => (
+              <Box key={`asana-comment-${comment.gid}`} flexDirection="column">
+                <Box columnGap={1}>
+                  <Text color={COLORS.accent}>{comment.author}</Text>
+                  <Text color={COLORS.muted}>{Number.isNaN(Date.parse(comment.at)) ? '' : ago(Date.parse(comment.at), now)}</Text>
+                </Box>
+                <Text color={COLORS.text}>{comment.text.trim()}</Text>
+              </Box>
+            ))}
+            <Input
+              key={`asana-write-${task.gid}-${asanaSent}`}
+              label={T.asanaCommentLabel}
+              placeholder={T.asanaCommentPlaceholder}
+              rows={COMMENT_ROWS}
+              value={asanaDraft}
+              submitLabel={T.asanaSend}
+              onInput={value => (asanaDraft = value)}
+              onSubmit={BY_HOOK}
+            />
+          </Box>
+        </Box>
+      )
+    }
+
+    const tasks = state?.tasks ?? []
+    const message =
+      state === null || (state.status === 'loading' && tasks.length === 0)
+        ? T.asanaLoading
+        : state.status === 'none'
+          ? T.asanaNoServer
+          : state.status === 'failed'
+            ? T.asanaFailed(state.error ?? '')
+            : tasks.length === 0
+              ? T.asanaEmpty
+              : null
+    const room = Math.max(16, columns - 10)
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        <Box columnGap={1}>
+          <Text color={COLORS.text} weight="semibold">
+            {T.asanaMine(tasks.length)}
+          </Text>
+          <Button key="asana-refresh" plain dimColor label={state?.status === 'loading' ? '…' : '↻'} onPress={BY_HOOK} />
+        </Box>
+        {message !== null && <Text color={COLORS.muted}>{message}</Text>}
+        {groupTasks(tasks).map(group => (
+          <Box key={`asana-group-${group.project ?? ''}`} flexDirection="column">
+            <Text color={COLORS.muted} weight="semibold" wrap="truncate-end">
+              {group.project ?? T.asanaNoProject}
+            </Text>
+            {group.tasks.map(task =>
+              rowButton(
+                els,
+                { key: `asana-task-${task.gid}`, onPress: BY_HOOK },
+                clip(task.name, room),
+                due(task.dueOn),
+              ),
+            )}
+          </Box>
+        ))}
       </Box>
     )
   })

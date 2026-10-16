@@ -114,6 +114,32 @@ export type PrInfo = {
 // 네트워크·인증 오류는 false 라 다음 턴에 다시 읽는다.
 export type PrState = { status: 'loading' | 'ok' | 'none' | 'off'; branch: string | null; pr: PrInfo | null; at: number; error?: string; isSticky?: boolean }
 
+// /desk-asana: 엔진에 붙은 Asana MCP 서버로 읽는 내 태스크. v2 는 Asana 공식 v2 서버(get_my_tasks),
+// v1 은 claude.ai 커넥터(asana_* 도구). name 은 $.mcp.call 이 받는 서버 이름(도구 이름의 가운데).
+export type AsanaServer = { name: string; dialect: 'v2' | 'v1' }
+export type AsanaTask = { gid: string; name: string; dueOn: string | null; project: string | null; section: string | null; url: string | null }
+export type AsanaComment = { gid: string; author: string; at: string; text: string }
+// 드롭다운(enum) 필드만 options 가 있다(패널에서 바꿀 수 있는 것). 수식 필드는 바꾸지 않는다.
+export type AsanaField = { gid: string; name: string; value: string | null; options: Array<{ gid: string; name: string }> | null }
+export type AsanaDetail = {
+  gid: string
+  name: string
+  notes: string
+  assignee: { gid: string; name: string } | null
+  dueOn: string | null
+  completed: boolean
+  // 사용자 지정 작업 유형의 상태(Open·In Progress…). MCP 로는 바꿀 수 없어 보여 주기만 한다.
+  status: string | null
+  places: string[]
+  url: string | null
+  fields: AsanaField[]
+  comments: AsanaComment[]
+}
+// status: none 은 Asana 서버가 연결돼 있지 않음, failed 는 읽지 못함(error).
+export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; error?: string }
+export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task: AsanaDetail | null; error?: string }
+export type AsanaUser = { gid: string; name: string; email: string | null }
+
 // diff 패널의 범위: 커밋 안 한 변경, 기본 브랜치에서 갈라진 뒤 전부, 커밋 하나씩.
 export type DiffScope = 'uncommitted' | 'branch' | 'commits'
 export type CommitInfo = { sha: string; short: string; subject: string; author: string; ago: string }
@@ -189,6 +215,9 @@ declare module 'claude-code' {
       folded: FoldedPane[] | null
       // 지금 브랜치의 PR(PR 바·/desk-pr 패널).
       pr: PrState | null
+      asana: AsanaState | null
+      asanaView: AsanaView | null
+      asanaUsers: { query: string; status: 'loading' | 'ok' | 'failed'; users: AsanaUser[] } | null
       // /desk-diff 패널이 보여 주는 범위와 그 diff.
       diffView: DiffView
       // /desk-agents 패널: 이 세션의 에이전트, 상세로 연 에이전트 id(목록이면 null)와 그 대화, 경과 시간 시계(ms).
