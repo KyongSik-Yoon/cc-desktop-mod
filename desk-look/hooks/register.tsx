@@ -1137,6 +1137,20 @@ async function refreshSurface($: EngineInterface) {
 // 대화 속 편집 행(callDetail)은 비동기 읽기 없이 그려서 테마를 읽을 때 같이 맞춰 둔다.
 let diffColors: DiffPalette | null = null
 
+async function refreshGraphics($: EngineInterface) {
+  const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES] = await Promise.all([
+    $.env.get('TMUX'),
+    $.env.get('ZELLIJ'),
+    $.env.get('HERDR_ENV'),
+    $.env.get('TERM'),
+    $.env.get('TERM_PROGRAM'),
+    $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'),
+  ])
+  const herdr = HERDR_ENV === '1' && herdrGraphicsOn(await readHerdrConfig($))
+  const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES }
+  await update($, graphics, () => supportsGraphics(env, herdr))
+}
+
 async function readHerdrConfig($: EngineInterface): Promise<string> {
   const [xdg, home] = await Promise.all([$.env.get('XDG_CONFIG_HOME'), $.env.get('HOME')])
   const base = xdg || (home ? `${home}/.config` : '')
@@ -2029,25 +2043,15 @@ export const register: Register = (on, options) => {
     void refreshRuns($).catch(() => undefined)
     void refreshImages($).catch(() => undefined)
     void refreshAgents($).catch(() => undefined)
-    void (async () => {
-      const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES] = await Promise.all([
-        $.env.get('TMUX'),
-        $.env.get('ZELLIJ'),
-        $.env.get('HERDR_ENV'),
-        $.env.get('TERM'),
-        $.env.get('TERM_PROGRAM'),
-        $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'),
-      ])
-      const herdr = HERDR_ENV === '1' && herdrGraphicsOn(await readHerdrConfig($))
-      const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES }
-      await update($, graphics, () => supportsGraphics(env, herdr))
-    })().catch(() => undefined)
+    void refreshGraphics($).catch(() => undefined)
     return next(e)
   })
 
   // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다(타이머를 기다리지 않게).
   on('prompt.submit', async ($, e, next) => {
     void refreshSurface($).catch(() => undefined)
+    // /clear 는 atom 을 기본값으로 되돌리고 session.start 는 다시 오지 않는다. 그대로 두면 그 뒤 말풍선은 모서리 그림 대신 사선 글리프가 된다.
+    void refreshGraphics($).catch(() => undefined)
     // 사람이 어디서 입력했는지: 질문 카드가 Remote Control 세션에서 카드를 띄울지 고른다(ask.tsx)
     const origin = e.origin.kind
     if (origin === 'composer' || origin === 'bridge') await update($, promptOrigin, () => origin).catch(() => undefined)
