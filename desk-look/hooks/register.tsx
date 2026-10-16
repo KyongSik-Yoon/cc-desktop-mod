@@ -49,6 +49,9 @@ const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_P
 // /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
 const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
+// diff 줄 댓글 칸 높이(쓰는 동안만 끼는 행), 질문 카드 직접 입력칸이 자랄 수 있는 줄 수.
+const COMMENT_ROWS = 3
+const ASK_TEXT_ROWS = 4
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
 const diff = atom({ plugin: 'desk-look', key: 'diff' } as const, [] as FileDiff[])
@@ -1388,7 +1391,7 @@ function virtualDiff(v: VirtualDiff) {
       const row = comment.patch === key ? rowOf(rows, comment.end) : -1
       if (row !== -1) insert(row, { key: `cm-${comment.id}`, height: 1, node: () => v.notes.commentRow(`cm-${comment.id}`, comment, pad) })
     })
-    if (draft && picked) insert(picked[1], { key: 'cm-draft', height: 1, node: () => v.notes.draftRow('cm-draft', draft, linesIn(rows, picked), pad) })
+    if (draft && picked) insert(picked[1], { key: 'cm-draft', height: COMMENT_ROWS, node: () => v.notes.draftRow('cm-draft', draft, linesIn(rows, picked), pad) })
     const cuts = [...after.keys()].sort((a, b) => a - b)
     const cutBlocks =
       cuts.length === 0
@@ -3000,12 +3003,13 @@ export const register: Register = (on, options) => {
           scopeOf: prefix => commentScope(prefix, view.base?.ref),
           onLine: at => void pickLine($, at).catch(() => undefined),
           draftRow: (key, picked, lines, pad) => (
-            <Box key={key} height={1} paddingLeft={pad} columnGap={1}>
+            <Box key={key} height={COMMENT_ROWS} paddingLeft={pad} columnGap={1}>
               <Box flexGrow={1} flexShrink={1} overflow="hidden">
                 <Input
                   key={draftKey(picked)}
                   label={T.commentLabel(rangeLabel(lines))}
                   placeholder={T.commentPlaceholder}
+                  rows={COMMENT_ROWS}
                   value={draftText}
                   submitLabel={T.commentSave}
                   onInput={value => (draftText = value)}
@@ -3020,7 +3024,7 @@ export const register: Register = (on, options) => {
               <Box flexGrow={1} flexShrink={1} overflow="hidden">
                 <Text wrap="truncate-end">
                   <Text color={COLORS.link}>{`✎ ${rangeLabel(comment.lines)}`}</Text>
-                  {`  ${comment.body}`}
+                  {`  ${comment.body.replaceAll('\n', ' ↵ ')}`}
                 </Text>
               </Box>
               <Button key={`comment-del-${comment.id}`} plain dimColor label="✕" onPress={() => void update($, lineComments, list => list.filter(item => item.id !== comment.id))} />
@@ -3274,17 +3278,23 @@ async function advanceAsk($: EngineInterface, state: AskState, picks: string[], 
 // 입력창 위 띠의 질문 카드. 묻는 중이 아니면 null.
 // 질문 카드가 차지할 줄 수. 띠가 모자라면(낮은 터미널) 선택지 밖으로 밀린 버튼은 숫자 키가 먹지 않으므로
 // 간단한 모양(제목·질문 한 줄 + 선택지, 여러 개 고르기면 제출 줄)으로, 그래도 모자라면 테두리 없는 두 줄로 줄인다.
-export function askRows(question: { kind: string; description?: string; multiSelect: boolean; options: { preview?: string }[] }, compact: boolean): number {
+export function askRows(question: { kind: string; description?: string; multiSelect: boolean; options: { preview?: string }[] }, compact: boolean, textRows = 1): number {
   if (compact) return 2 + 1 + (question.kind === 'choice' ? question.options.length : 1) + (question.multiSelect ? 1 : 0)
   const choice = question.kind === 'choice'
   const hint = question.options.some(option => option.preview) ? 1 : 0
-  return 2 + 2 + (question.description ? 1 : 0) + (choice ? 1 + question.options.length + hint : 0) + 1 + 1 + 1
+  return 2 + 2 + (question.description ? 1 : 0) + (choice ? 1 + question.options.length + hint : 0) + 1 + textRows + 1
+}
+
+// 넉넉한 카드의 직접 입력칸 높이: 두 줄에서 쓴 줄 수만큼 ASK_TEXT_ROWS 까지 자란다. 숫자는 한 줄.
+// 한 줄 칸에서는 엔진이 \⏎ 도 제출로 받아 줄바꿈을 시작할 수 없으므로 두 줄부터다.
+export function askTextRows(question: { kind: string }, text: string): number {
+  return question.kind === 'number' ? 1 : Math.min(ASK_TEXT_ROWS, Math.max(2, text.split('\n').length))
 }
 
 // 띠 줄 수에 맞는 모양: 다 들어가면 full, 아니면 테두리 카드(compact), 그것도 안 되면 두 줄(inline).
 export type AskMode = 'full' | 'compact' | 'inline'
-export function askMode(question: Parameters<typeof askRows>[0], room: number): { mode: AskMode; rows: number } {
-  if (askRows(question, false) <= room) return { mode: 'full', rows: askRows(question, false) }
+export function askMode(question: Parameters<typeof askRows>[0], room: number, textRows = 1): { mode: AskMode; rows: number } {
+  if (askRows(question, false, textRows) <= room) return { mode: 'full', rows: askRows(question, false, textRows) }
   if (askRows(question, true) <= room) return { mode: 'compact', rows: askRows(question, true) }
   return { mode: 'inline', rows: 2 }
 }
@@ -3308,7 +3318,8 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
   }
   const unit = question.unit ? ` (${question.unit})` : ''
   const width = Math.max(30, Math.min(columns, 100))
-  const { mode, rows } = askMode(question, room)
+  const textRows = askTextRows(question, text)
+  const { mode, rows } = askMode(question, room, textRows)
   const compact = mode !== 'full'
   const inline = mode === 'inline'
 
@@ -3458,6 +3469,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
           key={`ask-text-${k}`}
           label={question.kind === 'choice' ? 'Other' : T.answerLabel(unit)}
           placeholder={question.placeholder ?? (question.kind === 'number' ? T.numberPlaceholder : T.otherPlaceholder)}
+          rows={textRows}
           value={text}
           submitLabel={isLast ? T.submit : T.next}
           onInput={value => void setText(value)}

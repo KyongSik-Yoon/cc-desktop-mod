@@ -668,7 +668,7 @@ test('질문 도구 줄: 질문과 답', KO, () => {
 })
 
 import { agentOf } from '../hooks/runs'
-import { askHint, askRows, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
+import { askHint, askRows, askTextRows, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
 
 test('서브에이전트 카드 요약과 묶음', KO, () => {
   const raw = {
@@ -962,6 +962,12 @@ test('질문 카드 줄 수: 모자라면 간단한 모양', KO, () => {
   expect(askRows(two, true)).toBe(2 + 1 + 2)
   expect(askRows({ ...two, multiSelect: true }, true)).toBe(6)
   expect(askRows({ ...two, options: [{ preview: 'x' }, {}] }, false)).toBe(11)
+  // 직접 입력칸은 두 줄에서 쓴 줄 수만큼 자라고(4줄까지), 숫자는 한 줄
+  expect(askRows(two, false, 3)).toBe(askRows(two, false) + 2)
+  expect(askTextRows(two, '')).toBe(2)
+  expect(askTextRows(two, 'a\nb\nc')).toBe(3)
+  expect(askTextRows(two, 'a\nb\nc\nd\ne\nf')).toBe(4)
+  expect(askTextRows({ kind: 'number' }, 'a\nb')).toBe(1)
 })
 
 test('에이전트 메시지 줄: 누르면 그 자리에서 마크다운으로 펼침', KO, async $ => {
@@ -2694,14 +2700,18 @@ describe('데스크톱 모양 diff', () => {
     await pane.press({ key: line(3) })
     const input = async () => JSON.stringify(await pane.find({ type: 'Input' }))
     expect(await input()).toContain('11번 줄')
+    // 여러 줄 칸(2.1.301 Input rows)
+    expect(await input()).toContain('"rows":3')
     // 다른 줄을 누르면 범위, 고른 줄은 뒤집어 그린다
     await pane.press({ key: line(4) })
     expect(await input()).toContain('11–12번 줄')
     expect(JSON.stringify(await pane.drawn())).toContain('"inverse":true')
     const typed = (await pane.find({ type: 'Input' })) as { key?: string } | undefined
-    await pane.input({ key: typed?.key ?? '', text: '  이름을 quantity 로 통일  ' })
+    await pane.input({ key: typed?.key ?? '', text: '  이름을 quantity 로 통일\n가격도  ' })
     expect(await pane.find({ type: 'Input' })).toBeUndefined()
     expect(JSON.stringify(await pane.drawn())).toContain('✎ 11–12')
+    // 저장된 댓글은 한 행: 줄바꿈은 ↵ 로
+    expect(JSON.stringify(await pane.drawn())).toContain('이름을 quantity 로 통일 ↵ 가격도')
     // 아래턱에 쌓인 댓글 수
     const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
     expect(await band.find({ type: 'Button', key: 'comments-chip' })).toBeDefined()
@@ -2711,7 +2721,7 @@ describe('데스크톱 모양 diff', () => {
     expect(context).toContain('src/cart.ts:11–12 (uncommitted changes)')
     expect(context).toContain('11 + const total = price * quantity')
     expect(context).toContain('12   end')
-    expect(context).toContain('\n이름을 quantity 로 통일')
+    expect(context).toContain('\n이름을 quantity 로 통일\n가격도')
     expect(JSON.stringify(await pane.drawn())).not.toContain('✎ 11–12')
     expect(await band.find({ type: 'Button', key: 'comments-chip' })).toBeUndefined()
     await $.prompt.submit({ text: '또', origin: { kind: 'composer' }, wait: false } as never)
