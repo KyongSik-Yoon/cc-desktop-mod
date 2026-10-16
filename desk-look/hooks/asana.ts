@@ -47,11 +47,10 @@ export function findAsanaServer(names: readonly string[]): AsanaServer | null {
   return null
 }
 
-// tool.check 가 허용하는 것: 패널이 쓰는 이름의 MCP 도구만. 누가 불렀는지(desk-look 자신)는 훅이 origin 으로 가른다.
-const PANE_TOOLS = new Set<string>([...Object.values(ASANA_TOOLS.v2), ...Object.values(ASANA_TOOLS.v1)])
-export function isPaneTool(tool: string): boolean {
-  const match = /^mcp__.+__([^_].*)$/.exec(tool)
-  return match !== null && PANE_TOOLS.has(match[1] as string)
+// 패널이 그 서버에서 부르는 도구의 전체 이름. 플러그인의 $.mcp.call 도 권한 검사를 받아(auto mode 분류기는 거절,
+// 기본 모드는 누를 때마다 창) 사람이 settings 의 permissions.allow 에 이 이름들을 넣어야 패널이 막힘없이 돈다.
+export function paneTools(server: AsanaServer): string[] {
+  return [...new Set<string>(Object.values(ASANA_TOOLS[server.dialect]))].map(tool => `mcp__${server.name}__${tool}`)
 }
 
 export type AsanaCall = { tool: string; args: Record<string, unknown> }

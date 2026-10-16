@@ -7,7 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
-import { dueChip, findAsanaServer, groupTasks, isPaneTool, toDetail, updateCall, updateProblem } from '../hooks/asana'
+import { dueChip, findAsanaServer, groupTasks, paneTools, toDetail, updateCall, updateProblem } from '../hooks/asana'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -2676,6 +2676,39 @@ describe('데스크톱 모양 diff', () => {
     await pane.unmount()
   })
 
+  test('스크롤 없이 창이 바뀌어도(터미널 크기·원격 접속) 엔진이 알려 준 창 자리를 그린다', KO, async ($, on) => {
+    lightTheme(on)
+    on('process.run', (($: unknown, e: { argv: string[] }) => {
+      const stdout = e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? THEMED_PATCH : e.argv.includes('--abbrev-ref') ? 'main\n' : ''
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.now', () => ({ value: 0 }))
+    on('tool.call', () => ({ result: 'ok' }) as never)
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/src/cart.ts', old_string: 'qty', new_string: 'quantity' } as never)
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    // ui.scroll 은 한 번도 오지 않았고, 엔진의 창은 600줄 파일의 400행 근처에 있다
+    const pane = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'desk-diff',
+      viewport: VIEWPORT,
+      props: { title: '변경 사항', isFocused: true, bodyColumns: 96, scroll: { offset: 400, bodyRows: 30 } } as never,
+    })
+    for (let tries = 0; tries < 50 && (await pane.findAll({ type: 'Code' })).length < 10; tries++) await wait(10)
+    const pressable = (await pane.findAll({ type: 'Button' }))
+      .map(button => /^d-big\.ts\.(\d+)\.p0$/.exec(String((button as { key?: unknown }).key))?.[1])
+      .filter((index): index is string => index !== undefined)
+      .map(Number)
+    // 번호 버튼은 보이는 덩어리에만 달리므로, 단 덩어리가 창 자리(맨 위가 아니라)를 말해 준다
+    expect(pressable.length).toBeGreaterThan(0)
+    expect(Math.min(...pressable)).toBeGreaterThan(10)
+    expect(JSON.stringify(await pane.drawn())).not.toContain('"d-big.ts.0"')
+    await pane.unmount()
+  })
+
   test('diff 줄 번호를 눌러 범위에 댓글을 달면 다음 프롬프트에 context 로 붙는다', KO, async ($, on) => {
     const sent: { text: string; context?: readonly string[] }[] = []
     lightTheme(on, sent)
@@ -2860,10 +2893,9 @@ describe('Asana 패널', () => {
     expect(findAsanaServer(V1)).toEqual({ name: 'claude_ai_asana', dialect: 'v1' })
     expect(findAsanaServer(V2.filter(name => !name.endsWith('add_comment')))).toBeNull()
     expect(findAsanaServer(['mcp__other__get_my_tasks'])).toBeNull()
-    expect(isPaneTool('mcp__asana-v2__get_task')).toBe(true)
-    expect(isPaneTool('mcp__claude_ai_asana__asana_create_task_story')).toBe(true)
-    expect(isPaneTool('mcp__asana-v2__delete_task')).toBe(false)
-    expect(isPaneTool('get_task')).toBe(false)
+    expect(paneTools({ name: 'asana-v2', dialect: 'v2' })).toEqual(V2)
+    // v1 은 목록과 검색이 같은 도구라 한 번만
+    expect(paneTools({ name: 'claude_ai_asana', dialect: 'v1' })).toEqual(V1)
   })
 
   test('상세는 v2 댓글과 v1 활동에서 댓글만 고르고, 드롭다운 필드만 바꿀 수 있게 둔다', () => {
@@ -2936,6 +2968,8 @@ describe('Asana 패널', () => {
       return { isFilled: true } as never
     })
     on('tool.list', () => ({ value: [...V1, ...V2].map(name => ({ name, description: '', mcp: true })) }))
+    // 댓글 달기만 allow 규칙이 없다
+    on('tool.check', ($, e) => ({ decision: e.tool === 'mcp__asana-v2__add_comment' ? 'ask' : 'allow' }) as never)
     on('mcp.call', ($, e) => {
       calls.push({ server: e.server, tool: e.tool, args: e.args })
       switch (e.tool) {
@@ -2975,6 +3009,9 @@ describe('Asana 패널', () => {
     expect(drawn).toContain('Support')
     expect(drawn).toContain('프로젝트 없음')
     expect(drawn).toContain('10/10')
+    expect(drawn).toContain('허용 규칙이 없어')
+    expect(drawn).toContain('\\"mcp__asana-v2__add_comment\\",')
+    expect(drawn).not.toContain('mcp__asana-v2__get_task')
 
     await pane.press({ key: 'asana-task-1' })
     await wait(50)

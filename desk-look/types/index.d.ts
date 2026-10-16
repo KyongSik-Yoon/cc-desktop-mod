@@ -137,7 +137,8 @@ export type AsanaDetail = {
   comments: AsanaComment[]
 }
 // status: none 은 Asana 서버가 연결돼 있지 않음, failed 는 읽지 못함(error).
-export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; error?: string }
+// unruled: 패널이 부르는 도구 중 allow 규칙이 없어 엔진이 물어보거나 막을 것(paneTools).
+export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; unruled: string[]; error?: string }
 export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task: AsanaDetail | null; error?: string }
 export type AsanaUser = { gid: string; name: string; email: string | null }
 // 패널 검색창: 이 글자로 찾은 워크스페이스 태스크. null 이면 내 태스크 목록.

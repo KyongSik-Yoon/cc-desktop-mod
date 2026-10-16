@@ -121,7 +121,14 @@ Claude Code 에 이미 연결된 Asana MCP 서버로 내 열린 태스크를 읽
 - 드롭다운 사용자 정의 필드 옆 `›` 로 선택지를 펼쳐 하나를 누르면 바뀐다
 - `Claude에게 맡기기` 는 태스크 제목·링크·상태·설명·최근 댓글을 입력창에 채운다
 - 작업 유형의 상태(Open, In Progress…)는 보여 주기만 한다: 두 Asana MCP 서버 모두 바꾸는 도구가 없다
-- 이 Asana 호출은 패널에서 무언가를 눌렀을 때만 하고, auto mode 가 거절하지 않게 desk-look 이 직접 허용한다. Claude 가 하는 Asana 호출은 전처럼 Claude Code 권한 검사를 거친다
+- 이 Asana 호출은 패널을 열거나 무언가를 눌렀을 때만 하고, Claude 의 호출처럼 Claude Code 권한 검사를 거친다. allow 규칙이 없으면 auto mode 는 거절하고 기본 모드는 매번 묻는다. 패널이 쓰는 도구를 `~/.claude/settings.json` 의 `permissions.allow` 에 넣는다. 빠진 것이 있으면 패널이 그 목록을 보여 준다. V2 서버라면:
+
+  ```json
+  "mcp__asana-v2__get_my_tasks", "mcp__asana-v2__search_tasks", "mcp__asana-v2__get_task",
+  "mcp__asana-v2__add_comment", "mcp__asana-v2__update_tasks", "mcp__asana-v2__search_objects"
+  ```
+
+  이 규칙은 Claude 가 부르는 같은 도구(댓글 달기·태스크 바꾸기 포함)도 허용한다
 
 ### `/desk-preview [파일]`: 마크다운 미리보기
 

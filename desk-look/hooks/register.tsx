@@ -19,7 +19,7 @@ import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsC
 import type { ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
 import type { MergeAction, MergeResult, Ran } from './pr'
-import { asanaPrompt, commentCall, dueChip, findAsanaServer, groupTasks, isPaneTool, listCall, localDay, resultData, searchCall, storiesCall, taskCall, toDetail, toTasks, toUsers, updateCall, updateProblem, usersCall } from './asana'
+import { asanaPrompt, commentCall, dueChip, findAsanaServer, groupTasks, listCall, localDay, paneTools, resultData, searchCall, storiesCall, taskCall, toDetail, toTasks, toUsers, updateCall, updateProblem, usersCall } from './asana'
 import type { AsanaCall } from './asana'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
@@ -906,20 +906,29 @@ async function findAsana($: EngineInterface): Promise<AsanaServer | null> {
   return findAsanaServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
 }
 
+// 패널 도구 중 allow 규칙이 없는 것. $.tool.check 는 규칙만 묻는다(창도 분류기도 없다).
+async function findUnruled($: EngineInterface, server: AsanaServer) {
+  const tools = paneTools(server)
+  const verdicts = await Promise.all(tools.map(tool => $.tool.check({ tool, input: {} }).catch(() => null)))
+  return tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
+}
+
 let asanaFetch: Promise<void> | null = null
 
 // 목록을 다시 읽는다. 읽는 동안은 전에 읽은 목록을 그대로 보인다(↻ 가 … 로).
 async function refreshAsana($: EngineInterface) {
   if (asanaFetch) return asanaFetch
   asanaFetch = (async () => {
-    await update($, asana, (state): AsanaState => ({ status: 'loading', server: state?.server ?? null, tasks: state?.tasks ?? [] }))
+    await update($, asana, (state): AsanaState => ({ status: 'loading', server: state?.server ?? null, tasks: state?.tasks ?? [], unruled: state?.unruled ?? [] }))
     const server = await findAsana($)
     if (server === null) {
-      await update($, asana, (): AsanaState => ({ status: 'none', server: null, tasks: [] }))
+      await update($, asana, (): AsanaState => ({ status: 'none', server: null, tasks: [], unruled: [] }))
       return
     }
-    const got = await callAsana($, server, listCall(server))
-    await update($, asana, (): AsanaState => (got.ok ? { status: 'ok', server, tasks: toTasks(got.data) } : { status: 'failed', server, tasks: [], error: got.error }))
+    const [unruled, got] = await Promise.all([findUnruled($, server), callAsana($, server, listCall(server))])
+    await update($, asana, (): AsanaState =>
+      got.ok ? { status: 'ok', server, tasks: toTasks(got.data), unruled } : { status: 'failed', server, tasks: [], unruled, error: got.error },
+    )
   })().finally(() => {
     asanaFetch = null
   })
@@ -1022,61 +1031,6 @@ async function armAssign($: EngineInterface, server: AsanaServer, task: AsanaDet
   }
   await update($, open, state => ({ ...state, [key]: false }))
   await changeAsana($, server, task, { assignee: user.gid, name: user.name })
-}
-
-// Asana 를 부르는 버튼은 onPress 가 아니라 ui.press 훅이 받는다. onPress 는 desk-look 자신의 환경에서 돌아, 그 안의
-// $.mcp.call 에는 desk-look 의 tool.check 가 불리지 않는다(자기 frame 아래에서는 훅이 돌지 않는다). 그러면 권한을
-// 엔진이 정해 auto mode 분류기가 거절한다. 훅은 따로 frame 이라 tool.check 가 돈다. 입력칸 제출도 같다(submitAsana).
-const BY_HOOK = () => undefined
-
-async function pressAsana($: EngineInterface, key: string): Promise<boolean> {
-  const [state, view, search] = await Promise.all([read($, asana), read($, asanaView), read($, asanaSearch)])
-  const server = state?.server
-  // ↻ 는 보이는 목록을 다시 읽는다: 검색 중이면 그 검색, 아니면 내 태스크.
-  if (key === 'asana-refresh') {
-    if (search && server) await searchAsana($, server, search.query)
-    else await refreshAsana($)
-    return true
-  }
-  if (!server) return false
-  if (key.startsWith('asana-task-')) {
-    await openAsanaTask($, server, key.slice('asana-task-'.length))
-    return true
-  }
-  if (key === 'asana-reload' && view) {
-    await openAsanaTask($, server, view.gid)
-    return true
-  }
-  const task = view?.task
-  if (!task) return false
-  if (key.startsWith('asana-user-')) {
-    const gid = key.slice('asana-user-'.length)
-    const user = gid === 'me' ? { gid, name: T.asanaMe } : (await read($, asanaUsers))?.users.find(item => item.gid === gid)
-    if (!user) return false
-    const armed = await read($, open)
-    await armAssign($, server, task, user, armed[`asana:arm:${gid}`] ?? false)
-    return true
-  }
-  const picked = /^asana-option-(\w+)-(\w+)$/.exec(key)
-  if (picked) {
-    await changeAsana($, server, task, { field: picked[1] as string, option: picked[2] as string })
-    return true
-  }
-  return false
-}
-
-async function submitAsana($: EngineInterface, key: string, value: string): Promise<boolean> {
-  if (key !== 'asana-user-search' && !key.startsWith('asana-write-') && !key.startsWith('asana-search-')) return false
-  const [state, view] = await Promise.all([read($, asana), read($, asanaView)])
-  const server = state?.server
-  if (server && key.startsWith('asana-search-')) {
-    await searchAsana($, server, value)
-    return true
-  }
-  if (!server || !view) return false
-  if (key === 'asana-user-search') await findAsanaUsers($, server, value)
-  else await postAsanaComment($, server, view.gid, value)
-  return true
 }
 
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
@@ -1577,9 +1531,12 @@ function virtualDiff(v: VirtualDiff) {
   type Item = { key: string; height: number; always?: boolean; node: () => unknown }
   const items: Item[] = []
   const tops = new Map<string, number>()
+  // 창: 항목을 다 편 뒤 끝을 넘지 않게 깎는다(아래). 항목의 node 는 그 뒤에 불린다.
+  const rows = v.window.bodyRows || DIFF_BODY_GUESS
+  let windowTop = v.window.offset
   const isOnScreen = (key: string, height: number) => {
     const at = tops.get(key) ?? 0
-    return at + height > v.window.offset && at < v.window.offset + (v.window.bodyRows || DIFF_BODY_GUESS)
+    return at + height > windowTop && at < windowTop + rows
   }
   const spacer = (key: string) => items.push({ key, height: 1, node: () => <Box key={key} height={1} /> })
   const rowItems = ({ rows, blocks }: { rows: DiffRow[]; blocks: DiffBlock[] }, key: string, path: string, indent: number, scope: string) => {
@@ -1690,7 +1647,9 @@ function virtualDiff(v: VirtualDiff) {
     tops.set(item.key, top)
     top += item.height
   }
-  const steps = windowPlan(items, v.window.offset, v.window.bodyRows || DIFF_BODY_GUESS)
+  // 내용이 줄어 창이 끝을 넘으면 엔진은 다시 묻지 않고 창을 끝으로 깎는다. 그 자리를 미리 그린다.
+  windowTop = Math.max(0, Math.min(windowTop, top - rows))
+  const steps = windowPlan(items, windowTop, rows)
   const drawn = steps.map((step, index) => ('skip' in step ? <Box key={`skip-${index}`} height={step.skip} /> : items[step.draw]?.node()))
   return <Box flexDirection="column">{drawn as never}</Box>
 }
@@ -2263,25 +2222,6 @@ export const register: Register = (on, options) => {
     await openAsana($)
     const state = await read($, asana)
     return { text: state?.status === 'none' ? T.asanaNoServer : T.asanaOpened }
-  })
-
-  // /desk-asana 가 부르는 Asana 도구는 사람이 패널에서 누른 것이라 허용한다. 엔진은 플러그인의 $.mcp.call 에도
-  // 권한을 물어(auto mode 분류기는 요청한 프롬프트가 없다고 거절, 기본 모드는 누를 때마다 창) 패널을 쓸 수 없다.
-  // origin 은 호스트가 채우는 값이라 desk-look 이 부른 것만 가린다. 모델의 Asana 호출은 그대로 엔진이 정한다.
-  on('tool.check', async ($, e, next) => {
-    if (next.origin.plugin === 'desk-look' && isPaneTool(e.tool)) return { decision: 'allow' }
-    return next(e)
-  })
-
-  // /desk-asana 의 버튼·입력칸 중 Asana 를 부르는 것은 훅이 받는다(pressAsana 위 설명).
-  on('ui.press', async ($, e, next) => {
-    if (e.plugin !== 'desk-look' || !e.element.startsWith('asana-') || !(await pressAsana($, e.element))) return next(e)
-    return { element: e.element }
-  })
-
-  on('ui.input', async ($, e, next) => {
-    if (e.plugin !== 'desk-look' || e.kind !== 'submit' || !(await submitAsana($, e.element, e.value))) return next(e)
-    return { element: e.element, value: e.value }
   })
 
   on('command.run', { command: 'desk-pr' }, async $ => {
@@ -3016,6 +2956,12 @@ export const register: Register = (on, options) => {
     ])
     // 패널 몸통 폭: viewport.columns 는 패널 폭이 아니다(구분선을 끌면 어긋나 단어 강조 조각이 일찍 잘렸다).
     const columns = (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 80
+    // 그릴 범위는 ui.scroll 이 적어 둔 창으로 정하되, 엔진이 이번에 알려 준 창(props.scroll)이 그보다 반 화면 넘게
+    // 떨어졌거나 높이가 다르면 그것을 쓴다. 스크롤 없이 창이 바뀌는 때(터미널 크기·원격 접속 해상도)에는 ui.scroll 이
+    // 불리지 않아, 적어 둔 창만 보면 늘어난 아래쪽이 스크롤할 때까지 비었다.
+    const seen = (e.props as { scroll?: { offset: number; bodyRows: number } }).scroll
+    const shown =
+      seen && seen.bodyRows > 0 && (seen.bodyRows !== window.bodyRows || Math.abs(seen.offset - window.offset) * 2 > seen.bodyRows) ? seen : window
     const files = view.scope === 'branch' ? view.files : uncommitted
     // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
     const outside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
@@ -3206,7 +3152,7 @@ export const register: Register = (on, options) => {
       return virtualDiff({
         els,
         palette: diffColors,
-        window,
+        window: shown,
         columns,
         head: [tabs, titleRow],
         sections: [
@@ -3316,7 +3262,7 @@ export const register: Register = (on, options) => {
       const head = (
         <Box columnGap={1}>
           <Button key="asana-back" plain dimColor label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
-          <Button key="asana-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={BY_HOOK} />
+          <Button key="asana-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaTask($, server, view.gid)} />
         </Box>
       )
       if (task === null) {
@@ -3332,7 +3278,7 @@ export const register: Register = (on, options) => {
         const isArmed = armed[`asana:arm:${user.gid}`] ?? false
         return rowButton(
           els,
-          { key: `asana-user-${user.gid}`, dimColor: !isArmed, onPress: BY_HOOK },
+          { key: `asana-user-${user.gid}`, dimColor: !isArmed, onPress: () => void armAssign($, server, task, user, isArmed) },
           isArmed ? T.asanaAssignConfirm(user.name) : user.name,
           !isArmed && user.email ? <Text color={COLORS.muted}>{` ${user.email}`}</Text> : null,
         )
@@ -3378,7 +3324,7 @@ export const register: Register = (on, options) => {
                   submitLabel={T.asanaFind}
                   autoFocus
                   onInput={value => (asanaQuery = value)}
-                  onSubmit={BY_HOOK}
+                  onSubmit={value => void findAsanaUsers($, server, value)}
                 />
                 {userRow({ gid: 'me', name: T.asanaMe })}
                 {found?.status === 'loading' && <Text color={COLORS.muted}>{T.asanaFinding}</Text>}
@@ -3413,7 +3359,7 @@ export const register: Register = (on, options) => {
                           plain
                           dimColor={option.name !== field.value}
                           label={option.name === field.value ? `✓ ${option.name}` : option.name}
-                          onPress={BY_HOOK}
+                          onPress={() => void changeAsana($, server, task, { field: field.gid, option: option.gid })}
                         />
                       ))}
                     </Box>
@@ -3444,7 +3390,7 @@ export const register: Register = (on, options) => {
               value={asanaDraft}
               submitLabel={T.asanaSend}
               onInput={value => (asanaDraft = value)}
-              onSubmit={BY_HOOK}
+              onSubmit={value => void postAsanaComment($, server, task.gid, value)}
             />
           </Box>
         </Box>
@@ -3475,7 +3421,13 @@ export const register: Register = (on, options) => {
           <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
             {search ? T.asanaFound(clip(search.query, Math.max(8, columns - 20)), tasks.length) : T.asanaMine(tasks.length)}
           </Text>
-          <Button key="asana-refresh" plain dimColor label={(search ?? state)?.status === 'loading' ? '…' : '↻'} onPress={BY_HOOK} />
+          <Button
+            key="asana-refresh"
+            plain
+            dimColor
+            label={(search ?? state)?.status === 'loading' ? '…' : '↻'}
+            onPress={() => void (search && server ? searchAsana($, server, search.query) : refreshAsana($))}
+          />
           {search && <Button key="asana-search-clear" plain dimColor label={T.asanaSearchClear} onPress={() => void clearAsanaSearch($)} />}
         </Box>
         {state?.server && (
@@ -3486,10 +3438,16 @@ export const register: Register = (on, options) => {
             value={asanaFindText}
             submitLabel={T.asanaFind}
             onInput={value => (asanaFindText = value)}
-            onSubmit={BY_HOOK}
+            onSubmit={value => void (server && searchAsana($, server, value))}
           />
         )}
         {message !== null && <Text color={COLORS.muted}>{message}</Text>}
+        {(state?.unruled.length ?? 0) > 0 && (
+          <Box flexDirection="column">
+            <Text color={COLORS.warning}>{T.asanaUnruled}</Text>
+            <Text color={COLORS.muted}>{state?.unruled.map(tool => `"${tool}",`).join('\n')}</Text>
+          </Box>
+        )}
         {groupTasks(tasks).map(group => (
           <Box key={`asana-group-${group.project ?? ''}`} flexDirection="column">
             <Text color={COLORS.muted} weight="semibold" wrap="truncate-end">
@@ -3498,7 +3456,7 @@ export const register: Register = (on, options) => {
             {group.tasks.map(task =>
               rowButton(
                 els,
-                { key: `asana-task-${task.gid}`, onPress: BY_HOOK },
+                { key: `asana-task-${task.gid}`, onPress: () => void (server && openAsanaTask($, server, task.gid)) },
                 clip(task.name, task.assignee === null ? room : Math.max(12, room - 13)),
                 owner(task.assignee),
                 due(task.dueOn),

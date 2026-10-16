@@ -121,7 +121,14 @@ Your open Asana tasks, read through the Asana MCP server Claude Code already has
 - `›` next to a dropdown custom field lists its options; press one to set it
 - `Hand to Claude` fills the prompt with the task's title, link, status, description and recent comments
 - The task type's status (Open, In Progress…) is shown but cannot be changed: neither Asana MCP server has a tool for it
-- These Asana calls are made only when you press something in the pane, and desk-look allows them itself so that auto mode does not refuse them; Claude's own Asana calls go through Claude Code's permission check as before
+- These Asana calls are made only when you open the pane or press something in it, and they go through Claude Code's permission check like Claude's own calls: auto mode refuses them and the default mode asks each time, unless an allow rule covers them. Add the pane's tools to `permissions.allow` in `~/.claude/settings.json`; while some are missing, the pane lists them. For the V2 server:
+
+  ```json
+  "mcp__asana-v2__get_my_tasks", "mcp__asana-v2__search_tasks", "mcp__asana-v2__get_task",
+  "mcp__asana-v2__add_comment", "mcp__asana-v2__update_tasks", "mcp__asana-v2__search_objects"
+  ```
+
+  The rule allows the same tools for Claude too, including adding comments and changing tasks
 
 ### `/desk-preview [file]`: Markdown preview
 
