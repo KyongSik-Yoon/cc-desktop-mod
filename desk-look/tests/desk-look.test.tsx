@@ -95,6 +95,23 @@ describe('응답 렌더링', () => {
     await block.unmount()
   })
 
+  test('백틱 안 URL 은 코드 모양 그대로 링크로, 긴 주소는 줄여서', KO, async $ => {
+    const long = 'https://example.com/docs/plugins/very/long/path/to/the/page?tab=api&lang=ko'
+    const reply = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: `짧은 \`https://example.com/a/b\`, 긴 \`${long}\`, 맨 ${long}, \`npm run build\``, isFirstOfReply: true },
+    })
+    const drawn = JSON.stringify(await reply.drawn())
+    expect(drawn).toContain('"href":"https://example.com/a/b"},"children":["https://example.com/a/b"]')
+    // 줄이 넘어가면 엔진 Link 는 첫 줄에만 걸리므로 긴 주소는 한 줄에 드는 문구로, href 는 그대로
+    expect(drawn.split(`"href":"${long}"},"children":["example.com/docs/plugins…tab=api&lang=ko"]`).length).toBe(3)
+    expect(drawn.match(/"href"/g)?.length).toBe(3)
+    await reply.unmount()
+  })
+
   test('mermaid 는 박스 문자 그림으로, 한글 폭을 맞춰 그린다', KO, async $ => {
     const reply = await $.ui.mount({
       plugin: 'desk-look',

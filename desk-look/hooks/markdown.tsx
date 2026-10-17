@@ -237,6 +237,23 @@ export function parseInline(text: string): Inline[] {
   return out
 }
 
+// 엔진 Link 는 줄이 넘어가면 첫 줄에만 걸린다(2.1.302). 주소가 곧 글자인 링크는 한 줄에 들어가게
+// 가운데를 줄여 그린다: 줄바꿈은 단어 단위라 이 길이면 통째로 다음 줄로 넘어간다.
+const URL_LABEL = 40
+const isUrl = (text: string) => /^https?:\/\/\S+$/.test(text)
+
+export function urlLabel(url: string): string {
+  if (cellWidth(url) <= URL_LABEL) return url
+  const bare = url.replace(/^https?:\/\//, '')
+  return bare.length <= URL_LABEL ? bare : `${bare.slice(0, 24)}…${bare.slice(-15)}`
+}
+
+// 링크의 글자가 주소 그대로면 줄인 문구를 돌려준다.
+function linkLabel(node: Extract<Inline, { kind: 'link' }>): string | null {
+  const [only] = node.children
+  return node.children.length === 1 && only?.kind === 'text' && only.text === node.href && isUrl(node.href) ? urlLabel(node.href) : null
+}
+
 // 그려질 칸 수. 바탕을 칠한 인라인 코드는 앞뒤 공백 한 칸씩이 더 붙는다.
 export function inlineWidth(nodes: Inline[], codePadding: number): number {
   return nodes.reduce(
@@ -245,8 +262,10 @@ export function inlineWidth(nodes: Inline[], codePadding: number): number {
       (node.kind === 'text'
         ? cellWidth(node.text)
         : node.kind === 'code'
-          ? cellWidth(node.text) + codePadding * 2
-          : inlineWidth(node.children, codePadding)),
+          ? cellWidth(isUrl(node.text) ? urlLabel(node.text) : node.text) + codePadding * 2
+          : node.kind === 'link' && linkLabel(node) !== null
+            ? cellWidth(linkLabel(node) ?? '')
+            : inlineWidth(node.children, codePadding)),
     0,
   )
 }
@@ -329,12 +348,18 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
       switch (node.kind) {
         case 'text':
           return node.text
-        case 'code':
+        case 'code': {
+          // 백틱 안 주소도 누를 수 있게(엔진 Markdown 처럼).
+          const text = isUrl(node.text) ? <Link href={node.text}>{urlLabel(node.text)}</Link> : node.text
           return colors.codeBg ? (
-            <Text color={colors.code} backgroundColor={colors.codeBg}>{` ${node.text} `}</Text>
+            <Text color={colors.code} backgroundColor={colors.codeBg}>
+              {' '}
+              {text}{' '}
+            </Text>
           ) : (
-            <Text color={colors.code}>{node.text}</Text>
+            <Text color={colors.code}>{text}</Text>
           )
+        }
         case 'bold':
           return <Text weight="semibold">{inline(node.children, k)}</Text>
         case 'italic':
@@ -344,7 +369,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
         case 'link':
           return (
             <Text color={colors.link} underline>
-              <Link href={node.href}>{inline(node.children, k)}</Link>
+              <Link href={node.href}>{linkLabel(node) ?? inline(node.children, k)}</Link>
             </Text>
           )
       }
