@@ -1,13 +1,25 @@
-import type { AsanaComment, AsanaDetail, AsanaField, AsanaServer, AsanaTask, AsanaUser } from '../types'
+import type { AsanaComment, AsanaDetail, AsanaField, AsanaProject, AsanaServer, AsanaTask, AsanaUser } from '../types'
 import { T } from './i18n'
 
 // /desk-asana: 내게 할당된 Asana 태스크. 엔진에 이미 붙은 Asana MCP 서버를 그대로 쓴다($.mcp.call, 엔진의 연결·인증).
 // 서버 이름은 사람마다 달라 도구 목록에서 찾는다: Asana 공식 v2 서버(get_my_tasks)를 먼저, 없으면 claude.ai 커넥터(asana_*).
 // 검색(v2 search_tasks, v1 asana_search_tasks)은 Premium 워크스페이스에서만 된다. v1 은 내 태스크 목록도 이 검색이다.
+// 프로젝트 탭: 워크스페이스의 프로젝트(get_projects)를 멤버에 내가 있는지로 나누고, 고른 프로젝트의 열린 태스크(get_tasks)를
+// 섹션별로 묶는다. get_tasks 는 보드 차례(섹션 차례)로 주므로 섹션 목록을 따로 읽지 않는다(빈 섹션은 안 보인다).
 // 사용자 지정 작업 유형의 상태(Open·In Progress…)는 두 서버 모두 바꾸는 도구가 없어(v2 update_tasks 는 키를 버린다) 보여 주기만 한다.
 
 export const ASANA_TOOLS = {
-  v2: { list: 'get_my_tasks', search: 'search_tasks', task: 'get_task', comment: 'add_comment', update: 'update_tasks', users: 'search_objects' },
+  v2: {
+    list: 'get_my_tasks',
+    search: 'search_tasks',
+    task: 'get_task',
+    comment: 'add_comment',
+    update: 'update_tasks',
+    users: 'search_objects',
+    me: 'get_me',
+    projects: 'get_projects',
+    tasks: 'get_tasks',
+  },
   v1: {
     list: 'asana_search_tasks',
     search: 'asana_search_tasks',
@@ -16,6 +28,9 @@ export const ASANA_TOOLS = {
     comment: 'asana_create_task_story',
     update: 'asana_update_task',
     users: 'asana_typeahead_search',
+    me: 'asana_get_user',
+    projects: 'asana_get_projects',
+    tasks: 'asana_get_tasks',
   },
 } as const
 
@@ -90,6 +105,33 @@ export function updateCall(server: AsanaServer, gid: string, change: { assignee:
   return { tool: ASANA_TOOLS.v1.update, args: { task_id: gid, ...(fields ? { custom_fields: JSON.stringify(fields) } : { assignee: (change as { assignee: string }).assignee }) } }
 }
 
+// 나(gid). 프로젝트 멤버에 내가 있는지 견준다. v1 asana_get_user 는 인자가 없으면 나다.
+export function meCall(server: AsanaServer): AsanaCall {
+  return { tool: ASANA_TOOLS[server.dialect].me, args: {} }
+}
+
+// 워크스페이스의 보관하지 않은 프로젝트. 다음 쪽은 앞 결과의 next_page.offset 으로.
+export function projectsCall(server: AsanaServer, offset?: string): AsanaCall {
+  return {
+    tool: ASANA_TOOLS[server.dialect].projects,
+    args: { archived: false, limit: 100, opt_fields: 'name,members.gid,modified_at,permalink_url', ...(offset ? { offset } : {}) },
+  }
+}
+
+// 프로젝트의 열린 태스크. v2 completed_since 는 ISO 시각만 받는다('now' 를 거절).
+export function projectTasksCall(server: AsanaServer, project: string, since: string, offset?: string): AsanaCall {
+  return {
+    tool: ASANA_TOOLS[server.dialect].tasks,
+    args: {
+      project,
+      completed_since: since,
+      limit: 100,
+      opt_fields: 'name,due_on,assignee.name,permalink_url,memberships.project.gid,memberships.project.name,memberships.section.name',
+      ...(offset ? { offset } : {}),
+    },
+  }
+}
+
 export function usersCall(server: AsanaServer, query: string): AsanaCall {
   return { tool: ASANA_TOOLS[server.dialect].users, args: { resource_type: 'user', query, count: 8, opt_fields: 'name,email' } }
 }
@@ -114,6 +156,7 @@ export function resultData(result: { content: readonly Block[]; isError: boolean
 const firstLine = (text: string) => (text.split('\n').find(line => line.trim() !== '') ?? '').trim().slice(0, 200)
 
 type Named = { gid?: string; name?: string | null } | null | undefined
+type RawProject = { gid?: string; name?: string; members?: Named[]; modified_at?: string; permalink_url?: string; task_counts?: { num_incomplete_tasks?: number } | null }
 type RawMembership = { project?: Named; section?: Named }
 type RawTask = {
   gid?: string
@@ -140,13 +183,14 @@ type RawStory = { gid?: string; text?: string; created_at?: string; created_by?:
 const str = (value: unknown) => (typeof value === 'string' ? value : null)
 const dataOf = (json: unknown) => (json as { data?: unknown } | null)?.data
 
-export function toTasks(json: unknown): AsanaTask[] {
+// project 를 주면 그 프로젝트의 자리(섹션)를 쓴다. 아니면 이름이 있는 첫 프로젝트.
+export function toTasks(json: unknown, project?: string): AsanaTask[] {
   const data = dataOf(json)
   if (!Array.isArray(data)) return []
   return (data as RawTask[])
     .filter(raw => typeof raw?.gid === 'string')
     .map(raw => {
-      const place = raw.memberships?.find(item => str(item?.project?.name) !== null)
+      const place = raw.memberships?.find(item => (project === undefined ? str(item?.project?.name) !== null : item?.project?.gid === project))
       return {
         gid: raw.gid as string,
         name: str(raw.name) ?? '',
@@ -157,6 +201,37 @@ export function toTasks(json: unknown): AsanaTask[] {
         assignee: str(raw.assignee?.name),
       }
     })
+}
+
+// 다음 쪽 표시(next_page.offset). 없으면 마지막 쪽.
+export function nextOffset(json: unknown): string | null {
+  return str((json as { next_page?: { offset?: unknown } | null } | null)?.next_page?.offset)
+}
+
+export function myGid(json: unknown): string | null {
+  return str((dataOf(json) as { gid?: unknown } | undefined)?.gid)
+}
+
+// 최근에 바뀐 것부터(Asana 홈의 "최근"처럼). 열린 태스크 수는 v2 만 준다.
+export function toProjects(json: unknown, me: string | null): AsanaProject[] {
+  const data = dataOf(json)
+  if (!Array.isArray(data)) return []
+  return (data as RawProject[])
+    .filter(raw => typeof raw?.gid === 'string')
+    .map(raw => {
+      const members = (raw.members ?? []).filter(member => typeof member?.gid === 'string')
+      const open = raw.task_counts?.num_incomplete_tasks
+      return {
+        gid: raw.gid as string,
+        name: str(raw.name) ?? '',
+        url: str(raw.permalink_url),
+        members: members.length,
+        open: typeof open === 'number' ? open : null,
+        isMine: me !== null && members.some(member => member?.gid === me),
+        modifiedAt: str(raw.modified_at) ?? '',
+      }
+    })
+    .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
 }
 
 function toComment(raw: RawStory): AsanaComment | null {
@@ -218,13 +293,13 @@ export function updateProblem(server: AsanaServer, json: unknown): string | null
   return null
 }
 
-// 프로젝트별로 묶는다(처음 나온 차례). 프로젝트가 없는 태스크는 맨 끝 한 묶음.
-export function groupTasks(tasks: readonly AsanaTask[]): Array<{ project: string | null; tasks: AsanaTask[] }> {
+// 프로젝트(프로젝트 탭에서는 섹션)별로 묶는다(처음 나온 차례). 이름이 없는 것은 맨 끝 한 묶음.
+export function groupTasks(tasks: readonly AsanaTask[], by: 'project' | 'section' = 'project'): Array<{ name: string | null; tasks: AsanaTask[] }> {
   const groups = new Map<string | null, AsanaTask[]>()
-  for (const task of tasks) groups.set(task.project, [...(groups.get(task.project) ?? []), task])
-  const named = [...groups].filter(([project]) => project !== null)
+  for (const task of tasks) groups.set(task[by], [...(groups.get(task[by]) ?? []), task])
+  const named = [...groups].filter(([name]) => name !== null)
   const loose = groups.get(null)
-  return [...named, ...(loose ? [[null, loose] as const] : [])].map(([project, list]) => ({ project, tasks: list }))
+  return [...named, ...(loose ? [[null, loose] as const] : [])].map(([name, list]) => ({ name, tasks: list }))
 }
 
 // 마감일 칩: 지난 것은 빨강, 오늘은 노랑, 나머지는 흐리게 "10/20"(올해가 아니면 연도까지).

@@ -7,7 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
-import { dueChip, findAsanaServer, groupTasks, paneTools, toDetail, updateCall, updateProblem } from '../hooks/asana'
+import { dueChip, findAsanaServer, groupTasks, nextOffset, paneTools, projectTasksCall, toDetail, toProjects, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -2900,8 +2900,18 @@ test('/desk-fold: 열린 패널을 접고, 다시 치면 앞에 있던 패널을
 })
 
 describe('Asana 패널', () => {
-  const V2 = ['get_my_tasks', 'search_tasks', 'get_task', 'add_comment', 'update_tasks', 'search_objects'].map(tool => `mcp__asana-v2__${tool}`)
-  const V1 = ['asana_search_tasks', 'asana_get_task', 'asana_get_stories_for_task', 'asana_create_task_story', 'asana_update_task', 'asana_typeahead_search'].map(
+  const V2 = ['get_my_tasks', 'search_tasks', 'get_task', 'add_comment', 'update_tasks', 'search_objects', 'get_me', 'get_projects', 'get_tasks'].map(tool => `mcp__asana-v2__${tool}`)
+  const V1 = [
+    'asana_search_tasks',
+    'asana_get_task',
+    'asana_get_stories_for_task',
+    'asana_create_task_story',
+    'asana_update_task',
+    'asana_typeahead_search',
+    'asana_get_user',
+    'asana_get_projects',
+    'asana_get_tasks',
+  ].map(
     tool => `mcp__claude_ai_asana__${tool}`,
   )
 
@@ -2964,7 +2974,7 @@ describe('Asana 패널', () => {
     expect(dueChip('2027-01-02', '2026-10-16')).toEqual({ text: '2027/1/2', level: 'muted' })
     expect(dueChip(null, '2026-10-16')).toBeNull()
     const task = (gid: string, project: string | null) => ({ gid, name: gid, dueOn: null, project, section: null, url: null, assignee: null })
-    expect(groupTasks([task('a', null), task('b', 'P'), task('c', 'Q'), task('d', 'P')]).map(g => [g.project, g.tasks.map(t => t.gid)])).toEqual([
+    expect(groupTasks([task('a', null), task('b', 'P'), task('c', 'Q'), task('d', 'P')]).map(g => [g.name, g.tasks.map(t => t.gid)])).toEqual([
       ['P', ['b', 'd']],
       ['Q', ['c']],
       [null, ['a']],
@@ -3109,6 +3119,110 @@ describe('Asana 패널', () => {
     await pane.input({ key: 'asana-search-1', text: '  ' })
     await wait(50)
     expect(JSON.stringify(await pane.drawn())).toContain('내 태스크 1')
+    await pane.unmount()
+  })
+
+  test('프로젝트 응답: 내가 멤버인지, 최근에 바뀐 것부터, 태스크는 고른 프로젝트의 섹션으로', () => {
+    const projects = toProjects(
+      {
+        data: [
+          { gid: 'p1', name: '옛 일', members: [{ gid: 'me' }], modified_at: '2026-01-01T00:00:00Z' },
+          { gid: 'p2', name: 'APM', members: [{ gid: 'u2' }, { gid: 'me' }], modified_at: '2026-10-16T00:00:00Z', task_counts: { num_incomplete_tasks: 77 } },
+          { gid: 'p3', name: '남의 일', members: [{ gid: 'u2' }], modified_at: '2026-10-17T00:00:00Z' },
+        ],
+      },
+      'me',
+    )
+    expect(projects.map(p => [p.gid, p.isMine, p.members, p.open])).toEqual([
+      ['p3', false, 1, null],
+      ['p2', true, 2, 77],
+      ['p1', true, 1, null],
+    ])
+    // 두 프로젝트에 걸친 태스크는 고른 프로젝트의 섹션을 쓴다
+    const tasks = toTasks(
+      { data: [{ gid: 't1', name: 'x', memberships: [{ project: { gid: 'p9', name: 'Other' }, section: { name: '딴 섹션' } }, { project: { gid: 'p2', name: 'APM' }, section: { name: '백엔드' } }] }] },
+      'p2',
+    )
+    expect(tasks[0]).toMatchObject({ project: 'APM', section: '백엔드' })
+    expect(nextOffset({ data: [], next_page: { offset: 'abc' } })).toBe('abc')
+    expect(nextOffset({ data: [], next_page: null })).toBeNull()
+    const v2 = { name: 'asana-v2', dialect: 'v2' } as const
+    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', 'abc')).toMatchObject({ tool: 'get_tasks', args: { project: 'p2', completed_since: '2026-10-17T03:00:00.000Z', offset: 'abc' } })
+    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z').args).not.toHaveProperty('offset')
+  })
+
+  test('프로젝트 탭: 내 프로젝트 → 섹션별 모든 사람의 열린 태스크 → 상세 → 돌아오면 그 프로젝트', KO, async ($, on) => {
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    on('clock.now', () => ({ value: Date.parse('2026-10-17T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    on('mcp.call', ($, e) => {
+      calls.push({ tool: e.tool, args: e.args })
+      const apm = (gid: string, name: string, section: string, assignee: string) => ({
+        gid,
+        name,
+        assignee: { gid: assignee, name: assignee },
+        memberships: [{ project: { gid: 'p2', name: 'APM' }, section: { name: section } }],
+      })
+      switch (e.tool) {
+        case 'get_my_tasks':
+          return text({ data: [] })
+        case 'get_me':
+          return text({ data: { gid: 'me', name: 'Sam' } })
+        case 'get_projects':
+          return e.args.offset === undefined
+            ? text({ data: [{ gid: 'p2', name: 'APM', members: [{ gid: 'me' }], modified_at: '2026-10-16T00:00:00Z', task_counts: { num_incomplete_tasks: 3 } }], next_page: { offset: 'pg2' } })
+            : text({ data: [{ gid: 'p3', name: '남의 프로젝트', members: [{ gid: 'u2' }], modified_at: '2026-10-17T00:00:00Z' }], next_page: null })
+        case 'get_tasks':
+          return e.args.offset === undefined
+            ? text({ data: [apm('t1', '정리', 'Untitled section', 'Aiden'), apm('t2', '통계 api', '백엔드', 'Sam')], next_page: { offset: 'tp2' } })
+            : text({ data: [apm('t3', '세션 관리', '백엔드', 'Chalse')], next_page: null })
+        default:
+          return text({ data: { gid: 't3', name: '세션 관리', assignee: { gid: 'Chalse', name: 'Chalse' } } })
+      }
+    })
+
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
+    await pane.press({ key: 'asana-tab-projects' })
+    await wait(50)
+    expect(calls.filter(call => call.tool === 'get_projects').map(call => call.args.offset)).toEqual([undefined, 'pg2'])
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('● 프로젝트')
+    expect(drawn).toContain('내 프로젝트 1')
+    expect(drawn).toContain('멤버 1 · 열린 3')
+    expect(drawn).not.toContain('남의 프로젝트')
+
+    await pane.press({ key: 'asana-project-p2' })
+    await wait(50)
+    const tasksCalls = calls.filter(call => call.tool === 'get_tasks')
+    expect(tasksCalls[0]?.args).toMatchObject({ project: 'p2', completed_since: '2026-10-17T03:00:00.000Z' })
+    expect(tasksCalls[0]?.args).not.toHaveProperty('assignee')
+    expect(tasksCalls[1]?.args.offset).toBe('tp2')
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('열린 태스크 3')
+    expect(drawn).toContain('섹션 없음')
+    expect(drawn).toContain('백엔드')
+    expect(drawn).toContain(' Chalse')
+    expect(drawn.indexOf('섹션 없음')).toBeLessThan(drawn.indexOf('백엔드'))
+
+    // 섹션을 접으면 그 태스크가 빠진다
+    await pane.press({ key: 'asana-section-1' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).not.toContain('세션 관리')
+    await pane.press({ key: 'asana-section-1' })
+
+    await pane.press({ key: 'asana-task-t3' })
+    await wait(50)
+    expect(calls.at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: 't3' } })
+    await pane.press({ key: 'asana-back' })
+    expect(JSON.stringify(await pane.drawn())).toContain('세션 관리')
+
+    await pane.press({ key: 'asana-project-back' })
+    expect(JSON.stringify(await pane.drawn())).toContain('내 프로젝트 1')
+    await pane.press({ key: 'asana-tab-mine' })
+    expect(JSON.stringify(await pane.drawn())).toContain('내 태스크 0')
     await pane.unmount()
   })
 

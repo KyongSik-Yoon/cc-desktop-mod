@@ -143,6 +143,12 @@ export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task
 export type AsanaUser = { gid: string; name: string; email: string | null }
 // 패널 검색창: 이 글자로 찾은 워크스페이스 태스크. null 이면 내 태스크 목록.
 export type AsanaSearch = { query: string; status: 'loading' | 'ok' | 'failed'; tasks: AsanaTask[]; error?: string }
+// 프로젝트 탭. isMine: 프로젝트 멤버에 내가 있다. open: 열린 태스크 수(v2 만, v1 은 null). modifiedAt 은 정렬용 ISO 시각.
+export type AsanaTab = 'mine' | 'projects'
+export type AsanaProject = { gid: string; name: string; url: string | null; members: number; open: number | null; isMine: boolean; modifiedAt: string }
+export type AsanaProjects = { status: 'loading' | 'ok' | 'failed'; projects: AsanaProject[]; error?: string }
+// 펼친 프로젝트의 열린 태스크(섹션은 task.section). isPartial: 읽는 쪽 수 한도에 걸려 뒤가 더 있다.
+export type AsanaProjectView = { project: AsanaProject; status: 'loading' | 'ok' | 'failed'; tasks: AsanaTask[]; isPartial: boolean; error?: string }
 
 // diff 패널의 범위: 커밋 안 한 변경, 기본 브랜치에서 갈라진 뒤 전부, 커밋 하나씩.
 export type DiffScope = 'uncommitted' | 'branch' | 'commits'
@@ -223,6 +229,9 @@ declare module 'claude-code' {
       asanaView: AsanaView | null
       asanaUsers: { query: string; status: 'loading' | 'ok' | 'failed'; users: AsanaUser[] } | null
       asanaSearch: AsanaSearch | null
+      asanaTab: AsanaTab
+      asanaProjects: AsanaProjects | null
+      asanaProject: AsanaProjectView | null
       // /desk-diff 패널이 보여 주는 범위와 그 diff.
       diffView: DiffView
       // /desk-agents 패널: 이 세션의 에이전트, 상세로 연 에이전트 id(목록이면 null)와 그 대화, 경과 시간 시계(ms).

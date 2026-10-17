@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, AsanaDetail, AsanaSearch, AsanaServer, AsanaState, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
@@ -19,7 +19,32 @@ import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsC
 import type { ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
 import type { MergeAction, MergeResult, Ran } from './pr'
-import { asanaPrompt, commentCall, dueChip, findAsanaServer, groupTasks, listCall, localDay, paneTools, resultData, searchCall, storiesCall, taskCall, toDetail, toTasks, toUsers, updateCall, updateProblem, usersCall } from './asana'
+import {
+  asanaPrompt,
+  commentCall,
+  dueChip,
+  findAsanaServer,
+  groupTasks,
+  listCall,
+  localDay,
+  meCall,
+  myGid,
+  nextOffset,
+  paneTools,
+  projectsCall,
+  projectTasksCall,
+  resultData,
+  searchCall,
+  storiesCall,
+  taskCall,
+  toDetail,
+  toProjects,
+  toTasks,
+  toUsers,
+  updateCall,
+  updateProblem,
+  usersCall,
+} from './asana'
 import type { AsanaCall } from './asana'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
@@ -110,6 +135,10 @@ const asanaView = atom({ plugin: 'desk-look', key: 'asanaView' } as const, null 
 const asanaUsers = atom({ plugin: 'desk-look', key: 'asanaUsers' } as const, null as { query: string; status: 'loading' | 'ok' | 'failed'; users: AsanaUser[] } | null)
 // 목록 위 검색창: 찾은 결과(null 이면 내 태스크), 입력 중인 글자, 지울 때마다 늘려 입력칸을 새로 그리는 번호.
 const asanaSearch = atom({ plugin: 'desk-look', key: 'asanaSearch' } as const, null as AsanaSearch | null)
+// 탭(내 태스크·프로젝트), 프로젝트 목록, 펼친 프로젝트(null 이면 프로젝트 목록). 태스크 상세는 두 탭이 함께 쓴다(asanaView).
+const asanaTab = atom({ plugin: 'desk-look', key: 'asanaTab' } as const, 'mine' as AsanaTab)
+const asanaProjects = atom({ plugin: 'desk-look', key: 'asanaProjects' } as const, null as AsanaProjects | null)
+const asanaProject = atom({ plugin: 'desk-look', key: 'asanaProject' } as const, null as AsanaProjectView | null)
 let asanaDraft = ''
 let asanaQuery = ''
 let asanaSent = 0
@@ -941,6 +970,75 @@ async function openAsana($: EngineInterface) {
   await shown
 }
 
+// 쪽 수 한도: 프로젝트는 500개, 한 프로젝트의 열린 태스크는 300개까지 읽는다(쪽마다 MCP 호출 한 번).
+const PROJECT_PAGES = 5
+const PROJECT_TASK_PAGES = 3
+
+async function switchAsanaTab($: EngineInterface, tab: AsanaTab) {
+  await update($, asanaTab, () => tab)
+  const projects = await read($, asanaProjects)
+  if (tab === 'projects' && (projects === null || projects.status === 'failed')) await refreshAsanaProjects($)
+}
+
+let asanaProjectsFetch: Promise<void> | null = null
+
+// 나와 프로젝트 목록을 함께 읽는다. 서버는 내 태스크를 읽을 때 찾아 둔 것.
+async function refreshAsanaProjects($: EngineInterface) {
+  if (asanaProjectsFetch) return asanaProjectsFetch
+  asanaProjectsFetch = (async () => {
+    const server = (await read($, asana))?.server ?? null
+    if (server === null) return
+    await update($, asanaProjects, (state): AsanaProjects => ({ status: 'loading', projects: state?.projects ?? [] }))
+    const [me, first] = await Promise.all([callAsana($, server, meCall(server)), callAsana($, server, projectsCall(server))])
+    const pages = [first]
+    let offset = first.ok ? nextOffset(first.data) : null
+    while (offset !== null && pages.length < PROJECT_PAGES) {
+      const got = await callAsana($, server, projectsCall(server, offset))
+      pages.push(got)
+      offset = got.ok ? nextOffset(got.data) : null
+    }
+    const failed = [me, ...pages].find(got => !got.ok)
+    const gid = me.ok ? myGid(me.data) : null
+    await update($, asanaProjects, (): AsanaProjects =>
+      failed && !failed.ok
+        ? { status: 'failed', projects: [], error: failed.error }
+        : { status: 'ok', projects: toProjects({ data: pages.flatMap(got => (got.ok ? ((got.data as { data?: unknown[] }).data ?? []) : [])) }, gid) },
+    )
+  })().finally(() => {
+    asanaProjectsFetch = null
+  })
+  return asanaProjectsFetch
+}
+
+// 프로젝트 하나를 펼친다: 열린 태스크를 쪽마다 더해 그린다. 다른 프로젝트로 옮겼으면 늦게 온 쪽은 버린다.
+async function openAsanaProject($: EngineInterface, project: AsanaProject) {
+  const server = (await read($, asana))?.server ?? null
+  if (server === null) return
+  await update($, asanaProject, (view): AsanaProjectView => ({ project, status: 'loading', tasks: view?.project.gid === project.gid ? view.tasks : [], isPartial: false }))
+  const since = new Date(await $.clock.now()).toISOString()
+  const tasks = []
+  let offset: string | undefined
+  for (let page = 0; page < PROJECT_TASK_PAGES; page++) {
+    const got = await callAsana($, server, projectTasksCall(server, project.gid, since, offset))
+    if (!got.ok) {
+      await update($, asanaProject, (view): AsanaProjectView | null => (view?.project.gid !== project.gid ? view : { ...view, status: 'failed', error: got.error }))
+      return
+    }
+    tasks.push(...toTasks(got.data, project.gid))
+    offset = nextOffset(got.data) ?? undefined
+    const isLast = offset === undefined || page === PROJECT_TASK_PAGES - 1
+    const shown = [...tasks]
+    await update($, asanaProject, (view): AsanaProjectView | null =>
+      view?.project.gid !== project.gid ? view : { project, status: isLast ? 'ok' : 'loading', tasks: shown, isPartial: isLast && offset !== undefined },
+    )
+    if (isLast) return
+  }
+}
+
+async function closeAsanaProject($: EngineInterface) {
+  await update($, asanaProject, () => null)
+}
+
 // 태스크 하나를 펼친다(같은 태스크를 다시 읽는 동안은 전 내용을 그대로 보인다).
 async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
   await update($, asanaView, (view): AsanaView => ({ gid, status: 'loading', task: view?.gid === gid ? view.task : null }))
@@ -1016,6 +1114,8 @@ async function changeAsana($: EngineInterface, server: AsanaServer, task: AsanaD
     await update($, asanaUsers, () => null)
     await update($, open, state => ({ ...state, 'asana:assign': false }))
     void refreshAsana($).catch(() => undefined)
+    const shown = await read($, asanaProject)
+    if (shown) void openAsanaProject($, shown.project).catch(() => undefined)
   } else {
     await update($, open, state => ({ ...state, [`asana:field:${change.field}`]: false }))
   }
@@ -3252,7 +3352,17 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text, Button, Input, Link } = els
-    const [state, view, armed, found, search, now] = await Promise.all([read($, asana), read($, asanaView), read($, open), read($, asanaUsers), read($, asanaSearch), $.clock.now()])
+    const [state, view, armed, found, search, tab, projects, project, now] = await Promise.all([
+      read($, asana),
+      read($, asanaView),
+      read($, open),
+      read($, asanaUsers),
+      read($, asanaSearch),
+      read($, asanaTab),
+      read($, asanaProjects),
+      read($, asanaProject),
+      $.clock.now(),
+    ])
     const columns = Math.max(24, e.props.bodyColumns)
     const server = state?.server ?? null
     const today = localDay(now)
@@ -3401,6 +3511,124 @@ export const register: Register = (on, options) => {
       )
     }
 
+    const room = Math.max(16, columns - 10)
+    const owner = (name: string | null) => name !== null && <Text color={COLORS.muted}>{` ${clip(name, 12)}`}</Text>
+    const taskRow = (task: AsanaTask) =>
+      rowButton(
+        els,
+        { key: `asana-task-${task.gid}`, onPress: () => void (server && openAsanaTask($, server, task.gid)) },
+        clip(task.name, task.assignee === null ? room : Math.max(12, room - 13)),
+        owner(task.assignee),
+        due(task.dueOn),
+      )
+    // 탭은 diff 패널의 범위 고르기와 같은 모양. allow 규칙 안내는 두 탭 모두에.
+    const tabs = (
+      <Box key="asana-tabs" columnGap={2}>
+        {(['mine', 'projects'] as const).map(name => (
+          <Button
+            key={`asana-tab-${name}`}
+            plain
+            dimColor={name !== tab}
+            label={`${name === tab ? '●' : '○'} ${name === 'mine' ? T.asanaTabMine : T.asanaTabProjects}`}
+            onPress={() => void switchAsanaTab($, name)}
+          />
+        ))}
+      </Box>
+    )
+    const unruled = (state?.unruled.length ?? 0) > 0 && (
+      <Box flexDirection="column">
+        <Text color={COLORS.warning}>{T.asanaUnruled}</Text>
+        <Text color={COLORS.muted}>{state?.unruled.map(tool => `"${tool}",`).join('\n')}</Text>
+      </Box>
+    )
+    const isUnready = state === null || state.status === 'none' || (state.status === 'loading' && state.server === null)
+
+    // 프로젝트 탭: 펼친 프로젝트가 있으면 그 열린 태스크를 섹션별로(담당자 누구든), 아니면 내가 멤버인 프로젝트.
+    if (tab === 'projects' && !isUnready) {
+      if (project !== null) {
+        const groups = groupTasks(project.tasks, 'section')
+        const message =
+          project.status === 'failed'
+            ? T.asanaFailed(project.error ?? '')
+            : project.tasks.length === 0
+              ? project.status === 'loading'
+                ? T.asanaLoading
+                : T.asanaProjectEmpty
+              : null
+        return (
+          <Box flexDirection="column" rowGap={1}>
+            {tabs}
+            {unruled}
+            <Box flexDirection="column">
+              <Box columnGap={1}>
+                <Button key="asana-project-back" plain dimColor label={T.asanaProjectsBack} onPress={() => void closeAsanaProject($)} />
+                <Button key="asana-project-refresh" plain dimColor label={project.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaProject($, project.project)} />
+              </Box>
+              <Box columnGap={1}>
+                <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
+                  {clip(project.project.name, Math.max(8, columns - 16))}
+                </Text>
+                <Text color={COLORS.muted}>{T.asanaOpenCount(project.tasks.length)}</Text>
+              </Box>
+              {project.project.url && <Link href={project.project.url}>{T.asanaOpenOn}</Link>}
+            </Box>
+            {message !== null && <Text color={COLORS.muted}>{message}</Text>}
+            {groups.map((group, index) => {
+              const fold = `asana:fold:${project.project.gid}:${group.name ?? ''}`
+              const isFolded = armed[fold] ?? false
+              return (
+                <Box key={`asana-sectionbox-${index}`} flexDirection="column">
+                  {rowButton(
+                    els,
+                    { key: `asana-section-${index}`, onPress: () => void toggle($, fold) },
+                    isFolded ? '› ' : '⌄ ',
+                    <Text color={COLORS.muted} weight="semibold">
+                      {clip(group.name === null || group.name === 'Untitled section' ? T.asanaNoSection : group.name, Math.max(8, columns - 12))}
+                    </Text>,
+                    <Text color={COLORS.muted}>{` · ${group.tasks.length}`}</Text>,
+                  )}
+                  {!isFolded && group.tasks.map(taskRow)}
+                </Box>
+              )
+            })}
+            {project.isPartial && <Text color={COLORS.muted}>{T.asanaProjectPartial(project.tasks.length)}</Text>}
+          </Box>
+        )
+      }
+      const mine = (projects?.projects ?? []).filter(item => item.isMine)
+      const message =
+        projects === null || (projects.status === 'loading' && mine.length === 0)
+          ? T.asanaLoading
+          : projects.status === 'failed'
+            ? T.asanaFailed(projects.error ?? '')
+            : mine.length === 0
+              ? T.asanaNoProjects
+              : null
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          {tabs}
+          {unruled}
+          <Box columnGap={1}>
+            <Text color={COLORS.text} weight="semibold">
+              {T.asanaMyProjects(mine.length)}
+            </Text>
+            <Button key="asana-projects-refresh" plain dimColor label={projects?.status === 'loading' ? '…' : '↻'} onPress={() => void refreshAsanaProjects($)} />
+          </Box>
+          {message !== null && <Text color={COLORS.muted}>{message}</Text>}
+          <Box flexDirection="column">
+            {mine.map(item =>
+              rowButton(
+                els,
+                { key: `asana-project-${item.gid}`, onPress: () => void openAsanaProject($, item) },
+                clip(item.name, Math.max(12, room - 16)),
+                <Text color={COLORS.muted}>{` ${T.asanaProjectMeta(item.members, item.open)}`}</Text>,
+              ),
+            )}
+          </Box>
+        </Box>
+      )
+    }
+
     // 검색 중이면 찾은 태스크를, 아니면 내 태스크를 같은 모양(프로젝트 묶음)으로 보인다.
     const tasks = (search ?? state)?.tasks ?? []
     const message =
@@ -3417,10 +3645,10 @@ export const register: Register = (on, options) => {
                   ? T.asanaNoMatch
                   : T.asanaEmpty
                 : null
-    const room = Math.max(16, columns - 10)
-    const owner = (name: string | null) => name !== null && <Text color={COLORS.muted}>{` ${clip(name, 12)}`}</Text>
     return (
       <Box flexDirection="column" rowGap={1}>
+        {!isUnready && tabs}
+        {unruled}
         <Box columnGap={1}>
           <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
             {search ? T.asanaFound(clip(search.query, Math.max(8, columns - 20)), tasks.length) : T.asanaMine(tasks.length)}
@@ -3446,26 +3674,12 @@ export const register: Register = (on, options) => {
           />
         )}
         {message !== null && <Text color={COLORS.muted}>{message}</Text>}
-        {(state?.unruled.length ?? 0) > 0 && (
-          <Box flexDirection="column">
-            <Text color={COLORS.warning}>{T.asanaUnruled}</Text>
-            <Text color={COLORS.muted}>{state?.unruled.map(tool => `"${tool}",`).join('\n')}</Text>
-          </Box>
-        )}
         {groupTasks(tasks).map(group => (
-          <Box key={`asana-group-${group.project ?? ''}`} flexDirection="column">
+          <Box key={`asana-group-${group.name ?? ''}`} flexDirection="column">
             <Text color={COLORS.muted} weight="semibold" wrap="truncate-end">
-              {group.project ?? T.asanaNoProject}
+              {group.name ?? T.asanaNoProject}
             </Text>
-            {group.tasks.map(task =>
-              rowButton(
-                els,
-                { key: `asana-task-${task.gid}`, onPress: () => void (server && openAsanaTask($, server, task.gid)) },
-                clip(task.name, task.assignee === null ? room : Math.max(12, room - 13)),
-                owner(task.assignee),
-                due(task.dueOn),
-              ),
-            )}
+            {group.tasks.map(taskRow)}
           </Box>
         ))}
       </Box>
