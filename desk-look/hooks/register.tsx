@@ -1226,9 +1226,11 @@ async function pollSlack($: EngineInterface, force: boolean) {
     if (server === null) return void (await put({ status: 'none', server: null, unruled: [] }))
     const unruled = await slackUnruled($, server)
     if (unruled.length > 0) return void (await put({ status: 'ok', server, unruled }))
-    const [session, now] = await Promise.all([$.session.id().catch(() => ''), $.clock.now()])
+    const [session, now, surfaces] = await Promise.all([$.session.id().catch(() => ''), $.clock.now(), $.session.surfaces().catch(() => [])])
     const poller = (await $.store.get('slackPoller').catch(() => undefined)) as SlackPoller | undefined
-    if (!force && !holdsLease(poller ?? null, session, now)) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, unruled }))
+    // 터미널이 없는 세션(SDK 등)은 알림을 띄울 곳이 없어 맡지 않는다: 맡으면 아무도 알리지 않게 된다
+    const canWatch = surfaces.includes('terminal')
+    if (!force && (!canWatch || !holdsLease(poller ?? null, session, now))) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, unruled }))
     await $.store.set('slackPoller', { session, at: now })
     if (force) await put({ status: 'loading', server, unruled })
     const me = await slackMe($, server)

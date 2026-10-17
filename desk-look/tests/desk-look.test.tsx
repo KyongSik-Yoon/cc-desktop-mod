@@ -3361,15 +3361,20 @@ describe('Slack 패널', () => {
   })
 
   // 엔진 흉내: 도구 목록·규칙·MCP 응답. rules 가 false 인 도구는 allow 규칙이 없다.
-  function slackEngine(on: On, inbox: () => string, rules: (tool: string) => boolean = () => true) {
+  // isClockMocked: 시계는 테스트가 mock.clock 으로 따로 돌린다.
+  function slackEngine(on: On, inbox: () => string, options: { rules?: (tool: string) => boolean; surfaces?: () => string[]; isClockMocked?: boolean; store?: Record<string, unknown> } = {}) {
+    const { rules = () => true, surfaces = () => ['terminal'] } = options
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
     const notified: Array<{ text: string; title?: string }> = []
     const text = (value: unknown, isError = false) => ({ value: { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }], isError } })
     // 받은 편지·내 UID·임대는 $.store 에
-    mock.store(on)
-    on('clock.now', () => ({ value: 1792200000 * 1000 }))
-    on('clock.after', () => new Promise(() => undefined) as never)
+    mock.store(on, options.store)
+    if (!options.isClockMocked) {
+      on('clock.now', () => ({ value: 1792200000 * 1000 }))
+      on('clock.after', () => new Promise(() => undefined) as never)
+    }
     on('session.id', () => ({ value: 'sess-1' }))
+    on('session.surfaces', () => ({ value: surfaces() }))
     on('ui.open', () => ({ value: { isPlaced: true } }))
     on('ui.toast', () => ({ value: undefined as never }))
     on('ui.notify', ($, e) => {
@@ -3398,7 +3403,7 @@ describe('Slack 패널', () => {
   }
 
   test('allow 규칙이 하나라도 없으면 Slack 을 부르지 않고 넣을 규칙을 보인다', KO, async ($, on) => {
-    const { calls } = slackEngine(on, () => search(), tool => !tool.endsWith('slack_send_message'))
+    const { calls } = slackEngine(on, () => search(), { rules: tool => !tool.endsWith('slack_send_message') })
     await $.command.run({ command: 'desk-slack', args: '' } as never)
     expect(calls).toEqual([])
     const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-slack', viewport: VIEWPORT, props: { title: 'Slack', isFocused: true, bodyColumns: 96 } as never })
@@ -3407,6 +3412,20 @@ describe('Slack 패널', () => {
     expect(drawn).toContain('\\"mcp__claude_ai_Slack__slack_send_message\\",')
     expect(drawn).not.toContain('slack_read_channel\\"')
     await pane.unmount()
+  })
+
+  test('1분 확인: 맡은 세션이 3분 넘게 소식이 없으면 넘겨받되, 터미널이 없는 세션은 맡지 않는다', KO, async ($, on) => {
+    let surfaces: string[] = []
+    const clock = mock.clock(on, { now: 1792200000 * 1000 })
+    const { calls } = slackEngine(on, () => search(), { surfaces: () => surfaces, isClockMocked: true, store: { slackPoller: { session: 'other', at: 0 } } })
+    on('command.register', () => ({ value: undefined as never }))
+    on('session.start', ($, e) => e as never)
+    await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+    await clock.advance(60_000)
+    expect(calls).toEqual([])
+    surfaces = ['terminal']
+    await clock.advance(60_000)
+    expect(calls.map(call => call.tool)).toEqual(['slack_read_user_profile', 'slack_search_public_and_private'])
   })
 
   test('목록 → 대화방 → 답장, 닫기는 두 번, 새 메시지는 알림과 칩', KO, async ($, on) => {
