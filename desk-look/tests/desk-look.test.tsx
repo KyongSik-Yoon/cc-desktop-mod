@@ -859,6 +859,24 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
   expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
 })
 
+test('질문 카드: 세션 상태 파일이 없어도 앱(bridge)에서 입력했으면 엔진 창', KO, async ($, on) => {
+  const scripts: (readonly string[])[] = []
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('clock.now', () => ({ value: 0 }))
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  on('tool.call', () => ({ result: 'engine' }) as never)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('fs.list', () => ({ value: [] }) as never)
+  on('process.run', ($, e) => {
+    scripts.push(e.argv)
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await $.prompt.submit({ text: '폰에서', origin: { kind: 'bridge' }, wait: false } as never)
+  expect(await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: '어느 쪽?', header: '', options: [{ label: 'a' }] }] } as never)).toEqual({ result: 'engine' })
+  expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
+})
+
 // Remote Control 이 붙은 세션: 세션 상태 파일(~/.claude/sessions/*.json)에 이 세션 id 와 bridgeSessionId 가 있다.
 // other 는 그 밖의 파일 읽기(없으면 undefined 로 실패).
 function bridgedSession(on: On, readPaths: string[] = [], other: (path: string) => string | undefined = () => undefined) {

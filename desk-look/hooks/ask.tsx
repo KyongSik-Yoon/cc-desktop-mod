@@ -24,8 +24,8 @@ const WAIT_ROUNDS = 40
 // 카드를 건드렸다는 표시(touched 파일). 기다리는 도구 훅은 그동안 바뀐 상태를 읽지 못해(훅이 시작할 때 값을 본다) 파일로 알린다.
 // 버튼이 매번 다른 글을 써서, 훅은 글이 바뀌었는지로 안다.
 // Remote Control(Claude 앱)은 surfaces() 에 잡히지 않는다(앱이 attach 하지 않는다). 카드를 띄우면 엔진이
-// 원격 응답 요청을 보내지 않아 앱에서 답할 수 없다. 그래서 세션 상태 파일에 bridgeSessionId 가 있으면
-// 마지막 사람 입력이 터미널에서 왔을 때만 카드를 띄우고, 카드를 HANDOVER_MS 동안 아무도 건드리지 않으면
+// 원격 응답 요청을 보내지 않아 앱에서 답할 수 없다. 그래서 마지막 사람 입력이 앱에서 왔으면 엔진 창이고,
+// 세션 상태 파일에 bridgeSessionId 가 있으면 마지막 사람 입력이 터미널에서 왔을 때만 카드를 띄우고, 카드를 HANDOVER_MS 동안 아무도 건드리지 않으면
 // (자리를 떠 앱으로 보는 중) 엔진 창에 넘겨 앱에도 묻게 한다. 그동안은 HANDOVER_ROUND_S 초마다 돌아와 살핀다.
 export const HANDOVER_MS = 60_000
 const HANDOVER_ROUND_S = 5
@@ -120,9 +120,12 @@ export function registerAsk(on: On, notify: boolean) {
     const surfaces = await $.session.surfaces()
     if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return next(e)
     if ((await read($, asking)) !== null) return next(e)
+    // 앱(bridge)에서 온 입력이면 세션 상태 파일 없이도 Remote Control 이다. 파일은 엔진이 지우기도 한다.
+    const origin = await read($, promptOrigin)
+    if (origin === 'bridge') return next(e)
     const sessionId = await $.session.id().catch(() => '')
     const isRemote = await isBridged($, sessionId).catch(() => false)
-    if (isRemote && (await read($, promptOrigin)) !== 'composer') return next(e)
+    if (isRemote && origin !== 'composer') return next(e)
 
     const made = await $.process.run(['mktemp', '-d'], { timeoutMs: 3000 }).catch(() => null)
     const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
