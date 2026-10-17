@@ -150,6 +150,24 @@ export type AsanaProjects = { status: 'loading' | 'ok' | 'failed'; projects: Asa
 // 펼친 프로젝트의 열린 태스크(섹션은 task.section). isPartial: 읽는 쪽 수 한도에 걸려 뒤가 더 있다.
 export type AsanaProjectView = { project: AsanaProject; status: 'loading' | 'ok' | 'failed'; tasks: AsanaTask[]; isPartial: boolean; error?: string }
 
+// /desk-slack: 엔진에 붙은 Slack MCP 서버(claude.ai 커넥터)로 읽는 나에게 온 DM·그룹 DM.
+export type SlackServer = { name: string }
+export type SlackPerson = { id: string; name: string }
+// 검색으로 받은 메시지 하나(남이 나에게 보낸 것). ts 는 Slack 의 "1792131860.241069".
+export type SlackMessage = { channel: string; kind: 'dm' | 'group'; participants: SlackPerson[]; from: SlackPerson; ts: string; text: string; permalink: string | null }
+// 방 안 기록의 글 하나. at 은 Slack 이 적어 준 시각 글자.
+export type SlackPost = { ts: string; from: SlackPerson; at: string; text: string }
+// 대화방. title 은 나를 뺀 참가자, lastFrom 은 마지막 글쓴이(내 답장이면 null), link 는 Slack 에서 여는 채널 주소.
+export type SlackRoom = { id: string; kind: 'dm' | 'group'; title: string; lastTs: string; lastFrom: string | null; preview: string; unread: number; link: string | null }
+// $.store 에 두는 받은 편지(세션을 넘어 남고 떠 있는 세션끼리 같이 본다). watermark: 마지막으로 넣은 메시지 ts.
+// 닫은 방은 rooms 에서 지운다: 워터마크가 앞으로만 가니 새 메시지가 와야 다시 생긴다.
+export type SlackInbox = { watermark: string | null; notified: string | null; rooms: Record<string, SlackRoom> }
+// 받은 편지를 읽는 세션(임대). at 은 마지막으로 읽은 시각(ms).
+export type SlackPoller = { session: string; at: number }
+// status: none 은 Slack 서버가 없음. unruled: allow 규칙이 없는 도구(있으면 Slack 을 부르지 않는다).
+export type SlackState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: SlackServer | null; unruled: string[]; inbox: SlackInbox; error?: string }
+export type SlackView = { channel: string; status: 'loading' | 'ok' | 'failed'; posts: SlackPost[]; error?: string }
+
 // diff 패널의 범위: 커밋 안 한 변경, 기본 브랜치에서 갈라진 뒤 전부, 커밋 하나씩.
 export type DiffScope = 'uncommitted' | 'branch' | 'commits'
 export type CommitInfo = { sha: string; short: string; subject: string; author: string; ago: string }
@@ -232,6 +250,9 @@ declare module 'claude-code' {
       asanaTab: AsanaTab
       asanaProjects: AsanaProjects | null
       asanaProject: AsanaProjectView | null
+      // /desk-slack: 받은 편지(store 를 비춘 것)와 펼친 대화방(null 이면 목록).
+      slack: SlackState | null
+      slackView: SlackView | null
       // /desk-diff 패널이 보여 주는 범위와 그 diff.
       diffView: DiffView
       // /desk-agents 패널: 이 세션의 에이전트, 상세로 연 에이전트 id(목록이면 null)와 그 대화, 경과 시간 시계(ms).

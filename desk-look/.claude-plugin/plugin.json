@@ -1,7 +1,7 @@
 {
   "name": "desk-look",
-  "version": "0.31.1",
-  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, Asana tasks, diff, context, background tasks and Markdown preview panes",
+  "version": "0.32.0",
+  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, Asana tasks, Slack DMs, diff, context, background tasks and Markdown preview panes",
   "keywords": [
     "claude-code",
     "claude-code-mod",
@@ -18,7 +18,8 @@
     "pull-request",
     "github",
     "gitlab",
-    "asana"
+    "asana",
+    "slack"
   ],
   "author": {
     "name": "KyongSik-Yoon",
@@ -93,6 +94,17 @@
       "type": "string",
       "title": "Preview new documents",
       "description": "Open a Markdown document Claude writes in the preview pane when the turn ends (files under .claude/ never open by themselves). off leaves it to the ◫ chip and /desk-preview",
+      "options": [
+        "on",
+        "off"
+      ],
+      "default": "on",
+      "required": false
+    },
+    "slackNotify": {
+      "type": "string",
+      "title": "Slack notification",
+      "description": "Send a notification when a new Slack DM or group DM arrives (checked once a minute while the /desk-slack tools have allow rules). off keeps the pane and the ✉ chip without notifications",
       "options": [
         "on",
         "off"

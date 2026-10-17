@@ -10,12 +10,13 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 **한눈에 보기**
 
 - **데스크톱 앱처럼 읽히는 대화 기록**: 프롬프트 말풍선, 폭을 채우는 표·mermaid 그림·알림 상자가 든 데스크톱 스타일 마크다운, 한 줄로 접혀 눌러서 펴는 도구 호출, 서브에이전트마다 카드, 계획 카드, 질문 카드, 턴마다 고친 파일 카드
-- **입력창 위 상태 띠**: 저장소·브랜치·`+N −M`, 그리고 PR 체크·컨텍스트 사용량·도는 백그라운드 작업 칩과 할 일 체크리스트
-- **오른쪽 패널 일곱 개**, 명령이나 칩을 눌러 엶: diff(`/desk-diff`), 백그라운드 작업(`/desk-tasks`), PR(`/desk-pr`), 내 Asana 태스크(`/desk-asana`), 마크다운 미리보기(`/desk-preview`), 컨텍스트·사용 한도(`/desk-context`), 최근 세션(`/desk-sessions`)
+- **입력창 위 상태 띠**: 저장소·브랜치·`+N −M`, 그리고 PR 체크·컨텍스트 사용량·도는 백그라운드 작업·안 읽은 Slack 메시지 칩과 할 일 체크리스트
+- **오른쪽 패널 여덟 개**, 명령이나 칩을 눌러 엶: diff(`/desk-diff`), 백그라운드 작업(`/desk-tasks`), PR(`/desk-pr`), 내 Asana 태스크(`/desk-asana`), 내 Slack DM(`/desk-slack`), 마크다운 미리보기(`/desk-preview`), 컨텍스트·사용 한도(`/desk-context`), 최근 세션(`/desk-sessions`)
 - **diff 줄 댓글**: `/desk-diff` 에서 줄 번호를 눌러 줄·범위에 댓글을 달면, 다음 프롬프트와 함께 Claude 에게 감
 - **마크다운 미리보기**: Claude 가 한 턴에 쓴 문서는 턴이 끝나면 미리보기 패널에 저절로 열림
 - **GitHub 와 GitLab**: PR 은 `gh`, MR 은 `glab` 으로 읽음
 - **Asana**: 내게 할당된 태스크, 워크스페이스 검색, 내 프로젝트의 섹션별 태스크, 댓글을 보고 댓글을 닮. Claude Code 에 이미 연결된 Asana MCP 서버로
+- **Slack**: 나에게 온 DM·그룹 DM 을 대화방으로 보고 답장, 새 메시지는 알림. Claude Code 에 이미 연결된 Slack MCP 서버로
 - **영어·한국어** 표시, 기본은 Claude Code 언어 설정을 따름
 
 ## 명령
@@ -26,6 +27,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 | `/desk-tasks [번호]` | 백그라운드 작업 패널: 에이전트, 백그라운드 셸, 모니터 |
 | `/desk-pr` | 지금 브랜치의 PR·MR, 머지 버튼 |
 | `/desk-asana` | 내게 할당된 Asana 태스크·워크스페이스 검색·내 프로젝트의 섹션별 태스크: 상세·댓글·댓글 달기·담당자·드롭다운 필드 |
+| `/desk-slack` | 나에게 온 Slack DM·그룹 DM 을 대화방으로: 최근 대화·답장·닫기 |
 | `/desk-preview [파일]` | 마크다운 미리보기 패널: 문서를 대화와 같은 모양으로 |
 | `/desk-context` | 컨텍스트 내역, 사용 한도, 세션 비용 |
 | `/desk-sessions [번호]` | 프로젝트별 최근 세션과 검색, 세션 이동 |
@@ -132,6 +134,26 @@ Claude Code 에 이미 연결된 Asana MCP 서버로 내 열린 태스크를 읽
 
   이 규칙은 Claude 가 부르는 같은 도구(댓글 달기·태스크 바꾸기 포함)도 허용한다
 
+### `/desk-slack`: Slack DM
+
+남이 나에게 보낸 DM·그룹 DM 을 Slack 클라이언트처럼 대화방으로 모아 둔다. Claude Code 에 이미 연결된 Slack MCP 서버(claude.ai Slack 커넥터)로 읽는다(따로 토큰·설정 없음). 채널 메시지·@멘션·스레드 답글은 넣지 않는다. Slack 서버가 없으면 `/mcp` 에서 Slack 을 연결하라고 알린다.
+
+- 목록은 대화방마다 한 줄, 최근 것부터: desk-look 에서 아직 열지 않은 메시지가 있으면 `●`, 참가자, 마지막 메시지, 얼마 전인지. 처음에는 최근 3일 치를 읽은 것으로 채운다
+- 대화방을 누르면 양쪽 대화 최근 30개. 맨 아래 칸에 쓰고 Enter 로 그 방에 답장한다. `↻` 다시 읽기, `← 대화방` 은 목록으로
+- `✕` 는 대화방 닫기(5초 안에 한 번 더 눌러야 한다). 그 방에 새 메시지가 오면 다시 생긴다
+- `Claude에게 맡기기` 는 최근 대화를 입력창에 채우고, `Slack에서 열기` 는 Slack 에서 연다
+- Claude Code 세션이 하나라도 떠 있으면 1분마다 새 메시지를 확인하고, 대화방마다 알림을 하나씩 보낸다(알림 채널로, `slackNotify` 로 끔). 입력창 띠의 `✉ N` 칩이 안 읽은 수이고 누르면 패널이 열린다. 세션이 여럿이면 하나만 확인하고 나머지는 그 결과를 같이 본다
+- 안 읽음은 desk-look 안에서만 센다: 여기서 열어도 Slack 에서 읽음이 되지 않고, Slack 에서 읽어도 여기서는 지워지지 않는다
+- Slack 커넥터는 이걸로 보낸 메시지 끝에 "Sent using Claude" 줄을 붙인다
+- 네 Slack 도구가 모두 `~/.claude/settings.json` 의 `permissions.allow` 에 있을 때만 Slack 을 부른다. 그 전에는 아무것도 부르지 않고(확인·알림도 없음) 패널이 빠진 규칙을 보여 준다. 확인은 권한 창에 답할 사람이 없는 백그라운드에서 돌기 때문이다:
+
+  ```json
+  "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_channel",
+  "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_read_user_profile"
+  ```
+
+  이 규칙은 Claude 가 부르는 같은 도구도 허용한다: Claude 가 Slack 을 보낼 때도 묻지 않는다
+
 ### `/desk-preview [파일]`: 마크다운 미리보기
 
 ![/desk-preview 패널: front matter 상자, 경고 상자, 표, mermaid 순서도](docs/preview.png)
@@ -188,6 +210,7 @@ Claude Code 터미널 세션의 프롬프트에서:
 | `askNotify` | `on` (기본), `off` | 질문 카드가 뜰 때 알림. 엔진 창은 뜰 때 알림을 보내지만 카드가 뜬 동안엔 엔진이 보내지 않아서 카드가 직접 보냅니다 |
 | `prBar` | `on` (기본), `off` | 입력창 띠 옆 PR 칩. 세션을 시작할 때와 턴이 끝날 때 지금 브랜치의 PR 을 `gh`(GitHub)·`glab`(GitLab)으로 읽음(30초에 한 번까지). 열린 PR 의 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴과 상관없이 15초마다 다시 읽고, 체크 상태가 그대로면 간격을 두 배씩 늘려 2분마다까지(runner 를 기다리는 job 처럼 끝나지 않는 체크가 계속 묻지 않게). 둘 다 없거나 어느 쪽 저장소도 아니면 숨기고 그 브랜치에서는 다시 묻지 않음(네트워크 오류는 다음 턴에 다시 읽음). `/desk-pr` 패널은 설정과 상관없이 열 수 있음 |
 | `previewAutoOpen` | `on` (기본), `off` | Claude 가 쓴 마크다운 문서를 턴이 끝날 때 미리보기 패널에 엶. `off` 면 `◫` 칩과 `/desk-preview` 로만 |
+| `slackNotify` | `on` (기본), `off` | 새 Slack DM 이 오면 알림(`/desk-slack` 참고). `off` 여도 패널과 `✉` 칩을 위한 확인은 계속 |
 | `contextChip` | `auto` (기본), `always`, `off` | 입력창 띠 옆 컨텍스트 칩. `auto` 는 50% 이상일 때만(상태 줄이나 다른 플러그인이 이미 늘 보여 주는 경우가 많아서), `always` 는 늘, `off` 는 끔. `/desk-context` 패널은 설정과 상관없이 열 수 있음 |
 
 ## 업데이트

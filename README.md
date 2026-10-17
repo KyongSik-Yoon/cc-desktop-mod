@@ -10,12 +10,13 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 **At a glance**
 
 - **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
-- **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage and running background tasks, and a task checklist
-- **Seven side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), your Asana tasks (`/desk-asana`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage, running background tasks and unread Slack messages, and a task checklist
+- **Eight side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), your Asana tasks (`/desk-asana`), your Slack DMs (`/desk-slack`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
 - **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
 - **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
 - **Asana**: the tasks assigned to you, a search across the workspace and your projects' tasks by section, their comments, and adding a comment, through the Asana MCP server Claude Code already has connected
+- **Slack**: the DMs and group DMs sent to you as conversations, replying in them, and a notification when a new one arrives, through the Slack MCP server Claude Code already has connected
 - **English or Korean** labels, following Claude Code's own language setting by default
 
 ## Commands
@@ -26,6 +27,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
 | `/desk-pr` | The current branch's pull request or merge request, with a merge button |
 | `/desk-asana` | The Asana tasks assigned to you, a search across the workspace, or your projects' tasks by section: details, comments, adding a comment, assignee and dropdown fields |
+| `/desk-slack` | The Slack DMs and group DMs sent to you, as conversations: recent messages, replying, closing |
 | `/desk-preview [file]` | Markdown preview pane: a document drawn like the transcript |
 | `/desk-context` | Context breakdown, usage limits and session cost |
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
@@ -132,6 +134,26 @@ Your open Asana tasks, read through the Asana MCP server Claude Code already has
 
   The rule allows the same tools for Claude too, including adding comments and changing tasks
 
+### `/desk-slack`: Slack DMs
+
+The DMs and group DMs other people sent you, kept as conversations like the Slack client, read through the Slack MCP server Claude Code already has connected (the claude.ai Slack connector; no token or setting of its own). Messages in channels, @mentions and thread replies are not included. With no Slack server, the pane says to connect Slack in `/mcp`.
+
+- The list shows one row per conversation, most recent first: `●` when it has messages you have not opened in desk-look, the people in it, the last message and how long ago. The first time, it fills in the last 3 days as already read
+- Click a conversation for its latest 30 messages, both sides. Write in the box at the bottom and press Enter to reply there. `↻` reloads, `← Conversations` goes back
+- `✕` closes a conversation (a second press within 5 seconds). It comes back when a new message arrives in it
+- `Hand to Claude` fills the prompt with the conversation's recent messages; `Open in Slack` opens it in Slack
+- While any Claude Code session is running, desk-look checks for new messages once a minute and sends a notification per conversation through your notification channel (`slackNotify` turns that off). The `✉ N` chip in the band shows the unread count and opens the pane. With several sessions open, one of them checks and the others share what it finds
+- "Unread" is desk-look's own: opening a conversation here does not mark it read in Slack, and reading it in Slack does not clear it here
+- The Slack connector adds a "Sent using Claude" line to messages sent through it
+- desk-look calls Slack only while all four of its Slack tools have an allow rule in `permissions.allow` in `~/.claude/settings.json`; until then it calls nothing (no checking, no notifications) and the pane lists the missing rules. The check runs in the background, where nobody could answer a permission prompt:
+
+  ```json
+  "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_channel",
+  "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_read_user_profile"
+  ```
+
+  The rule allows the same tools for Claude too: Claude can then send Slack messages without asking
+
 ### `/desk-preview [file]`: Markdown preview
 
 ![The /desk-preview pane: a front matter box, a warning box, a table and a mermaid flowchart](docs/preview.png)
@@ -188,6 +210,7 @@ Search for `desk-look` in `/config` to find these options.
 | `askNotify` | `on` (default), `off` | Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself |
 | `prBar` | `on` (default), `off` | The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds, and, while a check (GitLab: a pipeline job) of an open PR is still running, between turns too: every 15 seconds, doubling up to every 2 minutes while nothing changes (a check that never reports, such as one waiting for a runner, would otherwise keep asking); without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting |
 | `previewAutoOpen` | `on` (default), `off` | Open a Markdown document Claude writes in the preview pane when the turn ends. `off` leaves it to the `◫` chips and `/desk-preview` |
+| `slackNotify` | `on` (default), `off` | Notify when a new Slack DM arrives (see `/desk-slack`). `off` keeps checking for the pane and the `✉` chip, without notifications |
 | `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
 
 ## Update

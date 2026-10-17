@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, AsanaDetail, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
@@ -48,6 +48,32 @@ import {
 import type { AsanaCall } from './asana'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
+import {
+  FIRST_FILL_S,
+  closeRoom,
+  emptyInbox,
+  findSlackServer,
+  historyCall,
+  holdsLease,
+  inboxCall,
+  mergeInbox,
+  notices,
+  parseHistory,
+  parseMe,
+  parseSearch,
+  profileCall,
+  readRoom,
+  resultText,
+  roomList,
+  sendCall,
+  sendProblem,
+  slackPrompt,
+  slackText,
+  slackTools,
+  tsCompare,
+  unreadCount,
+} from './slack'
+import type { SlackCall } from './slack'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
 
 export { cellWidth } from './markdown'
@@ -73,7 +99,8 @@ const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
 const AGENTS_PANE = 'desk-tasks'
 const ASANA_PANE = 'desk-asana'
-const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE, ASANA_PANE])
+const SLACK_PANE = 'desk-slack'
+const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE, ASANA_PANE, SLACK_PANE])
 // /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
 const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
@@ -144,6 +171,13 @@ let asanaQuery = ''
 let asanaSent = 0
 let asanaFindText = ''
 let asanaFindRound = 0
+// /desk-slack: 받은 편지(store 를 비춘 것)와 펼친 대화방. 답장 글은 Input 이 갖고, 보내면 키를 바꿔 비운다.
+const slack = atom({ plugin: 'desk-look', key: 'slack' } as const, null as SlackState | null)
+const slackView = atom({ plugin: 'desk-look', key: 'slackView' } as const, null as SlackView | null)
+let slackDraft = ''
+let slackSent = 0
+let slackWatch: Timer | null = null
+let slackNotify = true
 // /desk-fold 로 접어 둔 패널. 펴면 비운다.
 const folded = atom({ plugin: 'desk-look', key: 'folded' } as const, null as FoldedPane[] | null)
 
@@ -1133,6 +1167,145 @@ async function armAssign($: EngineInterface, server: AsanaServer, task: AsanaDet
   await changeAsana($, server, task, { assignee: user.gid, name: user.name })
 }
 
+// /desk-slack 의 Slack 호출(slack.ts 참고). 엔진이 거절하면(서버가 끊김, 권한) 던지는 대신 오류 글로 돌려준다.
+const SLACK_POLL_MS = 60_000
+const CLOSE_ARM_MS = 5000
+
+async function callSlack($: EngineInterface, server: SlackServer, call: SlackCall, key: string) {
+  try {
+    return resultText(await $.mcp.call(server.name, call.tool, call.args), key)
+  } catch (error) {
+    return { ok: false as const, error: (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '' }
+  }
+}
+
+async function findSlack($: EngineInterface): Promise<SlackServer | null> {
+  const tools = await $.tool.list().catch(() => [])
+  return findSlackServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
+}
+
+// allow 규칙이 없는 Slack 도구. 하나라도 있으면 Slack 을 부르지 않는다(받은 편지 확인은 타이머라 물어볼 사람이 없다).
+async function slackUnruled($: EngineInterface, server: SlackServer) {
+  const tools = slackTools(server)
+  const verdicts = await Promise.all(tools.map(tool => $.tool.check({ tool, input: {} }).catch(() => null)))
+  return tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
+}
+
+// $.store 는 떠 있는 세션끼리 같이 본다(2.1.302 실측). 모양이 다르면 빈 받은 편지.
+async function readInbox($: EngineInterface): Promise<SlackInbox> {
+  const kept = (await $.store.get('slackInbox').catch(() => undefined)) as SlackInbox | undefined
+  return kept && typeof kept === 'object' && kept.rooms && typeof kept.rooms === 'object' ? kept : emptyInbox()
+}
+
+async function saveInbox($: EngineInterface, inbox: SlackInbox) {
+  await $.store.set('slackInbox', inbox)
+  await update($, slack, (state): SlackState => ({ status: state?.status ?? 'ok', server: state?.server ?? null, unruled: state?.unruled ?? [], inbox, error: state?.error }))
+}
+
+// 내 Slack UID. 서버마다 한 번 읽어 둔다.
+async function slackMe($: EngineInterface, server: SlackServer): Promise<string | null> {
+  const kept = (await $.store.get('slackMe').catch(() => undefined)) as { server?: string; id?: string } | undefined
+  if (kept?.server === server.name && typeof kept.id === 'string') return kept.id
+  const got = await callSlack($, server, profileCall(), 'result')
+  const me = got.ok ? parseMe(got.text) : null
+  if (me) await $.store.set('slackMe', { server: server.name, id: me })
+  return me
+}
+
+let slackPoll: Promise<void> | null = null
+
+// 받은 편지 확인. 타이머(force false)는 맡은 세션 하나만 Slack 을 읽고 나머지는 store 만 비춘다.
+// 패널을 열거나 ↻(force)는 맡은 세션이 아니어도 읽는다. 알림은 store 의 notified 뒤의 것만(세션끼리 겹치지 않게).
+async function pollSlack($: EngineInterface, force: boolean) {
+  if (slackPoll) return slackPoll
+  slackPoll = (async () => {
+    const shown = await read($, slack)
+    const server = shown?.server ?? (await findSlack($))
+    const kept = await readInbox($)
+    const put = (state: Omit<SlackState, 'inbox'>, inbox = kept) => update($, slack, (): SlackState => ({ ...state, inbox }))
+    if (server === null) return void (await put({ status: 'none', server: null, unruled: [] }))
+    const unruled = await slackUnruled($, server)
+    if (unruled.length > 0) return void (await put({ status: 'ok', server, unruled }))
+    const [session, now] = await Promise.all([$.session.id().catch(() => ''), $.clock.now()])
+    const poller = (await $.store.get('slackPoller').catch(() => undefined)) as SlackPoller | undefined
+    if (!force && !holdsLease(poller ?? null, session, now)) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, unruled }))
+    await $.store.set('slackPoller', { session, at: now })
+    if (force) await put({ status: 'loading', server, unruled })
+    const me = await slackMe($, server)
+    if (me === null) return void (await put({ status: 'failed', server, unruled, error: T.slackNoUser }))
+    const nowS = Math.floor(now / 1000)
+    const afterS = kept.watermark === null ? nowS - FIRST_FILL_S : Number(kept.watermark.split('.')[0])
+    const got = await callSlack($, server, inboxCall(me, afterS), 'results')
+    if (!got.ok) return void (await put({ status: 'failed', server, unruled, error: got.error }))
+    // 그사이 다른 세션·패널이 방을 닫았을 수 있어 넣기 바로 앞에서 다시 읽는다
+    const latest = await readInbox($)
+    const merged = mergeInbox(latest, parseSearch(got.text), me, nowS)
+    const fresh = merged.fresh.filter(message => latest.notified === null || tsCompare(message.ts, latest.notified) > 0)
+    const inbox: SlackInbox = { ...merged.inbox, notified: fresh.length > 0 ? fresh[fresh.length - 1]!.ts : (latest.notified ?? merged.inbox.watermark) }
+    await $.store.set('slackInbox', inbox)
+    await put({ status: 'ok', server, unruled }, inbox)
+    if (!slackNotify) return
+    for (const notice of notices(fresh, inbox, T.slackMore)) {
+      void $.ui.notify(notice.text, { title: notice.title }).catch(() => undefined)
+    }
+  })().finally(() => {
+    slackPoll = null
+  })
+  return slackPoll
+}
+
+async function openSlack($: EngineInterface) {
+  const shown = pollSlack($, true).catch(() => undefined)
+  await $.ui.open({ id: SLACK_PANE, title: 'Slack', focus: true })
+  await shown
+}
+
+// 방을 열면(다시 읽어도) 기록을 읽고 그 방 안 읽음을 지운다.
+async function openSlackRoom($: EngineInterface, server: SlackServer, channel: string) {
+  await update($, slackView, (view): SlackView => ({ channel, status: 'loading', posts: view?.channel === channel ? view.posts : [] }))
+  const got = await callSlack($, server, historyCall(channel), 'messages')
+  const posts = got.ok ? parseHistory(got.text) : []
+  await update($, slackView, (view): SlackView | null =>
+    view?.channel !== channel ? view : got.ok ? { channel, status: 'ok', posts } : { channel, status: 'failed', posts: view.posts, error: got.error },
+  )
+  if (!got.ok) return
+  const me = (await $.store.get('slackMe').catch(() => undefined)) as { id?: string } | undefined
+  await saveInbox($, readRoom(await readInbox($), channel, posts, me?.id ?? ''))
+}
+
+async function closeSlackView($: EngineInterface) {
+  slackDraft = ''
+  await update($, slackView, () => null)
+}
+
+async function sendSlack($: EngineInterface, server: SlackServer, channel: string, value: string) {
+  const text = value.trim()
+  if (text === '') return
+  const call = sendCall(channel, text)
+  const problem = await $.mcp.call(server.name, call.tool, call.args).then(sendProblem, (error: unknown) => (error instanceof Error ? error.message : String(error)).split('\n')[0] || 'error')
+  if (problem !== null) {
+    $.ui.toast(T.slackSendFailed(problem))
+    return
+  }
+  slackDraft = ''
+  slackSent++
+  $.ui.toast(T.slackSent)
+  await openSlackRoom($, server, channel)
+}
+
+// ✕ 는 두 번 눌러 닫는다(Asana 담당자 넘기기와 같은 무장).
+async function armSlackClose($: EngineInterface, channel: string, isArmed: boolean) {
+  const key = `slack:close:${channel}`
+  if (!isArmed) {
+    await update($, open, state => ({ ...state, [key]: true }))
+    $.clock.after(CLOSE_ARM_MS, () => void update($, open, state => ({ ...state, [key]: false })))
+    return
+  }
+  await update($, open, state => ({ ...state, [key]: false }))
+  await saveInbox($, closeRoom(await readInbox($), channel))
+  if ((await read($, slackView))?.channel === channel) await closeSlackView($)
+}
+
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
 async function findBase($: EngineInterface) {
   const opts = { timeoutMs: 8000 }
@@ -1509,6 +1682,23 @@ function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentR
     node: (
       <Button key="agents-chip" plain dimColor onPress={() => void openAgents($)}>
         <Text color={COLORS.clay}>⋯</Text>
+        {` ${label}`}
+      </Button>
+    ),
+  }
+}
+
+// 아래턱의 "✉ 3": 안 읽은 Slack 메시지 수. 누르면 /desk-slack 패널.
+function slackChip(els: Els, $: EngineInterface, state: SlackState | null) {
+  const count = state ? unreadCount(state.inbox) : 0
+  if (count === 0) return null
+  const { Text, Button } = els
+  const label = String(count)
+  return {
+    width: 2 + cellWidth(label),
+    node: (
+      <Button key="slack-chip" plain dimColor onPress={() => void openSlack($)}>
+        <Text color={COLORS.accent}>✉</Text>
         {` ${label}`}
       </Button>
     ),
@@ -2080,6 +2270,7 @@ export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
   registerAsk(on, options.askNotify !== 'off')
+  slackNotify = options.slackNotify !== 'off'
   const isPreviewAuto = options.previewAutoOpen !== 'off'
 
   on('session.start', async ($, e, next) => {
@@ -2114,6 +2305,11 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await $.command.register({
+      name: 'desk-slack',
+      description: T.cmdSlack,
+      immediate: true,
+    })
+    await $.command.register({
       name: 'desk-context',
       description: T.cmdContext,
       immediate: true,
@@ -2140,6 +2336,12 @@ export const register: Register = (on, options) => {
     // 테마를 바꾸면 3초 안에 말풍선·아래턱 색이 따라간다. 바뀌지 않았으면 다시 그리지 않는다.
     themeWatch?.cancel()
     themeWatch = $.clock.every(THEME_POLL, () => void refreshSurface($).catch(() => undefined))
+    // 받은 편지: 칩은 store 에서 바로, Slack 확인은 1분마다(MCP 서버는 시작 뒤에 붙는다).
+    void readInbox($)
+      .then(inbox => update($, slack, (state): SlackState => state ?? { status: 'loading', server: null, unruled: [], inbox }))
+      .catch(() => undefined)
+    slackWatch?.cancel()
+    slackWatch = $.clock.every(SLACK_POLL_MS, () => void pollSlack($, false).catch(() => undefined))
     void refreshRuns($).catch(() => undefined)
     void refreshImages($).catch(() => undefined)
     void refreshAgents($).catch(() => undefined)
@@ -2320,6 +2522,12 @@ export const register: Register = (on, options) => {
       await patchAgent($, id, agent => ({ tokens: stepTokens(used), model: agent.model ?? used.model }))
     }
     return response
+  })
+
+  on('command.run', { command: 'desk-slack' }, async $ => {
+    await openSlack($)
+    const state = await read($, slack)
+    return { text: state?.status === 'none' ? T.slackNoServer : T.slackOpened }
   })
 
   on('command.run', { command: 'desk-asana' }, async $ => {
@@ -2574,7 +2782,8 @@ export const register: Register = (on, options) => {
     const prState = showPr ? prChip(els, $, await read($, pr)) : null
     const agentState = agentsChip(els, $, await read($, agents))
     const notesState = commentsChip(els, $, await read($, lineComments))
-    const extras = [notesState, agentState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
+    const slackState = slackChip(els, $, await read($, slack))
+    const extras = [notesState, agentState, slackState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
     const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
     const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
     // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
@@ -3343,6 +3552,122 @@ export const register: Register = (on, options) => {
               </Box>
             )
           })}
+      </Box>
+    )
+  })
+
+  // Slack 패널: 나에게 온 DM·그룹 DM 을 대화방으로(최근 방부터), 하나를 누르면 그 방의 최근 대화와 답장.
+  on('ui.render', { component: 'Pane', requestId: SLACK_PANE }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button, Input, Link } = els
+    const [state, view, armed, now, me] = await Promise.all([read($, slack), read($, slackView), read($, open), $.clock.now(), $.store.get('slackMe').catch(() => undefined)])
+    const columns = Math.max(24, e.props.bodyColumns)
+    const server = state?.server ?? null
+    const myId = (me as { id?: string } | undefined)?.id ?? ''
+    const when = (ts: string) => ago(Number(ts.split('.')[0]) * 1000, now)
+    const closer = (room: SlackRoom) => {
+      const isArmed = armed[`slack:close:${room.id}`] ?? false
+      return <Button key={`slack-close-${room.id}`} plain dimColor={!isArmed} label={isArmed ? T.slackCloseConfirm : '✕'} onPress={() => void armSlackClose($, room.id, isArmed)} />
+    }
+
+    const room = view === null ? undefined : state?.inbox.rooms[view.channel]
+    if (view !== null && server !== null) {
+      const title = room?.title ?? view.channel
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          <Box columnGap={1}>
+            <Button key="slack-back" plain dimColor label={T.slackBack} onPress={() => void closeSlackView($)} />
+            <Button key="slack-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openSlackRoom($, server, view.channel)} />
+          </Box>
+          <Box flexDirection="column">
+            <Text color={COLORS.text} weight="semibold">
+              {title}
+            </Text>
+            <Box columnGap={2}>
+              {room && <Button key="slack-claude" plain label={T.handToClaude} onPress={() => void fillPrompt($, slackPrompt(room, view.posts, T.slackPromptHead(title)))} />}
+              {room?.link && <Link href={room.link}>{T.slackOpenOn}</Link>}
+              {room && closer(room)}
+            </Box>
+          </Box>
+          {view.status === 'failed' && <Text color={COLORS.danger}>{T.slackFailed(view.error ?? '')}</Text>}
+          {view.posts.length === 0 && view.status === 'loading' && <Text color={COLORS.muted}>{T.slackLoading}</Text>}
+          {view.posts.map(post => (
+            <Box key={`slack-post-${post.ts}`} flexDirection="column">
+              <Box columnGap={1}>
+                <Text color={post.from.id === myId ? COLORS.muted : COLORS.accent}>{post.from.id === myId ? T.slackMe : post.from.name}</Text>
+                <Text color={COLORS.muted}>{when(post.ts)}</Text>
+              </Box>
+              <Text color={COLORS.text}>{slackText(post.text)}</Text>
+            </Box>
+          ))}
+          <Input
+            key={`slack-write-${view.channel}-${slackSent}`}
+            label={T.slackReplyLabel}
+            placeholder={T.slackReplyPlaceholder(title)}
+            rows={COMMENT_ROWS}
+            value={slackDraft}
+            submitLabel={T.slackSend}
+            autoFocus
+            onInput={value => (slackDraft = value)}
+            onSubmit={value => void sendSlack($, server, view.channel, value)}
+          />
+        </Box>
+      )
+    }
+
+    const rooms = state ? roomList(state.inbox) : []
+    const unread = state ? unreadCount(state.inbox) : 0
+    const isLoading = state === null || state.status === 'loading'
+    const head = (
+      <Box columnGap={1}>
+        <Text color={COLORS.text} weight="semibold">
+          {T.slackInbox(rooms.length, unread)}
+        </Text>
+        <Button key="slack-refresh" plain dimColor label={isLoading ? '…' : '↻'} onPress={() => void pollSlack($, true).catch(() => undefined)} />
+      </Box>
+    )
+    const unruled = (state?.unruled.length ?? 0) > 0 && (
+      <Box flexDirection="column">
+        <Text color={COLORS.warning}>{T.slackUnruled}</Text>
+        <Text color={COLORS.muted}>{state?.unruled.map(tool => `"${tool}",`).join('\n')}</Text>
+      </Box>
+    )
+    const message =
+      state?.status === 'none'
+        ? T.slackNoServer
+        : state?.status === 'failed'
+          ? T.slackFailed(state.error ?? '')
+          : rooms.length === 0
+            ? isLoading
+              ? T.slackLoading
+              : T.slackEmpty
+            : null
+    // 줄: "● 이름  미리보기  3분 전" 한 줄 전체가 버튼, 끝에 ✕(닫기). 이름은 열의 1/4, 나머지를 미리보기에.
+    const nameRoom = Math.max(8, Math.floor(columns / 4))
+    const rows = rooms.map(item => {
+      const age = when(item.lastTs)
+      const lead = item.lastFrom === null ? `${T.slackMe}: ` : item.kind === 'group' ? `${item.lastFrom}: ` : ''
+      const room = Math.max(8, columns - nameRoom - cellWidth(age) - 10)
+      return (
+        <Box key={`slack-row-${item.id}`} columnGap={1}>
+          {rowButton(
+            els,
+            { key: `slack-room-${item.id}`, dimColor: item.unread === 0, onPress: () => void (server && openSlackRoom($, server, item.id)) },
+            `${item.unread > 0 ? '●' : ' '} ${clip(item.title, nameRoom)}`,
+            <Text color={COLORS.muted}>{`  ${clip(`${lead}${item.preview}`, room)}`}</Text>,
+            <Text color={COLORS.muted}>{` ${age}`}</Text>,
+          )}
+          {closer(item)}
+        </Box>
+      )
+    })
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        {head}
+        {unruled}
+        {message !== null && <Text color={state?.status === 'failed' ? COLORS.danger : COLORS.muted}>{message}</Text>}
+        {rows.length > 0 && <Box flexDirection="column">{rows}</Box>}
       </Box>
     )
   })
