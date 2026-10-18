@@ -1243,6 +1243,46 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   await row.unmount()
 })
 
+test('턴 끝 줄의 ❝ 칩과 /desk-quote 는 선택한 글을 인용으로 입력창에 넣는다', KO, async ($, on) => {
+  let selected: { text: string; requestId?: string } | undefined = { text: '첫 줄\n\n둘째 줄  ', requestId: 'r1' }
+  let box = ''
+  const filled: Array<{ text: string; mode?: string }> = []
+  const toasts: string[] = []
+  on('process.run', gitStub as never)
+  on('clock.now', () => ({ value: 0 }))
+  on('turn.complete', () => ({ text: '답' }) as never)
+  on('ui.selection', () => ({ value: selected }) as never)
+  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.fill', ($, e) => {
+    filled.push({ text: e.text, mode: e.mode })
+    return { isFilled: true } as never
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push(String((e as { text?: string }).text ?? e))
+    return { value: undefined as never }
+  })
+  on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>Baked for 3s</Text>
+  })
+  await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '답', turnId: 't1' } as never)
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 3000 } })
+  expect(JSON.stringify(await row.drawn())).toContain('❝ quote')
+  // 빈 입력창: 인용으로 바꾸고 아래에 질문 칸을 비워 둔다
+  await row.press({ key: 'quote-turn-3000' })
+  expect(filled).toEqual([{ text: '> 첫 줄\n>\n> 둘째 줄\n\n', mode: 'replace' }])
+  // 쓰던 글이 있으면 그 뒤에 붙인다
+  box = '이거 왜?'
+  await $.command.run({ command: 'desk-quote', args: '' } as never)
+  expect(filled[1]).toEqual({ text: '\n\n> 첫 줄\n>\n> 둘째 줄\n\n', mode: 'append' })
+  // 고른 글이 없으면 채우지 않고 알린다
+  selected = undefined
+  await row.press({ key: 'quote-turn-3000' })
+  expect(filled.length).toBe(2)
+  expect(toasts.at(-1)).toContain('선택')
+  await row.unmount()
+})
+
 test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 파일은 남고, 끝났던 에이전트는 다시 실행 중', KO, async ($, on) => {
   let status = 'completed'
   let now = 0

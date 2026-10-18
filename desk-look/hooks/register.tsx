@@ -947,11 +947,27 @@ async function saveComment($: EngineInterface, draft: CommentDraft, lines: DiffL
 }
 
 // "Claude에게 맡기기": 입력창이 비어 있으면 채우고, 쓰던 글이 있으면 뒤에 붙인다.
-async function fillPrompt($: EngineInterface, text: string) {
+async function fillPrompt($: EngineInterface, text: string, done = T.filled) {
   const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
   const isEmpty = box.text.trim() === ''
   const filled = await $.prompt.fill({ text: isEmpty ? text : `\n\n${text}`, mode: isEmpty ? 'replace' : 'append' }).catch(() => null)
-  $.ui.toast(filled?.isFilled ? T.filled : T.fillFailed)
+  $.ui.toast(filled?.isFilled ? done : T.fillFailed)
+}
+
+// 대화 기록에서 고른 글을 인용으로(턴 끝 줄의 ❝ 칩, /desk-quote). 엔진은 고를 때 알려 주지 않고, 누르거나
+// 명령을 쳐도 마지막 선택은 남아 있어서 그때 읽는다. 아래 빈 줄은 물어볼 말을 쓸 자리.
+export function quoteText(text: string): string {
+  const lines = text.replace(/\s+$/, '').split('\n').map(line => line.trimEnd())
+  return `${lines.map(line => (line === '' ? '>' : `> ${line}`)).join('\n')}\n\n`
+}
+
+async function quoteSelection($: EngineInterface) {
+  const selected = await $.ui.selection().catch(() => undefined)
+  if (!selected || selected.text.trim() === '') {
+    $.ui.toast(T.quoteNone)
+    return
+  }
+  await fillPrompt($, quoteText(selected.text), T.quoted)
 }
 
 // /desk-asana 의 Asana 호출(asana.ts 참고). MCP 서버는 세션이 시작된 뒤에 붙으므로 열 때마다 도구 목록에서 찾는다.
@@ -2328,6 +2344,11 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await $.command.register({
+      name: 'desk-quote',
+      description: T.cmdQuote,
+      immediate: true,
+    })
+    await $.command.register({
       name: 'desk-update',
       description: T.cmdUpdate,
     })
@@ -2480,6 +2501,11 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'desk-fold' }, async $ => ({ text: await toggleFold($) }))
+
+  on('command.run', { command: 'desk-quote' }, async $ => {
+    await quoteSelection($)
+    return {}
+  })
 
   on('command.run', { command: 'desk-context' }, async $ => {
     await openContext($)
@@ -2837,6 +2863,7 @@ export const register: Register = (on, options) => {
             onPress={press => void copyText($, answer, press, 'answer')}
           />
         )}
+        <Button key={`quote-turn-${card.durationMs}`} plain dimColor label="❝ quote" onPress={() => void quoteSelection($)} />
       </Box>
     )
     if (card.files.length === 0) return head

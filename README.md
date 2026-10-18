@@ -32,6 +32,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-context` | Context breakdown, usage limits and session cost |
 | `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
 | `/desk-fold` | Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position |
+| `/desk-quote` | Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it |
 | `/desk-update` | Update desk-look to the latest version |
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
@@ -52,7 +53,7 @@ The pane commands run at once even while Claude is working: they open the pane w
 | Subagents | One `Ran an agent` line; notifications and messages only expand with ctrl+o | A card per agent (type and description; tool count, tokens, time and changed lines; click for the result). Background notifications read `✓ description completed · 5s`; click an agent message `◆ name first line ›` to expand it in place |
 | Plan (ExitPlanMode) | Folded into one line with other tools | A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval dialog is the engine's own |
 | Questions (AskUserQuestion) | A list under the prompt | A question card right above the prompt. With an empty prompt, pick by number alone (`1`-`8` options, `0` submit, `9` the default dialog); multi-select with ☐/☑; `Other` takes two clicks to type (the first selects the row); hover an option for its preview. A notification goes out when the card opens, as the engine dialog does (`preferredNotifChannel`). The transcript records `Asked question → answer` |
-| End of turn | A duration line | A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer |
+| End of turn | A duration line | A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer, with `❝ quote` beside it to put the text you selected in the conversation into the prompt as a quote |
 | Command output | Plain text | Output with tables, headings, code or quotes renders as markdown, like an answer |
 
 ![A question card above the prompt: numbered options, Other, and the default dialog](docs/ask.png)

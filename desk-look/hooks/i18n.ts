@@ -11,6 +11,9 @@ const ko = {
   copyFailed: (reason: string) => `복사하지 못했어요: ${reason}`,
   filled: '입력창에 채웠어요. 고쳐서 Enter 로 보내세요.',
   fillFailed: '입력창에 채우지 못했어요.',
+  // 대화 기록 인용
+  quoted: '인용했어요. 아래에 물어볼 것을 쓰세요.',
+  quoteNone: '인용할 글을 먼저 대화 기록에서 마우스로 선택하세요.',
   // diff 줄 댓글
   commentLabel: (lines: string) => `${lines}번 줄`,
   commentPlaceholder: 'Claude 에게 바꿀 점 (다른 줄 번호를 누르면 범위)',
@@ -85,6 +88,7 @@ const ko = {
   sessionsOpened: '세션 패널을 열었습니다.',
   contextOpened: '컨텍스트 패널을 열었습니다.',
   cmdFold: '열린 desk-look 패널을 접어 대화를 넓게 쓴다. 다시 치면 접어 둔 패널을 같은 자리·스크롤로 편다',
+  cmdQuote: '대화 기록에서 마우스로 선택한 글을 인용으로 입력창에 넣는다',
   folded: (count: number) => `패널 ${count}개를 접었어요. /desk-fold 로 다시 펴세요.`,
   unfolded: (count: number) => `접어 둔 패널 ${count}개를 폈어요.`,
   foldNothing: '접을 패널도, 접어 둔 패널도 없어요.',
@@ -322,6 +326,9 @@ const en: Strings = {
   copyFailed: reason => `Couldn't copy: ${reason}`,
   filled: 'Put it in the prompt. Edit it and press Enter to send.',
   fillFailed: "Couldn't fill the prompt.",
+  // quoting the transcript
+  quoted: 'Quoted it. Write your question below.',
+  quoteNone: 'Select the text to quote in the conversation with the mouse first.',
   // diff line comments
   commentLabel: (lines: string) => (lines.includes('–') ? `Lines ${lines}` : `Line ${lines}`),
   commentPlaceholder: 'Tell Claude what to change (press another line number for a range)',
@@ -393,6 +400,7 @@ const en: Strings = {
   sessionsOpened: 'Opened the sessions pane.',
   contextOpened: 'Opened the context pane.',
   cmdFold: 'Fold the open desk-look panes away so the conversation takes the width; run it again to unfold them where they were',
+  cmdQuote: 'Put the text you selected in the conversation into the prompt as a quote',
   folded: (count: number) => `Folded ${count} ${count === 1 ? 'pane' : 'panes'}. Run /desk-fold again to unfold.`,
   unfolded: (count: number) => `Unfolded ${count} ${count === 1 ? 'pane' : 'panes'}.`,
   foldNothing: 'No pane is open or folded.',
