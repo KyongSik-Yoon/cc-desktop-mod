@@ -777,6 +777,13 @@ test('세션 검색', KO, () => {
 const wait = (ms: number) =>
   new Promise<void>(resolve => (globalThis as unknown as { setTimeout: (fn: () => void, ms: number) => void }).setTimeout(resolve, ms))
 
+// diff 패널은 접힌 목록으로 열린다: 내용을 보려는 테스트는 z(모두 펴기)나 그 파일 머리 띠를 눌러 편다.
+type Pressable = { find: (query: never) => Promise<unknown>; press: (target: { key: string }) => Promise<unknown> }
+const openAll = async (pane: Pressable, key = 'fold-all') => {
+  for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Button', key } as never)); tries++) await wait(10)
+  await pane.press({ key })
+}
+
 test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결과', KO, async ($, on) => {
   let answer: (stdout: string) => void = () => undefined
   const waiting = new Promise<string>(resolve => (answer = resolve))
@@ -1233,8 +1240,7 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 3000 } })
   expect(await row.find({ type: 'Text', text: /Edited 1 file/ })).toBeDefined()
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
-  // 접어 둔 파일이라도 카드에서 누르면 펼쳐서 연다(그 파일로 스크롤은 실화면에서 확인: 테스트 도구는 key 스크롤을 풀지 못한다)
-  await pane.press({ key: 'fold-a.txt' })
+  // 패널은 접힌 목록으로 열리고, 카드에서 누르면 그 파일을 펼쳐서 연다(그 파일로 스크롤은 실화면에서 확인: 테스트 도구는 key 스크롤을 풀지 못한다)
   expect(await pane.find({ type: 'Code' })).toBeUndefined()
   await row.press({ key: 'diffat-3000-/repo/a.txt' })
   expect(opened).toEqual(['desk-diff'])
@@ -1382,8 +1388,7 @@ test('저장소 밖에서 고친 파일도 카드에서 누르면 diff 패널에
   await $.turn.complete({ durationMs: 4000, reason: 'answer', answer: '썼어요', turnId: 't1' } as never)
   const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 4000 } })
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
-  for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Code' })); tries++) await wait(10)
-  await pane.press({ key: 'fold-s:/tmp/x/note.md' })
+  for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Button', key: 'fold-s:/tmp/x/note.md' })); tries++) await wait(10)
   expect(await pane.find({ type: 'Code' })).toBeUndefined()
   // git 밖 묶음을 통째로 접으면 머리 줄(개수 포함)만 남는다
   await pane.press({ key: 'fold-outside' })
@@ -1495,17 +1500,44 @@ test('/desk-update 결과 문장: 최신, 실패', KO, () => {
   expect(updateMessage(1, '', 'network down\n')).toBe('desk-look 을 올리지 못했어요: network down')
 })
 
-test('diff 패널: 파일 머리 줄을 누르면 그 파일 diff 를 접고 편다', KO, async ($, on) => {
+test('diff 패널: 접힌 목록으로 열리고, 파일 머리 줄을 누르면 그 파일 diff 를 펴고 접는다', KO, async ($, on) => {
   on('process.run', gitStub as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
   await $.command.run({ command: 'desk-diff', args: '' } as never)
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
-  expect(await pane.find({ type: 'Code' })).toBeDefined()
-  await pane.press({ key: 'fold-a.txt' })
   expect(await pane.find({ type: 'Code' })).toBeUndefined()
   expect(await pane.find({ type: 'Button', key: 'revert-a.txt' })).toBeDefined()
   await pane.press({ key: 'fold-a.txt' })
   expect(await pane.find({ type: 'Code' })).toBeDefined()
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  await pane.unmount()
+})
+
+test('diff 패널: 파일은 하나만 펴진다, 다른 파일을 펴면 펴 있던 것은 접힌다', KO, async ($, on) => {
+  on('process.run', (($: unknown, e: { argv: string[] }) =>
+    e.argv[1] === 'diff' && e.argv[2] === 'HEAD'
+      ? { value: { exitCode: 0, stdout: DIFF_PATCH + BRANCH_PATCH, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      : gitStub($, e)) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-diff', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  const shown = async () => (await pane.findAll({ type: 'Code' })).map(code => (code as { props?: { path?: string } }).props?.path)
+  expect(await shown()).toEqual([])
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await shown()).toEqual(['a.txt'])
+  // 편 파일의 머리 띠로 스크롤하는 것은 실화면에서 확인(테스트 도구는 key 스크롤을 풀지 못한다)
+  await pane.press({ key: 'fold-b.txt' })
+  expect(await shown()).toEqual(['b.txt'])
+  await pane.press({ key: 'fold-b.txt' })
+  expect(await shown()).toEqual([])
+  // z 로 모두 편 뒤에 하나를 누르면 그것만 남는다
+  await pane.press({ key: 'fold-all' })
+  expect(await shown()).toEqual(['a.txt', 'b.txt'])
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await shown()).toEqual(['b.txt'])
+  await pane.press({ key: 'fold-a.txt' })
+  expect(await shown()).toEqual(['a.txt'])
   await pane.unmount()
 })
 
@@ -1519,16 +1551,17 @@ test('diff 패널: 모두 접기·펴기 (z)', KO, async ($, on) => {
   await $.command.run({ command: 'desk-diff', args: '' } as never)
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
   const codes = async () => (await pane.findAll({ type: 'Code' })).length
-  expect(await codes()).toBe(2)
+  expect(await codes()).toBe(0)
   expect(JSON.stringify(await pane.find({ type: 'Button', key: 'fold-all' }))).toContain('"hotkey":"z"')
+  expect(JSON.stringify(await pane.find({ type: 'Button', key: 'fold-all' }))).toContain('모두 펴기')
+  await pane.press({ key: 'fold-all' })
+  expect(await codes()).toBe(2)
   // 하나라도 펴져 있으면 모두 접는다
   await pane.press({ key: 'fold-a.txt' })
-  expect(await pane.find({ type: 'Button', key: 'fold-all', label: '모두 접기' } as never)).toBeDefined()
+  expect(await codes()).toBe(1)
+  expect(JSON.stringify(await pane.find({ type: 'Button', key: 'fold-all' }))).toContain('모두 접기')
   await pane.press({ key: 'fold-all' })
   expect(await codes()).toBe(0)
-  expect(await pane.find({ type: 'Button', key: 'fold-all', label: '모두 펴기' } as never)).toBeDefined()
-  await pane.press({ key: 'fold-all' })
-  expect(await codes()).toBe(2)
   await pane.unmount()
 })
 
@@ -2080,7 +2113,10 @@ test('diff 패널 범위: 브랜치 전체와 커밋별', KO, async ($, on) => {
   expect(drawn).toContain('2 commits')
   expect(drawn).toContain('Add b')
   expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  // 커밋을 펴면 그 파일들이 접힌 머리 줄로, 머리 줄을 누르면 diff
   await pane.press({ key: 'commit-c1sha' })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  await pane.press({ key: 'fold-c:c1:b.txt' })
   expect(await pane.find({ type: 'Code' })).toBeDefined()
   await pane.press({ key: 'commit-c1sha' })
   expect(await pane.find({ type: 'Code' })).toBeUndefined()
@@ -2104,12 +2140,12 @@ test('diff 패널 범위: 브랜치 전체와 커밋별에도 모두 접기·펴
   const label = async () => JSON.stringify(await pane.find({ type: 'Button', key: 'fold-all' }))
 
   await pane.press({ key: 'scope-branch' })
+  expect(await codes()).toBe(0)
+  expect(await label()).toContain('모두 펴기')
+  await pane.press({ key: 'fold-all' })
   expect(await codes()).toBe(2)
-  expect(await label()).toContain('모두 접기')
   await pane.press({ key: 'fold-all' })
   expect(await codes()).toBe(0)
-  await pane.press({ key: 'fold-all' })
-  expect(await codes()).toBe(2)
 
   // 커밋별: 펼친 커밋이 없어도 버튼이 있고, 커밋 줄 전체를 git show 한 번으로 편다
   await pane.press({ key: 'scope-commits' })
@@ -2719,6 +2755,7 @@ describe('데스크톱 모양 diff', () => {
     await $.tool.call({ tool: 'Edit', file_path: '/repo/src/cart.ts', old_string: 'qty', new_string: 'quantity' } as never)
     await $.command.run({ command: 'desk-diff', args: '' } as never)
     const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true, bodyRows: 30 } as never })
+    await openAll(pane)
     for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Text', text: /안 바뀐 줄/ })); tries++) await wait(10)
     const drawn = JSON.stringify(await pane.drawn())
     // 줄 전체 폭 틴트, 진한 단어 강조, 파일 머리 띠(이름 굵게, 폴더 흐리게), 안 바뀐 구간
@@ -2773,6 +2810,7 @@ describe('데스크톱 모양 diff', () => {
       viewport: VIEWPORT,
       props: { title: '변경 사항', isFocused: true, bodyColumns: 96, scroll: { offset: 400, bodyRows: 30 } } as never,
     })
+    await openAll(pane)
     for (let tries = 0; tries < 50 && (await pane.findAll({ type: 'Code' })).length < 10; tries++) await wait(10)
     const pressable = (await pane.findAll({ type: 'Button' }))
       .map(button => /^d-big\.ts\.(\d+)\.p0$/.exec(String((button as { key?: unknown }).key))?.[1])
@@ -2803,6 +2841,7 @@ describe('데스크톱 모양 diff', () => {
     await $.tool.call({ tool: 'Edit', file_path: '/repo/src/cart.ts', old_string: 'qty', new_string: 'quantity' } as never)
     await $.command.run({ command: 'desk-diff', args: '' } as never)
     const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true, bodyRows: 30 } as never })
+    await openAll(pane)
     for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Text', text: /안 바뀐 줄/ })); tries++) await wait(10)
     // cart.ts 행: 안 바뀐 구간, keep(10), −(11), +(11), end(12). 번호 칸이 줄마다 버튼이다.
     const line = (row: number) => `d-src/cart.ts.${row}.p0`
@@ -2877,6 +2916,7 @@ describe('데스크톱 모양 diff', () => {
     await $.session.start({ source: 'resume', cwd: '/tmp/x', surface: 'terminal' } as never)
     await $.command.run({ command: 'desk-diff', args: '' } as never)
     const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+    await openAll(pane, 'fold-s:/tmp/x/n.ts')
     for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Text', text: '· 다음 편집' })); tries++) await wait(10)
     expect(await pane.find({ type: 'Text', text: '· 다음 편집' })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: 'n.ts' })).toBeDefined()

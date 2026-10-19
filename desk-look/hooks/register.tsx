@@ -146,6 +146,8 @@ let draftText = ''
 // 패널마다 마지막 스크롤 위치(접을 때 적어 둔다)와, 다시 편 뒤 첫 스크롤에 되살릴 위치.
 const paneOffsets = new Map<string, number>()
 const restoreOffsets = new Map<string, number>()
+// diff 패널이 마지막으로 그릴 때 본 접기 상태. 펴기 직후 스크롤은 펴진 그림이 그려진 뒤에 한다.
+let diffDrawnFolds: Record<string, boolean> = {}
 let commentSeq = 0
 const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
   scope: 'uncommitted',
@@ -769,10 +771,29 @@ async function openDiffAt($: EngineInterface, path: string) {
     return
   }
   // git 밖 파일이면 묶음도 편다: 접힌 묶음 안의 파일 머리 띠는 그리지 않아 스크롤해 갈 곳이 없다.
-  await update($, open, state => ({ ...state, [`fold:${target}`]: false, ...(inGit === null ? { [OUTSIDE_GROUP]: false } : {}) }))
-  // 막 연 패널은 아직 그려지기 전이라 스크롤이 거부된다("not this plugin's site"). 그려질 때까지 잠깐 다시 한다.
+  await update($, open, state => ({ ...onlyOpen(state, target), ...(inGit === null ? { [OUTSIDE_GROUP]: false } : {}) }))
+  await scrollToFile($, target)
+}
+
+// diff 패널 파일은 하나만 펴진다: 펴 둔 파일 키를 모두 접고 이것만 편다. 기록이 없는 파일은 접힌 것이다.
+function onlyOpen(state: Record<string, boolean>, id: string): Record<string, boolean> {
+  const others = Object.keys(state).filter(key => key.startsWith('fold:') && !state[key])
+  return { ...state, ...Object.fromEntries(others.map(key => [key, true])), [`fold:${id}`]: false }
+}
+
+// 파일 머리 띠를 누름: 접혀 있으면 그것만 펴고 그 머리 띠로 스크롤한다(위에 펴져 있던 파일이 접혀 자리가 당겨진다). 펴져 있으면 접는다.
+async function pickFile($: EngineInterface, id: string) {
+  const isOpening = (await read($, open))[`fold:${id}`] ?? true
+  await update($, open, state => (isOpening ? onlyOpen(state, id) : { ...state, [`fold:${id}`]: true }))
+  if (isOpening) await scrollToFile($, id)
+}
+
+// 상태를 바꾼 직후 스크롤하면 엔진은 아직 앞 그림(위 파일이 펴진 자리)으로 머리 띠를 찾아 엉뚱한 곳에 선다.
+// 그 파일이 펴진 그림이 그려질 때까지 기다린다. 막 연 패널은 아직 그려지기 전이라 스크롤이 거부되니("not this plugin's site") 잠깐 다시 한다.
+async function scrollToFile($: EngineInterface, id: string) {
+  for (let tries = 0; tries < 20 && diffDrawnFolds[`fold:${id}`] !== false; tries++) await $.clock.sleep(25).catch(() => undefined)
   for (let tries = 0; tries < 8; tries++) {
-    const moved = await $.ui.scroll({ to: { key: `file-${target}` }, in: PANE, block: 'start' }).catch(() => ({ deny: 'failed' }))
+    const moved = await $.ui.scroll({ to: { key: `file-${id}` }, in: PANE, block: 'start' }).catch(() => ({ deny: 'failed' }))
     if (!moved.deny) return
     await $.clock.sleep(100).catch(() => undefined)
   }
@@ -1541,7 +1562,7 @@ async function pickCommit($: EngineInterface, sha: string) {
   await update($, diffView, previous => ({ ...previous, commitFiles: { ...previous.commitFiles, ...files } }))
 }
 
-// 커밋별 탭의 모두 접기·펴기: 하나라도 펼쳐져 있으면 모두 접고, 아니면 목록의 커밋을 모두 편다.
+// 커밋별 탭의 모두 접기·펴기: 하나라도 펼쳐져 있으면 모두 접고, 아니면 목록의 커밋과 그 안의 파일을 모두 편다.
 async function foldCommits($: EngineInterface) {
   const view = await read($, diffView)
   if (Object.keys(view.commitFiles).length > 0) {
@@ -1549,6 +1570,8 @@ async function foldCommits($: EngineInterface) {
     return
   }
   const files = await commitDiffs($, view.commits.map(commit => commit.sha))
+  const ids = view.commits.flatMap(commit => (files[commit.sha] ?? []).map(file => `c:${commit.short}:${file.path}`))
+  await update($, open, state => ({ ...state, ...Object.fromEntries(ids.map(id => [`fold:${id}`, false])) }))
   await update($, diffView, previous => ({ ...previous, commitFiles: files }))
 }
 
@@ -3436,6 +3459,7 @@ export const register: Register = (on, options) => {
       read($, commentDraft),
       read($, lineComments),
     ])
+    diffDrawnFolds = armed
     // 패널 몸통 폭: viewport.columns 는 패널 폭이 아니다(구분선을 끌면 어긋나 단어 강조 조각이 일찍 잘렸다).
     const columns = (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 80
     // 그릴 범위는 ui.scroll 이 적어 둔 창으로 정하되, 엔진이 이번에 알려 준 창(props.scroll)이 그보다 반 화면 넘게
@@ -3447,6 +3471,8 @@ export const register: Register = (on, options) => {
     const files = view.scope === 'branch' ? view.files : uncommitted
     // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
     const outside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
+    // 파일은 하나만 펴진다(pickFile): 펴 둔 기록이 없으면 접힌 것이라 패널은 접힌 목록으로 열린다.
+    const isFolded = (id: string) => armed[`fold:${id}`] ?? true
     // git 밖 편집 묶음을 접으면 머리 줄만 남는다. 개수·+/− 합계에는 그대로 센다.
     const outsideFolded = armed[OUTSIDE_GROUP] ?? false
     const outsideShown = outsideFolded ? [] : outside
@@ -3468,12 +3494,12 @@ export const register: Register = (on, options) => {
         <Box columnGap={1}>
           {rowButton(
             els,
-            { key: `fold-${prefix}${file.path}`, onPress: () => toggle($, `fold:${prefix}${file.path}`) },
+            { key: `fold-${prefix}${file.path}`, onPress: () => void pickFile($, `${prefix}${file.path}`) },
             clipStart(file.path, Math.max(12, columns - 34)),
             file.isNew && <Text color={COLORS.muted}> new</Text>,
             ' ',
             diffChips(Text, file.added, file.removed),
-            <Text color={COLORS.muted}>{armed[`fold:${prefix}${file.path}`] ? ' ›' : ' ⌄'}</Text>,
+            <Text color={COLORS.muted}>{isFolded(`${prefix}${file.path}`) ? ' ›' : ' ⌄'}</Text>,
           )}
           {canRevert && !file.isNew && (
             <Button
@@ -3485,7 +3511,7 @@ export const register: Register = (on, options) => {
             />
           )}
         </Box>
-        {armed[`fold:${prefix}${file.path}`] ? null : file.patch ? (
+        {isFolded(`${prefix}${file.path}`) ? null : file.patch ? (
           <Code source={file.patch} path={file.path} format="diff" />
         ) : (
           <Text color={COLORS.muted}>{T.binary}</Text>
@@ -3500,13 +3526,13 @@ export const register: Register = (on, options) => {
         <Box key={`file-${id}`} flexDirection="column">
           {rowButton(
             els,
-            { key: `fold-${id}`, onPress: () => toggle($, `fold:${id}`) },
+            { key: `fold-${id}`, onPress: () => void pickFile($, id) },
             clipStart(shortPath(edit.path), Math.max(12, columns - 34)),
             ' ',
             diffChips(Text, edit.added, edit.removed),
-            <Text color={COLORS.muted}>{armed[`fold:${id}`] ? ' ›' : ' ⌄'}</Text>,
+            <Text color={COLORS.muted}>{isFolded(id) ? ' ›' : ' ⌄'}</Text>,
           )}
-          {!armed[`fold:${id}`] &&
+          {!isFolded(id) &&
             (edit.patches.length > 0 ? (
               edit.patches.map((patch, index) => <Code key={`patch-${id}-${index}`} source={patch} path={edit.path} format="diff" />)
             ) : (
@@ -3521,7 +3547,7 @@ export const register: Register = (on, options) => {
     // 파일 탭은 지금 보이는 파일 블록의 접기 키(fileBlock·outsideBlock 과 같은 모양), 커밋별 탭은 커밋 줄이 대상이다.
     const foldIds = [...files.map(file => `${view.scope === 'branch' ? 'b:' : ''}${file.path}`), ...outsideShown.map(edit => `${OUTSIDE}${edit.path}`)]
     const foldCount = view.scope === 'commits' ? view.commits.length : foldIds.length
-    const anyOpen = view.scope === 'commits' ? Object.keys(view.commitFiles).length > 0 : foldIds.some(id => !armed[`fold:${id}`])
+    const anyOpen = view.scope === 'commits' ? Object.keys(view.commitFiles).length > 0 : foldIds.some(id => !isFolded(id))
     const foldAll = () =>
       view.scope === 'commits' ? foldCommits($) : update($, open, state => ({ ...state, ...Object.fromEntries(foldIds.map(id => [`fold:${id}`, anyOpen])) }))
     const title =
@@ -3549,8 +3575,7 @@ export const register: Register = (on, options) => {
     // 띠 Box 의 key(file-…)는 openDiffAt 이 스크롤해 갈 곳이라 패널이 보이는 곳만 그려도 늘 그린다.
     const diffFileHeader = (path: string, prefix: string, plus: number, minus: number, isNew: boolean, canRevert: boolean, indent: number, shown = path) => {
       const id = `${prefix}${path}`
-      const isFolded = armed[`fold:${id}`] ?? false
-      const name = shown.split('/').pop() ?? shown
+            const name = shown.split('/').pop() ?? shown
       const folder = shown.slice(0, Math.max(0, shown.length - name.length - 1))
       const room = Math.max(0, columns - indent - cellWidth(name) - cellWidth(` +${plus}  −${minus} `) - (canRevert ? cellWidth(T.revertConfirm) + 2 : 0) - (isNew ? 5 : 0) - 8)
       return (
@@ -3558,8 +3583,8 @@ export const register: Register = (on, options) => {
           <Box flexShrink={0}>
           {rowButton(
             els,
-            { key: `fold-${id}`, onPress: () => toggle($, `fold:${id}`) },
-            isFolded ? ' › ' : ' ⌄ ',
+            { key: `fold-${id}`, onPress: () => void pickFile($, id) },
+            isFolded(id) ? ' › ' : ' ⌄ ',
             <Text color={COLORS.text} weight="semibold">
               {name}
             </Text>,
@@ -3655,7 +3680,7 @@ export const register: Register = (on, options) => {
               ])
             : []),
         ],
-        isFolded: id => armed[`fold:${id}`] ?? false,
+        isFolded,
         fileHeader: (file, prefix, canRevert, indent) => diffFileHeader(file.path, prefix, file.added, file.removed, file.isNew, canRevert, indent),
         sessionHeader: edit => diffFileHeader(edit.path, OUTSIDE, edit.added, edit.removed, false, false, 0, shortPath(edit.path)),
         notes: {
