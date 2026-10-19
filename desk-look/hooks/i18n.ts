@@ -222,8 +222,10 @@ const ko = {
   asanaEditFormatted: '목록 기호·이미지·멘션 글자 같은 서식 자리는 여기서 못 바꿔요. 그 부분은 Asana 에서 고치세요',
   asanaImage: '[이미지]',
   asanaTokenRejected: 'Asana 개인 토큰이 맞지 않아요(만료·취소). 새로 넣으세요',
-  asanaNeedToken:
-    '댓글 고치기는 Asana 개인 토큰(PAT)이 있어야 해요. Asana MCP 서버에 댓글을 고치는 도구가 없어서예요.\n1. https://app.asana.com/0/my-apps 에서 Personal access token 을 만든다\n2. /plugin configure desk-look@cc-desktop-mod 의 Asana personal access token 에 넣고 Save configuration(저장하면 바로 적용돼요)',
+  asanaEditWhat: '댓글 고치기',
+  asanaStatusWhat: '상태 바꾸기',
+  asanaNeedToken: (what: string) =>
+    `${what}는 Asana 개인 토큰(PAT)이 있어야 해요. Asana MCP 서버로는 할 수 없어서예요.\n1. https://app.asana.com/0/my-apps 에서 Personal access token 을 만든다\n2. /plugin configure desk-look@cc-desktop-mod 의 Asana personal access token 에 넣고 Save configuration(저장하면 바로 적용돼요)`,
   asanaCommented: '댓글을 달았어요',
   asanaCommentFailed: (reason: string) => `댓글을 달지 못했어요: ${reason}`,
   asanaPromptHead: (name: string) => `Asana 태스크 "${name}" 을(를) 함께 봐 주세요.`,
@@ -544,8 +546,10 @@ const en: Strings = {
   asanaEditFormatted: 'List marks, images and the letters of a mention cannot be changed here; change those on Asana',
   asanaImage: '[image]',
   asanaTokenRejected: 'The Asana personal access token was refused (expired or revoked). Put in a new one',
-  asanaNeedToken:
-    'Editing comments needs an Asana personal access token (PAT): the Asana MCP servers have no tool for it.\n1. Create a personal access token at https://app.asana.com/0/my-apps\n2. Put it in Asana personal access token under /plugin configure desk-look@cc-desktop-mod and Save configuration (it applies at once)',
+  asanaEditWhat: 'Editing comments',
+  asanaStatusWhat: 'Changing the status',
+  asanaNeedToken: what =>
+    `${what} needs an Asana personal access token (PAT): the Asana MCP servers cannot do it.\n1. Create a personal access token at https://app.asana.com/0/my-apps\n2. Put it in Asana personal access token under /plugin configure desk-look@cc-desktop-mod and Save configuration (it applies at once)`,
   asanaCommented: 'Comment added',
   asanaCommentFailed: reason => `Could not add the comment: ${reason}`,
   asanaPromptHead: name => `Let's look at the Asana task "${name}" together.`,

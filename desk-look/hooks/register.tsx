@@ -1120,7 +1120,7 @@ async function closeAsanaTask($: EngineInterface) {
   asanaMentions = []
   await update($, asanaUsers, () => null)
   await update($, asanaEdit, () => null)
-  await update($, open, state => ({ ...state, 'asana:assign': false, 'asana:mention': false }))
+  await update($, open, state => ({ ...state, 'asana:assign': false, 'asana:mention': false, 'asana:status': false }))
   await update($, asanaView, () => null)
 }
 
@@ -1162,7 +1162,7 @@ async function postAsanaComment($: EngineInterface, server: AsanaServer, gid: st
   await openAsanaTask($, server, gid)
 }
 
-// Asana REST(댓글 고치기만). 토큰은 헤더로만 보내고 오류 글에도 싣지 않는다. 엔진이 거절해도 오류 글로.
+// Asana REST(댓글 고치기·상태 바꾸기만). 토큰은 헤더로만 보내고 오류 글에도 싣지 않는다. 엔진이 거절해도 오류 글로.
 async function asanaRest($: EngineInterface, path: string, init: { method?: string; body?: unknown } = {}): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
   const headers = { Authorization: `Bearer ${asanaToken}`, Accept: 'application/json', ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }) }
   const request = { method: init.method ?? 'GET', headers, ...(init.body === undefined ? {} : { body: JSON.stringify({ data: init.body }) }) }
@@ -1230,6 +1230,16 @@ async function keepAsanaEdit($: EngineInterface, comment: string, value: string)
   asanaEditRound++
   await update($, asanaEdit, (shown): AsanaEdit | null => (shown?.comment !== comment ? shown : { ...shown, status: 'ready' }))
   await $.ui.focus({ requestId: ASANA_PANE, key: `asana-editing-${comment}-${asanaEditRound}` }).catch(() => undefined)
+}
+
+// 작업 유형 상태 바꾸기: MCP update_tasks 는 custom_type_status_option 을 조용히 버려, 개인 토큰이 있을 때만 REST 로 바꾼다.
+// 고른 상태의 완료 여부(completion_state)는 Asana 가 태스크 완료에 함께 반영한다.
+async function changeAsanaStatus($: EngineInterface, server: AsanaServer, task: string, option: string) {
+  const got = await asanaRest($, `/tasks/${task}?opt_fields=gid`, { method: 'PUT', body: { custom_type_status_option: option } })
+  if (!got.ok) return $.ui.toast(T.asanaUpdateFailed(got.error))
+  await update($, open, state => ({ ...state, 'asana:status': false }))
+  void refreshAsana($).catch(() => undefined)
+  await openAsanaTask($, server, task)
 }
 
 // 사람 찾기 칸은 담당자 바꾸기와 멘션이 함께 쓴다. 한쪽 결과를 다른 쪽에서 누르지 않게 하나만 열고 결과를 비운다.
@@ -3902,6 +3912,8 @@ export const register: Register = (on, options) => {
         )
       }
       const fields = task.fields.filter(field => field.value !== null || field.options !== null)
+      const canPickStatus = task.status !== null && task.statuses.length > 0
+      const isStatusPicking = armed['asana:status'] ?? false
       return (
         <Box flexDirection="column" rowGap={1}>
           {head}
@@ -3915,12 +3927,35 @@ export const register: Register = (on, options) => {
               ) : (
                 task.completed && <Text color={COLORS.success}>{T.asanaDone}</Text>
               )}
-              {task.places.length > 0 && (
+              {canPickStatus && <Button key="asana-status" plain dimColor label={isStatusPicking ? T.cancel : T.asanaChange} onPress={() => void toggle($, 'asana:status')} />}
+              {!canPickStatus && task.places.length > 0 && (
                 <Text color={COLORS.muted} wrap="truncate-end">
                   {task.places.join(' · ')}
                 </Text>
               )}
             </Box>
+            {isStatusPicking &&
+              (asanaToken === '' ? (
+                <Text color={COLORS.warning}>{T.asanaNeedToken(T.asanaStatusWhat)}</Text>
+              ) : (
+                <Box paddingLeft={2} columnGap={2} flexWrap="wrap">
+                  {task.statuses.map(option => (
+                    <Button
+                      key={`asana-status-${option.gid}`}
+                      plain
+                      dimColor={option.name !== task.status}
+                      label={option.name === task.status ? `✓ ${option.name}` : option.name}
+                      onPress={() => void changeAsanaStatus($, server, task.gid, option.gid)}
+                    />
+                  ))}
+                </Box>
+              ))}
+            {/* 상태 옆 바꾸기 버튼과 장소의 › 가 한 줄에 섞이지 않게 장소를 다음 줄로 내린다. */}
+            {canPickStatus && task.places.length > 0 && (
+              <Text color={COLORS.muted} wrap="truncate-end">
+                {task.places.join(' · ')}
+              </Text>
+            )}
             <Box columnGap={2}>
               <Button key="asana-claude" plain label={T.handToClaude} onPress={() => void fillPrompt($, asanaPrompt(task))} />
               {task.url && <Link href={task.url}>{T.asanaOpenOn}</Link>}
@@ -4001,7 +4036,7 @@ export const register: Register = (on, options) => {
                 ) : (
                   <Text color={COLORS.text}>{comment.text.trim()}</Text>
                 )}
-                {editing?.comment === comment.gid && editing.status === 'notoken' && <Text color={COLORS.warning}>{T.asanaNeedToken}</Text>}
+                {editing?.comment === comment.gid && editing.status === 'notoken' && <Text color={COLORS.warning}>{T.asanaNeedToken(T.asanaEditWhat)}</Text>}
               </Box>
             ))}
             <Input

@@ -129,8 +129,9 @@ export type AsanaDetail = {
   assignee: { gid: string; name: string } | null
   dueOn: string | null
   completed: boolean
-  // 사용자 지정 작업 유형의 상태(Open·In Progress…). MCP 로는 바꿀 수 없어 보여 주기만 한다.
+  // 사용자 지정 작업 유형의 상태(Open·In Progress…)와 고를 수 있는 상태들. MCP 로는 바꿀 수 없어 개인 토큰이 있을 때만 REST 로 바꾼다.
   status: string | null
+  statuses: Array<{ gid: string; name: string }>
   places: string[]
   url: string | null
   fields: AsanaField[]

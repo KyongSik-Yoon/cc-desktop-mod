@@ -26,7 +26,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 | `/desk-diff [파일\|branch\|commits]` | diff 패널: 커밋 안 한 변경, 브랜치 전체, 커밋별 |
 | `/desk-tasks [번호]` | 백그라운드 작업 패널: 에이전트, 백그라운드 셸, 모니터 |
 | `/desk-pr` | 지금 브랜치의 PR·MR, 머지 버튼 |
-| `/desk-asana` | 내게 할당된 Asana 태스크·워크스페이스 검색·내 프로젝트의 섹션별 태스크: 상세·댓글·댓글 달기·담당자·드롭다운 필드 |
+| `/desk-asana` | 내게 할당된 Asana 태스크·워크스페이스 검색·내 프로젝트의 섹션별 태스크: 상세·댓글·댓글 달기·담당자·드롭다운 필드·상태 |
 | `/desk-slack` | 나에게 온 Slack DM·그룹 DM 을 대화방으로: 최근 대화·답장·닫기 |
 | `/desk-preview [파일]` | 마크다운 미리보기 패널: 문서를 대화와 같은 모양으로 |
 | `/desk-context` | 컨텍스트 내역, 사용 한도, 세션 비용 |
@@ -125,7 +125,7 @@ Claude Code 에 이미 연결된 Asana MCP 서버로 내 열린 태스크를 읽
 - 담당자 옆 `바꾸기` 로 이름·이메일로 사람을 찾는다(또는 `나`). 다른 사람에게 넘기기는 5초 안에 한 번 더 눌러야 한다
 - 드롭다운 사용자 정의 필드 옆 `›` 로 선택지를 펼쳐 하나를 누르면 바뀐다
 - `Claude에게 맡기기` 는 태스크 제목·링크·상태·설명·최근 댓글을 입력창에 채운다
-- 작업 유형의 상태(Open, In Progress…)는 보여 주기만 한다: 두 Asana MCP 서버 모두 바꾸는 도구가 없다
+- 작업 유형의 상태(Open, In Progress…) 옆 `바꾸기` 로 그 유형의 상태들을 펼쳐 골라 바꾼다. 두 Asana MCP 서버 모두 이 키를 버려서, `✎ 고치기` 처럼 개인 토큰을 넣었을 때만 Asana REST API 를 부른다. 토큰이 없으면 `바꾸기` 가 넣는 법을 알려 주기만 하고 아무것도 부르지 않는다
 - 이 Asana 호출은 패널을 열거나 무언가를 눌렀을 때만 하고, Claude 의 호출처럼 Claude Code 권한 검사를 거친다. allow 규칙이 없으면 auto mode 는 거절하고 기본 모드는 매번 묻는다. 패널이 쓰는 도구를 `~/.claude/settings.json` 의 `permissions.allow` 에 넣는다. 빠진 것이 있으면 패널이 그 목록을 보여 준다. V2 서버라면:
 
   ```json
@@ -213,7 +213,7 @@ Claude Code 터미널 세션의 프롬프트에서:
 | `prBar` | `on` (기본), `off` | 입력창 띠 옆 PR 칩. 세션을 시작할 때와 턴이 끝날 때 지금 브랜치의 PR 을 `gh`(GitHub)·`glab`(GitLab)으로 읽음(30초에 한 번까지). 열린 PR 의 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴과 상관없이 15초마다 다시 읽고, 체크 상태가 그대로면 간격을 두 배씩 늘려 2분마다까지(runner 를 기다리는 job 처럼 끝나지 않는 체크가 계속 묻지 않게). 둘 다 없거나 어느 쪽 저장소도 아니면 숨기고 그 브랜치에서는 다시 묻지 않음(네트워크 오류는 다음 턴에 다시 읽음). `/desk-pr` 패널은 설정과 상관없이 열 수 있음 |
 | `previewAutoOpen` | `on` (기본), `off` | Claude 가 쓴 마크다운 문서를 턴이 끝날 때 미리보기 패널에 엶. `off` 면 `◫` 칩과 `/desk-preview` 로만 |
 | `slackNotify` | `on` (기본), `off` | 새 Slack DM 이 오면 알림(`/desk-slack` 참고). `off` 여도 패널과 `✉` 칩을 위한 확인은 계속 |
-| `asanaToken` | 비어 있음(기본) | 선택. Asana 개인 토큰. 내 Asana 댓글의 `✎ 고치기` 만 쓴다(`/desk-asana` 참고). `/plugin configure desk-look@cc-desktop-mod` 에서 넣는다 |
+| `asanaToken` | 비어 있음(기본) | 선택. Asana 개인 토큰. 내 Asana 댓글의 `✎ 고치기` 와 작업 유형 상태 바꾸기만 쓴다(`/desk-asana` 참고). `/plugin configure desk-look@cc-desktop-mod` 에서 넣는다 |
 | `contextChip` | `auto` (기본), `always`, `off` | 입력창 띠 옆 컨텍스트 칩. `auto` 는 50% 이상일 때만(상태 줄이나 다른 플러그인이 이미 늘 보여 주는 경우가 많아서), `always` 는 늘, `off` 는 끔. `/desk-context` 패널은 설정과 상관없이 열 수 있음 |
 
 ## 업데이트

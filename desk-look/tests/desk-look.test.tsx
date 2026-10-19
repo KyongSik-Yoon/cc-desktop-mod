@@ -2994,6 +2994,7 @@ describe('Asana 패널', () => {
         assignee: { gid: 'u1', name: 'Sam' },
         memberships: [{ project: { name: 'Support' }, section: { name: '이슈' } }],
         custom_type_status_option: { name: 'Open' },
+        custom_type: { status_options: [{ gid: 's1', name: 'Open' }, { gid: 's2', name: 'Done' }, { gid: 's3', name: '옛 상태', enabled: false }] },
         custom_fields: [
           { gid: 'f1', name: 'Issue Type', type: 'enum', display_value: '질문', enum_options: [{ gid: 'o1', name: '질문' }, { gid: 'o2', name: '옛것', enabled: false }] },
           { gid: 'f2', name: '고객사', type: 'text', display_value: 'NH' },
@@ -3003,6 +3004,7 @@ describe('Asana 패널', () => {
     }
     const v2 = toDetail(task)
     expect(v2?.status).toBe('Open')
+    expect(v2?.statuses).toEqual([{ gid: 's1', name: 'Open' }, { gid: 's2', name: 'Done' }])
     expect(v2?.places).toEqual(['Support › 이슈'])
     expect(v2?.comments.map(c => c.author)).toEqual(['Nomin'])
     expect(v2?.fields[0]?.options).toEqual([{ gid: 'o1', name: '질문' }])
@@ -3235,6 +3237,8 @@ describe('Asana 패널', () => {
         data: {
           gid: '1',
           name: 'JDK 25 문의',
+          custom_type_status_option: { name: '검토 중' },
+          custom_type: { status_options: [{ gid: 'st1', name: '검토 중' }, { gid: 'st2', name: '진행 중' }] },
           comments: [
             { gid: 'c1', text: '@Nomin 확인', created_by: { gid: 'u1', name: 'Sam' }, resource_subtype: 'comment_added' },
             { gid: 'c2', text: '남의 댓글', created_by: { gid: 'u9', name: 'Nomin' }, resource_subtype: 'comment_added' },
@@ -3345,6 +3349,35 @@ describe('Asana 패널', () => {
     expect(fetched).toEqual([])
     await pane.press({ key: 'asana-edit-c1' })
     expect(JSON.stringify(await pane.drawn())).not.toContain('개인 토큰(PAT)이 있어야')
+    await pane.unmount()
+  })
+
+  test('상태 바꾸기: 토큰이 있으면 고른 상태를 REST 로 바꾸고 상세를 다시 읽는다', { options: { language: 'ko', asanaToken: 'pat-4' } }, async ($, on) => {
+    const fetched: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }> = []
+    editMock(on, fetched)
+    const pane = await openTask($)
+    expect(await pane.find({ key: 'asana-status-st2' })).toBeUndefined()
+    await pane.press({ key: 'asana-status' })
+    expect(JSON.stringify(await pane.find({ key: 'asana-status-st1' }))).toContain('✓ 검토 중')
+    await pane.press({ key: 'asana-status-st2' })
+    await wait(50)
+    expect(fetched.map(call => call.url)).toEqual(['https://app.asana.com/api/1.0/tasks/1?opt_fields=gid'])
+    expect(fetched[0]?.init?.method).toBe('PUT')
+    expect(fetched[0]?.init?.headers?.Authorization).toBe('Bearer pat-4')
+    expect(JSON.parse(fetched[0]?.init?.body ?? '{}')).toEqual({ data: { custom_type_status_option: 'st2' } })
+    expect(await pane.find({ key: 'asana-status-st2' })).toBeUndefined()
+    await pane.unmount()
+  })
+
+  test('상태 바꾸기: 토큰이 없으면 REST 를 부르지 않고 넣는 법을 알린다', KO, async ($, on) => {
+    const fetched: Array<{ url: string }> = []
+    editMock(on, fetched)
+    const pane = await openTask($)
+    await pane.press({ key: 'asana-status' })
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('상태 바꾸기는 Asana 개인 토큰(PAT)이 있어야')
+    expect(drawn).not.toContain('asana-status-st2')
+    expect(fetched).toEqual([])
     await pane.unmount()
   })
 

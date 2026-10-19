@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.35.0",
+  "version": "0.36.0",
   "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, Asana tasks, Slack DMs, diff, context, background tasks and Markdown preview panes",
   "keywords": [
     "claude-code",
@@ -115,7 +115,7 @@
     "asanaToken": {
       "type": "string",
       "title": "Asana personal access token",
-      "description": "Optional. Lets the /desk-asana pane edit your own comments through Asana's REST API (the Asana MCP servers have no tool for it). Create one at https://app.asana.com/0/my-apps. Leave empty to keep the pane on MCP only",
+      "description": "Optional. Lets the /desk-asana pane edit your own comments and change a task type's status through Asana's REST API (the Asana MCP servers cannot do either). Create one at https://app.asana.com/0/my-apps. Leave empty to keep the pane on MCP only",
       "sensitive": true,
       "required": false
     }

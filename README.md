@@ -26,7 +26,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 | `/desk-diff [file\|branch\|commits]` | Diff pane: uncommitted changes, the whole branch, or per commit |
 | `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
 | `/desk-pr` | The current branch's pull request or merge request, with a merge button |
-| `/desk-asana` | The Asana tasks assigned to you, a search across the workspace, or your projects' tasks by section: details, comments, adding a comment, assignee and dropdown fields |
+| `/desk-asana` | The Asana tasks assigned to you, a search across the workspace, or your projects' tasks by section: details, comments, adding a comment, assignee, dropdown fields and status |
 | `/desk-slack` | The Slack DMs and group DMs sent to you, as conversations: recent messages, replying, closing |
 | `/desk-preview [file]` | Markdown preview pane: a document drawn like the transcript |
 | `/desk-context` | Context breakdown, usage limits and session cost |
@@ -125,7 +125,7 @@ Your open Asana tasks, read through the Asana MCP server Claude Code already has
 - `Change` next to the assignee finds people by name or email (or `Me`); handing the task to someone takes a second press within 5 seconds
 - `›` next to a dropdown custom field lists its options; press one to set it
 - `Hand to Claude` fills the prompt with the task's title, link, status, description and recent comments
-- The task type's status (Open, In Progress…) is shown but cannot be changed: neither Asana MCP server has a tool for it
+- `Change` next to the task type's status (Open, In Progress…) lists the type's statuses; picking one changes it. The Asana MCP servers drop this key, so like `✎ Edit` it goes to Asana's REST API only when you have put in a personal access token; without one, `Change` explains how and calls nothing
 - These Asana calls are made only when you open the pane or press something in it, and they go through Claude Code's permission check like Claude's own calls: auto mode refuses them and the default mode asks each time, unless an allow rule covers them. Add the pane's tools to `permissions.allow` in `~/.claude/settings.json`; while some are missing, the pane lists them. For the V2 server:
 
   ```json
@@ -213,7 +213,7 @@ Search for `desk-look` in `/config` to find these options.
 | `prBar` | `on` (default), `off` | The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds, and, while a check (GitLab: a pipeline job) of an open PR is still running, between turns too: every 15 seconds, doubling up to every 2 minutes while nothing changes (a check that never reports, such as one waiting for a runner, would otherwise keep asking); without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting |
 | `previewAutoOpen` | `on` (default), `off` | Open a Markdown document Claude writes in the preview pane when the turn ends. `off` leaves it to the `◫` chips and `/desk-preview` |
 | `slackNotify` | `on` (default), `off` | Notify when a new Slack DM arrives (see `/desk-slack`). `off` keeps checking for the pane and the `✉` chip, without notifications |
-| `asanaToken` | empty (default) | An Asana personal access token, optional. Only `✎ Edit` on your Asana comments uses it (see `/desk-asana`); set it with `/plugin configure desk-look@cc-desktop-mod` |
+| `asanaToken` | empty (default) | An Asana personal access token, optional. Only `✎ Edit` on your Asana comments and changing a task type's status use it (see `/desk-asana`); set it with `/plugin configure desk-look@cc-desktop-mod` |
 | `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
 
 ## Update

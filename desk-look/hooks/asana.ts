@@ -42,7 +42,7 @@ const SEARCH_FIELDS = `${LIST_FIELDS},assignee.name`
 const TASK_FIELDS = [
   'name,notes,completed,due_on,permalink_url,assignee.name',
   'memberships.project.name,memberships.section.name',
-  'custom_type_status_option.name',
+  'custom_type_status_option.name,custom_type.status_options.gid,custom_type.status_options.name,custom_type.status_options.enabled',
   'custom_fields.name,custom_fields.type,custom_fields.display_value,custom_fields.is_formula_field',
   'custom_fields.enum_options.name,custom_fields.enum_options.enabled',
 ].join(',')
@@ -434,6 +434,7 @@ type RawTask = {
   assignee?: Named
   memberships?: RawMembership[]
   custom_type_status_option?: Named
+  custom_type?: { status_options?: Array<{ gid?: string; name?: string; enabled?: boolean }> } | null
   custom_fields?: Array<{
     gid?: string
     name?: string
@@ -532,6 +533,9 @@ export function toDetail(json: unknown, stories?: unknown): AsanaDetail | null {
     dueOn: str(raw.due_on),
     completed: raw.completed === true,
     status: str(raw.custom_type_status_option?.name),
+    statuses: (raw.custom_type?.status_options ?? [])
+      .filter(option => typeof option?.gid === 'string' && option.enabled !== false)
+      .map(option => ({ gid: option.gid as string, name: str(option.name) ?? '' })),
     places: (raw.memberships ?? [])
       .map(item => [str(item?.project?.name), str(item?.section?.name)].filter(Boolean).join(' › '))
       .filter(place => place !== ''),
