@@ -7,7 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
-import { commentCall, dueChip, findAsanaServer, groupTasks, mentionHtml, nextOffset, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
+import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls, mentionHtml, nextOffset, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, readRoom, resultText, roomList, slackText, tsCompare, unreadCount } from '../hooks/slack'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
@@ -3034,7 +3034,7 @@ describe('Asana 패널', () => {
     expect(dueChip('2026-10-16', '2026-10-16')?.level).toBe('warning')
     expect(dueChip('2027-01-02', '2026-10-16')).toEqual({ text: '2027/1/2', level: 'muted' })
     expect(dueChip(null, '2026-10-16')).toBeNull()
-    const task = (gid: string, project: string | null) => ({ gid, name: gid, dueOn: null, project, section: null, url: null, assignee: null })
+    const task = (gid: string, project: string | null) => ({ gid, name: gid, dueOn: null, project, section: null, url: null, assignee: null, isDone: false, status: null })
     expect(groupTasks([task('a', null), task('b', 'P'), task('c', 'Q'), task('d', 'P')]).map(g => [g.name, g.tasks.map(t => t.gid)])).toEqual([
       ['P', ['b', 'd']],
       ['Q', ['c']],
@@ -3381,6 +3381,40 @@ describe('Asana 패널', () => {
     await pane.unmount()
   })
 
+  test('내 태스크: 최근 14일 안에 완료된 것도 읽어 끝에 상태와 함께 묶는다(v1 은 완료 쪽을 따로 부른다)', KO, async ($, on) => {
+    const since = doneSince(Date.parse('2026-10-17T03:00:00Z'))
+    expect(since).toBe('2026-10-03T03:00:00.000Z')
+    expect(listCalls({ name: 'a', dialect: 'v2' }, since).map(call => call.args.completed_since)).toEqual([since])
+    expect(listCalls({ name: 'a', dialect: 'v1' }, since).map(call => [call.args.completed, call.args.completed_at_after])).toEqual([
+      [false, undefined],
+      [true, since],
+    ])
+
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    on('clock.now', () => ({ value: Date.parse('2026-10-17T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    on('mcp.call', () =>
+      text({
+        data: [
+          { gid: '1', name: '진행하는 일', memberships: [] },
+          { gid: '2', name: '멈춘 일', completed: true, custom_type_status_option: { name: '보류' }, memberships: [] },
+          { gid: '3', name: '끝낸 일', completed: true, memberships: [] },
+        ],
+      }),
+    )
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
+    await wait(50)
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('내 태스크 1')
+    expect(drawn).toContain('최근 14일 완료 · 2')
+    expect(drawn).toContain('● 보류')
+    expect(drawn.indexOf('진행하는 일')).toBeLessThan(drawn.indexOf('최근 14일 완료'))
+    expect(JSON.stringify(await pane.find({ key: 'asana-task-2' }))).toContain('"dimColor":true')
+    await pane.unmount()
+  })
+
   test('검색창: 워크스페이스 태스크를 담당자와 함께, 상세에서 돌아오면 검색 결과, ✕ 나 빈 검색이면 내 태스크', KO, async ($, on) => {
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
     const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
@@ -3487,7 +3521,7 @@ describe('Asana 패널', () => {
         case 'get_tasks':
           return e.args.offset === undefined
             ? text({ data: [apm('t1', '정리', 'Untitled section', 'Aiden'), apm('t2', '통계 api', '백엔드', 'Sam')], next_page: { offset: 'tp2' } })
-            : text({ data: [apm('t3', '세션 관리', '백엔드', 'Chalse')], next_page: null })
+            : text({ data: [apm('t3', '세션 관리', '백엔드', 'Chalse'), { ...apm('t4', '멈춘 일', '백엔드', 'Sam'), completed: true, custom_type_status_option: { name: '보류' } }], next_page: null })
         default:
           return text({ data: { gid: 't3', name: '세션 관리', assignee: { gid: 'Chalse', name: 'Chalse' } } })
       }
@@ -3507,7 +3541,8 @@ describe('Asana 패널', () => {
     await pane.press({ key: 'asana-project-p2' })
     await wait(50)
     const tasksCalls = calls.filter(call => call.tool === 'get_tasks')
-    expect(tasksCalls[0]?.args).toMatchObject({ project: 'p2', completed_since: '2026-10-17T03:00:00.000Z' })
+    // 열린 태스크와 최근 14일 안에 완료된 태스크(보류처럼 완료로 치는 상태)를 함께 읽는다
+    expect(tasksCalls[0]?.args).toMatchObject({ project: 'p2', completed_since: '2026-10-03T03:00:00.000Z' })
     expect(tasksCalls[0]?.args).not.toHaveProperty('assignee')
     expect(tasksCalls[1]?.args.offset).toBe('tp2')
     drawn = JSON.stringify(await pane.drawn())
@@ -3516,6 +3551,10 @@ describe('Asana 패널', () => {
     expect(drawn).toContain('백엔드')
     expect(drawn).toContain(' Chalse')
     expect(drawn.indexOf('섹션 없음')).toBeLessThan(drawn.indexOf('백엔드'))
+    // 완료된 태스크는 섹션이 아니라 끝의 최근 완료 묶음에 상태와 함께
+    expect(drawn).toContain('최근 14일 완료 · 1')
+    expect(drawn).toContain('● 보류')
+    expect(drawn.indexOf('세션 관리')).toBeLessThan(drawn.indexOf('멈춘 일'))
 
     // 섹션을 접으면 그 태스크가 빠진다
     await pane.press({ key: 'asana-section-1' })

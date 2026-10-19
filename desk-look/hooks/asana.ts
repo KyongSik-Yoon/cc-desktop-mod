@@ -36,7 +36,7 @@ export const ASANA_TOOLS = {
 
 // 상세에 보이는 댓글 수. v2 get_task 는 최근 것부터 이만큼, v1 은 활동 100개에서 댓글만 골라 끝에서 이만큼.
 export const COMMENT_LIMIT = 30
-const LIST_FIELDS = 'name,due_on,memberships.project.name,memberships.section.name,permalink_url'
+const LIST_FIELDS = 'name,due_on,completed,custom_type_status_option.name,memberships.project.name,memberships.section.name,permalink_url'
 // 검색 결과는 남의 태스크도 섞이니 담당자 이름까지.
 const SEARCH_FIELDS = `${LIST_FIELDS},assignee.name`
 const TASK_FIELDS = [
@@ -70,10 +70,19 @@ export function paneTools(server: AsanaServer): string[] {
 
 export type AsanaCall = { tool: string; args: Record<string, unknown> }
 
-export function listCall(server: AsanaServer): AsanaCall {
-  return server.dialect === 'v2'
-    ? { tool: ASANA_TOOLS.v2.list, args: { completed_since: 'now', limit: 100, opt_fields: LIST_FIELDS } }
-    : { tool: ASANA_TOOLS.v1.list, args: { assignee_any: 'me', completed: false, limit: 100, sort_by: 'modified_at', opt_fields: LIST_FIELDS } }
+// 작업 유형에 따라 보류·배포 대기 같은 상태도 Asana 에선 완료라, 열린 태스크와 함께 이 날수 안에 완료된 태스크도 읽어
+// 목록 끝 "최근 완료" 묶음으로 보인다. since 는 그 시작 ISO 시각(doneSince).
+export const DONE_DAYS = 14
+export const doneSince = (now: number) => new Date(now - DONE_DAYS * 86_400_000).toISOString()
+
+// 내 태스크: v2 는 completed_since 하나로 열린 것과 그 뒤 완료된 것을 함께 준다. v1 검색은 둘을 한 번에 못 받아 따로 부른다.
+export function listCalls(server: AsanaServer, since: string): AsanaCall[] {
+  if (server.dialect === 'v2') return [{ tool: ASANA_TOOLS.v2.list, args: { completed_since: since, limit: 100, opt_fields: LIST_FIELDS } }]
+  const args = { assignee_any: 'me', limit: 100, opt_fields: LIST_FIELDS }
+  return [
+    { tool: ASANA_TOOLS.v1.list, args: { ...args, completed: false, sort_by: 'modified_at' } },
+    { tool: ASANA_TOOLS.v1.list, args: { ...args, completed: true, completed_at_after: since, sort_by: 'completed_at' } },
+  ]
 }
 
 // 워크스페이스 전체에서 글자로 찾는다(이름·설명·댓글). 열린 태스크만, 최근에 바뀐 것부터.
@@ -384,7 +393,7 @@ export function projectsCall(server: AsanaServer, offset?: string): AsanaCall {
   }
 }
 
-// 프로젝트의 열린 태스크. v2 completed_since 는 ISO 시각만 받는다('now' 를 거절).
+// 프로젝트의 열린 태스크와 since 뒤에 완료된 태스크. v2 completed_since 는 ISO 시각만 받는다('now' 를 거절).
 export function projectTasksCall(server: AsanaServer, project: string, since: string, offset?: string): AsanaCall {
   return {
     tool: ASANA_TOOLS[server.dialect].tasks,
@@ -392,7 +401,7 @@ export function projectTasksCall(server: AsanaServer, project: string, since: st
       project,
       completed_since: since,
       limit: 100,
-      opt_fields: 'name,due_on,assignee.name,permalink_url,memberships.project.gid,memberships.project.name,memberships.section.name',
+      opt_fields: 'name,due_on,completed,custom_type_status_option.name,assignee.name,permalink_url,memberships.project.gid,memberships.project.name,memberships.section.name',
       ...(offset ? { offset } : {}),
     },
   }
@@ -466,6 +475,8 @@ export function toTasks(json: unknown, project?: string): AsanaTask[] {
         section: str(place?.section?.name),
         url: str(raw.permalink_url),
         assignee: str(raw.assignee?.name),
+        isDone: raw.completed === true,
+        status: str(raw.custom_type_status_option?.name),
       }
     })
 }

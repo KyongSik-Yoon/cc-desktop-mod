@@ -26,7 +26,9 @@ import {
   dueChip,
   findAsanaServer,
   groupTasks,
-  listCall,
+  listCalls,
+  DONE_DAYS,
+  doneSince,
   localDay,
   meCall,
   myGid,
@@ -1018,9 +1020,13 @@ async function refreshAsana($: EngineInterface) {
       await update($, asana, (): AsanaState => ({ status: 'none', server: null, tasks: [], unruled: [] }))
       return
     }
-    const [unruled, got] = await Promise.all([findUnruled($, server), callAsana($, server, listCall(server))])
+    const since = doneSince(await $.clock.now())
+    const [unruled, ...gots] = await Promise.all([findUnruled($, server), ...listCalls(server, since).map(call => callAsana($, server, call))])
+    const failed = gots.find(got => !got.ok)
     await update($, asana, (): AsanaState =>
-      got.ok ? { status: 'ok', server, tasks: toTasks(got.data), unruled } : { status: 'failed', server, tasks: [], unruled, error: got.error },
+      failed && !failed.ok
+        ? { status: 'failed', server, tasks: [], unruled, error: failed.error }
+        : { status: 'ok', server, tasks: gots.flatMap(got => (got.ok ? toTasks(got.data) : [])), unruled },
     )
   })().finally(() => {
     asanaFetch = null
@@ -1079,7 +1085,7 @@ async function openAsanaProject($: EngineInterface, project: AsanaProject) {
   const server = (await read($, asana))?.server ?? null
   if (server === null) return
   await update($, asanaProject, (view): AsanaProjectView => ({ project, status: 'loading', tasks: view?.project.gid === project.gid ? view.tasks : [], isPartial: false }))
-  const since = new Date(await $.clock.now()).toISOString()
+  const since = doneSince(await $.clock.now())
   const tasks = []
   let offset: string | undefined
   for (let page = 0; page < PROJECT_TASK_PAGES; page++) {
@@ -1239,6 +1245,8 @@ async function changeAsanaStatus($: EngineInterface, server: AsanaServer, task: 
   if (!got.ok) return $.ui.toast(T.asanaUpdateFailed(got.error))
   await update($, open, state => ({ ...state, 'asana:status': false }))
   void refreshAsana($).catch(() => undefined)
+  const shown = await read($, asanaProject)
+  if (shown) void openAsanaProject($, shown.project).catch(() => undefined)
   await openAsanaTask($, server, task)
 }
 
@@ -4060,13 +4068,14 @@ export const register: Register = (on, options) => {
 
     const room = Math.max(16, columns - 10)
     const owner = (name: string | null) => name !== null && <Text color={COLORS.muted}>{` ${clip(name, 12)}`}</Text>
+    // 완료된 태스크는 흐리게, 마감일 대신 상태(없으면 ✓)를 붙인다.
     const taskRow = (task: AsanaTask) =>
       rowButton(
         els,
-        { key: `asana-task-${task.gid}`, onPress: () => void (server && openAsanaTask($, server, task.gid)) },
+        { key: `asana-task-${task.gid}`, dimColor: task.isDone, onPress: () => void (server && openAsanaTask($, server, task.gid)) },
         clip(task.name, task.assignee === null ? room : Math.max(12, room - 13)),
         owner(task.assignee),
-        due(task.dueOn),
+        task.isDone ? <Text color={COLORS.success}>{` ${task.status === null ? '✓' : `● ${task.status}`}`}</Text> : due(task.dueOn),
       )
     // 탭은 diff 패널의 범위 고르기와 같은 모양. allow 규칙 안내는 두 탭 모두에.
     const tabs = (
@@ -4093,15 +4102,19 @@ export const register: Register = (on, options) => {
     // 프로젝트 탭: 펼친 프로젝트가 있으면 그 열린 태스크를 섹션별로(담당자 누구든), 아니면 내가 멤버인 프로젝트.
     if (tab === 'projects' && !isUnready) {
       if (project !== null) {
-        const groups = groupTasks(project.tasks, 'section')
+        const openTasks = project.tasks.filter(task => !task.isDone)
+        const doneTasks = project.tasks.filter(task => task.isDone)
+        const groups = groupTasks(openTasks, 'section')
         const foldOf = (name: string | null) => `asana:fold:${project.project.gid}:${name ?? ''}`
+        const doneFold = `asana:done:${project.project.gid}`
         // 하나라도 펴져 있으면 모두 접고, 다 접혀 있으면 모두 편다(diff 패널의 모두 접기와 같다).
-        const anyOpen = groups.some(group => !(armed[foldOf(group.name)] ?? false))
-        const foldAll = () => update($, open, state => ({ ...state, ...Object.fromEntries(groups.map(group => [foldOf(group.name), anyOpen])) }))
+        const folds = [...groups.map(group => foldOf(group.name)), ...(doneTasks.length > 0 ? [doneFold] : [])]
+        const anyOpen = folds.some(fold => !(armed[fold] ?? false))
+        const foldAll = () => update($, open, state => ({ ...state, ...Object.fromEntries(folds.map(fold => [fold, anyOpen])) }))
         const message =
           project.status === 'failed'
             ? T.asanaFailed(project.error ?? '')
-            : project.tasks.length === 0
+            : openTasks.length === 0
               ? project.status === 'loading'
                 ? T.asanaLoading
                 : T.asanaProjectEmpty
@@ -4114,7 +4127,7 @@ export const register: Register = (on, options) => {
               <Box columnGap={1}>
                 <Button key="asana-project-back" plain dimColor label={T.asanaProjectsBack} onPress={() => void closeAsanaProject($)} />
                 <Button key="asana-project-refresh" plain dimColor hotkey="r" label={project.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaProject($, project.project)} />
-                {groups.length > 1 && (
+                {folds.length > 1 && (
                   <Button key="asana-fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />
                 )}
               </Box>
@@ -4122,7 +4135,7 @@ export const register: Register = (on, options) => {
                 <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
                   {clip(project.project.name, Math.max(8, columns - 16))}
                 </Text>
-                <Text color={COLORS.muted}>{T.asanaOpenCount(project.tasks.length)}</Text>
+                <Text color={COLORS.muted}>{T.asanaOpenCount(openTasks.length)}</Text>
               </Box>
               {project.project.url && <Link href={project.project.url}>{T.asanaOpenOn}</Link>}
             </Box>
@@ -4145,6 +4158,19 @@ export const register: Register = (on, options) => {
                 </Box>
               )
             })}
+            {doneTasks.length > 0 && (
+              <Box key="asana-sectionbox-done" flexDirection="column">
+                {rowButton(
+                  els,
+                  { key: 'asana-section-done', onPress: () => void toggle($, doneFold) },
+                  (armed[doneFold] ?? false) ? '› ' : '⌄ ',
+                  <Text color={COLORS.muted} weight="semibold">
+                    {T.asanaRecentDone(DONE_DAYS, doneTasks.length)}
+                  </Text>,
+                )}
+                {!(armed[doneFold] ?? false) && doneTasks.map(taskRow)}
+              </Box>
+            )}
             {project.isPartial && <Text color={COLORS.muted}>{T.asanaProjectPartial(project.tasks.length)}</Text>}
           </Box>
         )
@@ -4184,9 +4210,11 @@ export const register: Register = (on, options) => {
     }
 
     // 검색 중이면 찾은 태스크를, 아니면 내 태스크를 같은 모양(프로젝트 묶음)으로 보인다.
-    const tasks = (search ?? state)?.tasks ?? []
+    const listed = (search ?? state)?.tasks ?? []
+    const tasks = listed.filter(task => !task.isDone)
+    const doneTasks = listed.filter(task => task.isDone)
     const message =
-      state === null || (state.status === 'loading' && tasks.length === 0 && search === null)
+      state === null || (state.status === 'loading' && listed.length === 0 && search === null)
         ? T.asanaLoading
         : state.status === 'none'
           ? T.asanaNoServer
@@ -4237,6 +4265,14 @@ export const register: Register = (on, options) => {
             {group.tasks.map(taskRow)}
           </Box>
         ))}
+        {doneTasks.length > 0 && (
+          <Box key="asana-group-done" flexDirection="column">
+            <Text color={COLORS.muted} weight="semibold">
+              {T.asanaRecentDone(DONE_DAYS, doneTasks.length)}
+            </Text>
+            {doneTasks.map(taskRow)}
+          </Box>
+        )}
       </Box>
     )
   })
