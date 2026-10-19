@@ -7,7 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
-import { dueChip, findAsanaServer, groupTasks, nextOffset, paneTools, projectTasksCall, toDetail, toProjects, toTasks, updateCall, updateProblem } from '../hooks/asana'
+import { commentCall, dueChip, findAsanaServer, groupTasks, mentionHtml, nextOffset, paneTools, projectTasksCall, toDetail, toProjects, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, readRoom, resultText, roomList, slackText, tsCompare, unreadCount } from '../hooks/slack'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
@@ -3114,6 +3114,19 @@ describe('Asana 패널', () => {
     await wait(50)
     expect(calls.find(call => call.tool === 'add_comment')?.args).toEqual({ task_id: '1', text: '확인했습니다\n내일 답변' })
 
+    // 멘션: 찾은 사람을 누르면 댓글 칸에 "@이름 " 이 끼워지고, 보내면 html_text 의 <a data-asana-gid/> 가 된다
+    await pane.press({ key: 'asana-mention' })
+    await pane.input({ key: 'asana-mention-search', text: 'nom' })
+    await wait(50)
+    await pane.press({ key: 'asana-mention-u9' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('asana-write-1-2')
+    expect(drawn).toContain('@Nomin ')
+    expect(drawn).not.toContain('asana-mention-search')
+    await pane.input({ key: 'asana-write-1-2', text: '@Nomin 확인 <부탁>\n내일' })
+    await wait(50)
+    expect(calls.filter(call => call.tool === 'add_comment').at(-1)?.args).toEqual({ task_id: '1', html_text: '<body><a data-asana-gid="u9"/> 확인 &lt;부탁&gt;\n내일</body>' })
+
     // 담당자: 찾고, 한 번 누르면 확인 문구, 다시 눌러야 넘긴다
     await pane.press({ key: 'asana-assign' })
     await pane.input({ key: 'asana-user-search', text: 'nom' })
@@ -3128,6 +3141,18 @@ describe('Asana 패널', () => {
     await pane.press({ key: 'asana-back' })
     expect(JSON.stringify(await pane.drawn())).toContain('내 태스크')
     await pane.unmount()
+  })
+
+  test('멘션 html: 긴 이름부터, 지운 멘션은 그냥 글, 특수 문자는 이스케이프', () => {
+    const kim = { gid: '1', name: 'Kim', email: null }
+    const kimLee = { gid: '2', name: 'Kim Lee', email: null }
+    expect(mentionHtml('@Kim Lee 와 @Kim 확인', [kim, kimLee])).toBe('<body><a data-asana-gid="2"/> 와 <a data-asana-gid="1"/> 확인</body>')
+    expect(mentionHtml('그냥 글 & 끝', [kim])).toBeNull()
+    expect(mentionHtml('@A.B 와 @AxB', [{ gid: '3', name: 'A.B', email: null }])).toBe('<body><a data-asana-gid="3"/> 와 @AxB</body>')
+    expect(mentionHtml('@R&D 팀', [{ gid: '4', name: 'R&D', email: null }])).toBe('<body><a data-asana-gid="4"/> 팀</body>')
+    const v1 = { name: 'claude_ai_asana', dialect: 'v1' as const }
+    expect(commentCall(v1, '9', '@Kim 봐 주세요', [kim])).toEqual({ tool: 'asana_create_task_story', args: { task_id: '9', html_text: '<body><a data-asana-gid="1"/> 봐 주세요</body>' } })
+    expect(commentCall(v1, '9', '봐 주세요', [kim]).args).toEqual({ task_id: '9', text: '봐 주세요' })
   })
 
   test('검색창: 워크스페이스 태스크를 담당자와 함께, 상세에서 돌아오면 검색 결과, ✕ 나 빈 검색이면 내 태스크', KO, async ($, on) => {

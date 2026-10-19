@@ -168,7 +168,9 @@ const asanaProjects = atom({ plugin: 'desk-look', key: 'asanaProjects' } as cons
 const asanaProject = atom({ plugin: 'desk-look', key: 'asanaProject' } as const, null as AsanaProjectView | null)
 let asanaDraft = ''
 let asanaQuery = ''
-let asanaSent = 0
+// 댓글 칸의 키 차례: 보낸 뒤나 멘션을 끼운 뒤 새 value 로 다시 그린다. 끼운 사람은 보낼 때 "@이름" 이 남은 것만 멘션.
+let asanaWriteRound = 0
+let asanaMentions: AsanaUser[] = []
 let asanaFindText = ''
 let asanaFindRound = 0
 // /desk-slack: 받은 편지(store 를 비춘 것)와 펼친 대화방. 답장 글은 Input 이 갖고, 보내면 키를 바꿔 비운다.
@@ -1102,8 +1104,9 @@ async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: strin
 async function closeAsanaTask($: EngineInterface) {
   asanaDraft = ''
   asanaQuery = ''
+  asanaMentions = []
   await update($, asanaUsers, () => null)
-  await update($, open, state => ({ ...state, 'asana:assign': false }))
+  await update($, open, state => ({ ...state, 'asana:assign': false, 'asana:mention': false }))
   await update($, asanaView, () => null)
 }
 
@@ -1128,15 +1131,37 @@ async function clearAsanaSearch($: EngineInterface) {
 async function postAsanaComment($: EngineInterface, server: AsanaServer, gid: string, value: string) {
   const text = value.trim()
   if (text === '') return
-  const got = await callAsana($, server, commentCall(server, gid, text))
+  const got = await callAsana($, server, commentCall(server, gid, text, asanaMentions))
   if (!got.ok) {
     $.ui.toast(T.asanaCommentFailed(got.error))
     return
   }
   asanaDraft = ''
-  asanaSent++
+  asanaMentions = []
+  asanaWriteRound++
   $.ui.toast(T.asanaCommented)
   await openAsanaTask($, server, gid)
+}
+
+// 사람 찾기 칸은 담당자 바꾸기와 멘션이 함께 쓴다. 한쪽 결과를 다른 쪽에서 누르지 않게 하나만 열고 결과를 비운다.
+async function toggleAsanaFinder($: EngineInterface, mode: 'assign' | 'mention') {
+  const other = mode === 'assign' ? 'asana:mention' : 'asana:assign'
+  asanaQuery = ''
+  await update($, asanaUsers, () => null)
+  await update($, open, state => ({ ...state, [`asana:${mode}`]: !(state[`asana:${mode}`] ?? false), [other]: false }))
+}
+
+// 댓글 칸에 "@이름 " 을 끼우고(비었으면 그것만, 쓰던 글이 있으면 뒤에) 다시 그 칸으로 커서를 돌린다.
+async function pickMention($: EngineInterface, gid: string, user: AsanaUser) {
+  if (!asanaMentions.some(item => item.gid === user.gid)) asanaMentions = [...asanaMentions, user]
+  const gap = asanaDraft === '' || /\s$/.test(asanaDraft) ? '' : ' '
+  asanaDraft = `${asanaDraft}${gap}@${user.name} `
+  asanaWriteRound++
+  asanaQuery = ''
+  await update($, asanaUsers, () => null)
+  await update($, open, state => ({ ...state, 'asana:mention': false }))
+  await $.ui.open({ id: ASANA_PANE, title: 'Asana', focus: true })
+  await $.ui.focus({ requestId: ASANA_PANE, key: `asana-write-${gid}-${asanaWriteRound}` }).catch(() => undefined)
 }
 
 async function findAsanaUsers($: EngineInterface, server: AsanaServer, value: string) {
@@ -3742,6 +3767,33 @@ export const register: Register = (on, options) => {
         )
       }
       const isAssigning = armed['asana:assign'] ?? false
+      const isMentioning = armed['asana:mention'] ?? false
+      // 담당자 바꾸기와 멘션이 함께 쓰는 사람 찾기 칸. 행은 모드마다 키가 달라 누른 쪽 동작만 한다.
+      const finder = (key: string, rows: Array<ReturnType<typeof rowButton>>) => (
+        <Box flexDirection="column" paddingLeft={2}>
+          <Input
+            key={key}
+            label={T.asanaFindLabel}
+            placeholder={T.asanaFindPlaceholder}
+            value={asanaQuery}
+            submitLabel={T.asanaFind}
+            autoFocus
+            onInput={value => (asanaQuery = value)}
+            onSubmit={value => void findAsanaUsers($, server, value)}
+          />
+          {rows}
+          {found?.status === 'loading' && <Text color={COLORS.muted}>{T.asanaFinding}</Text>}
+          {found?.status === 'failed' && <Text color={COLORS.danger}>{T.asanaFindFailed}</Text>}
+          {found?.status === 'ok' && found.users.length === 0 && <Text color={COLORS.muted}>{T.asanaNoPeople}</Text>}
+        </Box>
+      )
+      const mentionRow = (user: AsanaUser) =>
+        rowButton(
+          els,
+          { key: `asana-mention-${user.gid}`, dimColor: true, onPress: () => void pickMention($, task.gid, user) },
+          `@${user.name}`,
+          user.email ? <Text color={COLORS.muted}>{` ${user.email}`}</Text> : null,
+        )
       const userRow = (user: { gid: string; name: string; email?: string | null }) => {
         const isArmed = armed[`asana:arm:${user.gid}`] ?? false
         return rowButton(
@@ -3780,27 +3832,9 @@ export const register: Register = (on, options) => {
             <Box columnGap={1}>
               <Text color={COLORS.muted}>{T.asanaAssignee}</Text>
               <Text color={task.assignee ? COLORS.text : COLORS.muted}>{task.assignee?.name ?? T.asanaNobody}</Text>
-              <Button key="asana-assign" plain dimColor label={isAssigning ? T.cancel : T.asanaChange} onPress={() => void toggle($, 'asana:assign')} />
+              <Button key="asana-assign" plain dimColor label={isAssigning ? T.cancel : T.asanaChange} onPress={() => void toggleAsanaFinder($, 'assign')} />
             </Box>
-            {isAssigning && (
-              <Box flexDirection="column" paddingLeft={2}>
-                <Input
-                  key="asana-user-search"
-                  label={T.asanaFindLabel}
-                  placeholder={T.asanaFindPlaceholder}
-                  value={asanaQuery}
-                  submitLabel={T.asanaFind}
-                  autoFocus
-                  onInput={value => (asanaQuery = value)}
-                  onSubmit={value => void findAsanaUsers($, server, value)}
-                />
-                {userRow({ gid: 'me', name: T.asanaMe })}
-                {found?.status === 'loading' && <Text color={COLORS.muted}>{T.asanaFinding}</Text>}
-                {found?.status === 'failed' && <Text color={COLORS.danger}>{T.asanaFindFailed}</Text>}
-                {found?.status === 'ok' && found.users.length === 0 && <Text color={COLORS.muted}>{T.asanaNoPeople}</Text>}
-                {found?.status === 'ok' && found.users.map(userRow)}
-              </Box>
-            )}
+            {isAssigning && finder('asana-user-search', [userRow({ gid: 'me', name: T.asanaMe }), ...(found?.status === 'ok' ? found.users.map(userRow) : [])])}
             {task.dueOn !== null && (
               <Box columnGap={1}>
                 <Text color={COLORS.muted}>{T.asanaDueLabel}</Text>
@@ -3851,7 +3885,7 @@ export const register: Register = (on, options) => {
               </Box>
             ))}
             <Input
-              key={`asana-write-${task.gid}-${asanaSent}`}
+              key={`asana-write-${task.gid}-${asanaWriteRound}`}
               label={T.asanaCommentLabel}
               placeholder={T.asanaCommentPlaceholder}
               rows={COMMENT_ROWS}
@@ -3860,6 +3894,10 @@ export const register: Register = (on, options) => {
               onInput={value => (asanaDraft = value)}
               onSubmit={value => void postAsanaComment($, server, task.gid, value)}
             />
+            <Box>
+              <Button key="asana-mention" plain dimColor label={isMentioning ? T.cancel : T.asanaMention} onPress={() => void toggleAsanaFinder($, 'mention')} />
+            </Box>
+            {isMentioning && finder('asana-mention-search', found?.status === 'ok' ? found.users.map(mentionRow) : [])}
           </Box>
         </Box>
       )

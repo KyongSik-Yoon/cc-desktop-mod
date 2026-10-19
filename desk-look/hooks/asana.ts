@@ -92,8 +92,24 @@ export function storiesCall(gid: string): AsanaCall {
   return { tool: ASANA_TOOLS.v1.stories, args: { task_id: gid, limit: 100, opt_fields: 'text,created_at,created_by.name,resource_subtype' } }
 }
 
-export function commentCall(server: AsanaServer, gid: string, text: string): AsanaCall {
-  return { tool: ASANA_TOOLS[server.dialect].comment, args: { task_id: gid, text } }
+// 고른 사람이 글에 "@이름" 으로 남아 있으면 html_text 로 보낸다(<a data-asana-gid/> 가 멘션이 된다). 지웠으면 그냥 글.
+export function commentCall(server: AsanaServer, gid: string, text: string, mentions: readonly AsanaUser[] = []): AsanaCall {
+  const html = mentionHtml(text, mentions)
+  return { tool: ASANA_TOOLS[server.dialect].comment, args: html === null ? { task_id: gid, text } : { task_id: gid, html_text: html } }
+}
+
+// 긴 이름부터 맞춰 "Kim" 이 "Kim Lee" 의 앞을 먹지 않게 한다. 줄바꿈은 <body> 안에 그대로 둔다(<br> 은 허용 요소가 아니다).
+export function mentionHtml(text: string, mentions: readonly AsanaUser[]): string | null {
+  const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  const byName = new Map(mentions.filter(user => user.name !== '').map(user => [escape(`@${user.name}`), user.gid]))
+  if (byName.size === 0) return null
+  const names = [...byName.keys()].sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  let isUsed = false
+  const body = escape(text).replace(new RegExp(names.join('|'), 'g'), name => {
+    isUsed = true
+    return `<a data-asana-gid="${byName.get(name)}"/>`
+  })
+  return isUsed ? `<body>${body}</body>` : null
 }
 
 // 담당자나 드롭다운 필드 하나를 바꾼다. v2 는 여러 태스크를 받는 배열, v1 의 custom_fields 는 JSON 글자.
