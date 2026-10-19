@@ -7,7 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
-import { commentCall, dueChip, findAsanaServer, groupTasks, mentionHtml, nextOffset, paneTools, projectTasksCall, toDetail, toProjects, toTasks, updateCall, updateProblem } from '../hooks/asana'
+import { commentCall, dueChip, findAsanaServer, groupTasks, mentionHtml, nextOffset, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, readRoom, resultText, roomList, slackText, tsCompare, unreadCount } from '../hooks/slack'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
@@ -3155,6 +3155,199 @@ describe('Asana 패널', () => {
     expect(commentCall(v1, '9', '봐 주세요', [kim]).args).toEqual({ task_id: '9', text: '봐 주세요' })
   })
 
+  test('글자 diff: 바뀐 덩어리만, 옛 글 자리로', () => {
+    expect(textDiff('abc', 'abc')).toEqual([])
+    expect(textDiff('굵게 둔 글', '굵게 고친 글')).toEqual([{ start: 3, end: 4, text: '고친' }])
+    expect(textDiff('하나 둘 셋', '하나 둘째 셋 넷')).toEqual([
+      { start: 4, end: 4, text: '째' },
+      { start: 6, end: 6, text: ' 넷' },
+    ])
+    expect(textDiff('지울 글', '글')).toEqual([{ start: 0, end: 3, text: '' }])
+    expect(textDiff('', '새 글')).toEqual([{ start: 0, end: 0, text: '새 글' }])
+    // 거의 새로 쓴 긴 글은 가운데를 통째로 바꾸는 한 덩어리로(기억이 D² 로 불지 않게)
+    const old = `머리 ${'가나다라'.repeat(800)} 꼬리`
+    const rewritten = `머리 ${'마바사아'.repeat(800)} 꼬리`
+    const started = Date.now()
+    expect(textDiff(old, rewritten)).toEqual([{ start: 3, end: old.length - 3, text: '마바사아'.repeat(800) }])
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(storyPatch(`<body>${old}</body>`, rewritten)).toEqual({ html: `<body>${rewritten}</body>` })
+  })
+
+  test('댓글 고치기 원문: 서식은 그대로 두고 바뀐 글자만 html_text 에 끼운다', () => {
+    // 실제 Asana 모양(2026-10-19): text 는 멘션을 프로필 URL 로 풀고 서식을 버려 html_text 에서 만든다. 줄바꿈은 \n 그대로
+    const html =
+      '<body><a href="https://app.asana.com/1/1/profile/2" data-asana-gid="9" data-asana-accessible="true" data-asana-type="user" data-asana-dynamic="true">@Arnold</a> 결론은 <strong>굵게 둔 글</strong> 입니다 &amp; 끝.\n<ul><li>하나</li><li>둘</li></ul>마지막</body>'
+    expect(storyView(html)?.text).toBe('@Arnold 결론은 굵게 둔 글 입니다 & 끝.\n• 하나\n• 둘\n마지막')
+    // 굵은 글 안·목록 안·끝을 고치면 그 자리만 바뀌고 태그·멘션은 바이트 그대로
+    expect(storyPatch(html, '@Arnold 결론은 굵게 고친 글 입니다 & 끝.\n• 하나\n• 둘째\n마지막 (고침)')).toEqual({
+      html: '<body><a href="https://app.asana.com/1/1/profile/2" data-asana-gid="9" data-asana-accessible="true" data-asana-type="user" data-asana-dynamic="true">@Arnold</a> 결론은 <strong>굵게 고친 글</strong> 입니다 &amp; 끝.\n<ul><li>하나</li><li>둘째</li></ul>마지막 (고침)</body>',
+    })
+    // 멘션은 통째로 지울 수 있다
+    expect(storyPatch(html, '결론은 굵게 둔 글 입니다 & 끝.\n• 하나\n• 둘\n마지막')).toEqual({
+      html: '<body>결론은 <strong>굵게 둔 글</strong> 입니다 &amp; 끝.\n<ul><li>하나</li><li>둘</li></ul>마지막</body>',
+    })
+    // 멘션 글자 일부, 목록 기호는 못 바꾼다
+    expect(storyPatch(html, '@Arnol 결론은 굵게 둔 글 입니다 & 끝.\n• 하나\n• 둘\n마지막')).toEqual({ error: 'format' })
+    expect(storyPatch(html, '@Arnold 결론은 굵게 둔 글 입니다 & 끝.\n• 하나\n둘\n마지막')).toEqual({ error: 'format' })
+    expect(storyPatch(html, storyView(html)?.text ?? '')).toBeNull()
+    // 멘션 바로 뒤에 붙인 글은 멘션 밖, 앞 글 조각에
+    expect(storyPatch(html, '@Arnold님 결론은 굵게 둔 글 입니다 & 끝.\n• 하나\n• 둘\n마지막')).toMatchObject({ html: expect.stringContaining('</a>님 결론은') })
+  })
+
+  test('댓글 고치기 원문: 이미지·번호 목록·코드 블록·인용도 자리를 지킨다', () => {
+    const image = '<body><img src="https://x/a.png" data-asana-gid="1" data-asana-type="attachment" />분석 X-View</body>'
+    expect(storyView(image)?.text).toBe('[이미지]분석 X-View')
+    expect(storyPatch(image, '[이미지]분석된 X-View')).toEqual({ html: '<body><img src="https://x/a.png" data-asana-gid="1" data-asana-type="attachment" />분석된 X-View</body>' })
+    expect(storyPatch(image, '분석 X-View')).toEqual({ error: 'format' })
+
+    const blocks = '<body>머리\n<ol><li>첫째</li><li>둘째</li></ol><pre>a &lt; b\nc</pre><blockquote>인용 <a href="https://e.x/">https://e.x/</a></blockquote>꼬리</body>'
+    expect(storyView(blocks)?.text).toBe('머리\n1. 첫째\n2. 둘째\na < b\nc\n인용 https://e.x/\n꼬리')
+    expect(storyPatch(blocks, '머리말\n1. 첫째\n2. 둘째\na <= b\nc\n인용문 https://e.x/\n꼬리')).toEqual({
+      html: '<body>머리말\n<ol><li>첫째</li><li>둘째</li></ol><pre>a &lt;= b\nc</pre><blockquote>인용문 <a href="https://e.x/">https://e.x/</a></blockquote>꼬리</body>',
+    })
+    expect(storyPatch('<body></body>', '새 글')).toEqual({ html: '<body>새 글</body>' })
+
+    // 고친 조각 안의 안 바꾼 글자는 원래 모양(&quot;)을 지킨다
+    expect(storyPatch('<body>&quot;기획&quot; 확인</body>', '"기획" 다시 확인')).toEqual({ html: '<body>&quot;기획&quot; 다시 확인</body>' })
+    // 줄 첫머리 목록 기호 바로 앞에 쓴 글은 앞 문단 끝으로 갈 수밖에 없어 거절하고, 줄로 끝나면(새 줄 넣기) 받는다
+    const list = '<body>머리\n<ul><li>하나</li></ul></body>'
+    expect(storyPatch(list, '머리\n앞• 하나')).toEqual({ error: 'format' })
+    expect(storyPatch(list, '머리\n새 줄\n• 하나')).toEqual({ html: '<body>머리\n새 줄\n<ul><li>하나</li></ul></body>' })
+  })
+
+  const editMock = (
+    on: On,
+    fetched: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }>,
+    { tokenOwner = 'u1', toasts = [] as string[], storyHtml = (): string => '<body><a data-asana-gid="u9" data-asana-type="user">@Nomin</a> 확인</body>', putStatus = (): number => 200 } = {},
+  ) => {
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    on('clock.now', () => ({ value: Date.parse('2026-10-16T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('ui.toast', ($, e) => {
+      toasts.push(JSON.stringify(e))
+      return { value: undefined as never }
+    })
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    on('mcp.call', ($, e) => {
+      if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: 'JDK 25 문의', memberships: [] }] })
+      if (e.tool === 'get_me') return text({ data: { gid: 'u1', name: 'Sam' } })
+      return text({
+        data: {
+          gid: '1',
+          name: 'JDK 25 문의',
+          comments: [
+            { gid: 'c1', text: '@Nomin 확인', created_by: { gid: 'u1', name: 'Sam' }, resource_subtype: 'comment_added' },
+            { gid: 'c2', text: '남의 댓글', created_by: { gid: 'u9', name: 'Nomin' }, resource_subtype: 'comment_added' },
+          ],
+        },
+      })
+    })
+    on('http.fetch', ($, e) => {
+      fetched.push({ url: e.url, init: e.init })
+      const body = e.url.includes('/users/me')
+        ? { data: { gid: tokenOwner } }
+        : e.init?.method === 'PUT'
+          ? { data: { gid: 'c1', text: '고친 글' } }
+          : { data: { gid: 'c1', html_text: storyHtml(), created_by: { gid: 'u1' } } }
+      if (e.init?.method === 'PUT' && putStatus() !== 200) return { value: { status: putStatus(), ok: false, headers: {}, text: JSON.stringify({ errors: [{ message: 'Forbidden' }] }) } } as never
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } } as never
+    })
+  }
+  const openTask = async ($: Parameters<TestBody>[0]) => {
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
+    await pane.press({ key: 'asana-task-1' })
+    await wait(50)
+    return pane
+  }
+
+  test('댓글 고치기: 토큰이 있으면 내 댓글만 ✎, REST 로 원문을 읽어 멘션을 지키며 고친다', { options: { language: 'ko', asanaToken: ' pat-1 ' } }, async ($, on) => {
+    const fetched: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }> = []
+    editMock(on, fetched)
+    const pane = await openTask($)
+    expect(await pane.find({ key: 'asana-edit-c1' })).toBeDefined()
+    expect(await pane.find({ key: 'asana-edit-c2' })).toBeUndefined()
+
+    await pane.press({ key: 'asana-edit-c1' })
+    await wait(50)
+    expect(fetched.map(call => call.url).sort()).toEqual([
+      'https://app.asana.com/api/1.0/stories/c1?opt_fields=html_text,created_by.gid',
+      'https://app.asana.com/api/1.0/users/me?opt_fields=gid',
+    ])
+    expect(fetched[0]?.init?.headers?.Authorization).toBe('Bearer pat-1')
+    expect(JSON.stringify(await pane.drawn())).toContain('asana-editing-c1')
+
+    await pane.input({ key: 'asana-editing-c1-0', text: '@Nomin 다시 확인' })
+    await wait(50)
+    const put = fetched.find(call => call.init?.method === 'PUT')
+    expect(put?.url).toBe('https://app.asana.com/api/1.0/stories/c1?opt_fields=text')
+    expect(JSON.parse(put?.init?.body ?? '{}')).toEqual({ data: { html_text: '<body><a data-asana-gid="u9" data-asana-type="user">@Nomin</a> 다시 확인</body>' } })
+    expect(JSON.stringify(await pane.drawn())).not.toContain('asana-editing-c1')
+    await pane.unmount()
+  })
+
+  test('댓글 고치기: 토큰 주인이 쓴 댓글이 아니면 열지 않는다', { options: { language: 'ko', asanaToken: 'pat-2' } }, async ($, on) => {
+    const fetched: Array<{ url: string; init?: { method?: string } }> = []
+    const toasts: string[] = []
+    editMock(on, fetched, { tokenOwner: 'someone-else', toasts })
+    const pane = await openTask($)
+    await pane.press({ key: 'asana-edit-c1' })
+    await wait(50)
+    expect(toasts.join()).toContain('내가 쓴 댓글만')
+    expect(JSON.stringify(await pane.drawn())).not.toContain('asana-editing-c1')
+    expect(fetched.some(call => call.init?.method === 'PUT')).toBe(false)
+    await pane.unmount()
+  })
+
+  test('댓글 고치기: 서식이 있어도 열고 바뀐 글자만 보내며, 서식 자리를 건드리거나 저장이 실패하면 고치던 글을 둔다', { options: { language: 'ko', asanaToken: 'pat-3' } }, async ($, on) => {
+    const fetched: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+    const toasts: string[] = []
+    let status = 403
+    editMock(on, fetched, { toasts, storyHtml: () => '<body>목록\n<ul><li><strong>하나</strong></li></ul></body>', putStatus: () => status })
+    const pane = await openTask($)
+    await pane.press({ key: 'asana-edit-c1' })
+    await wait(50)
+    expect(JSON.stringify(await pane.drawn())).toContain('목록\\n• 하나')
+
+    // 목록 기호를 지우면 보내지 않는다
+    await pane.input({ key: 'asana-editing-c1-0', text: '목록\n하나' })
+    await wait(50)
+    expect(toasts.join()).toContain('목록 기호')
+    expect(fetched.some(call => call.init?.method === 'PUT')).toBe(false)
+    // 칸은 Enter 뒤에 비므로 고치던 글을 새 키로 다시 그린다
+    expect(JSON.stringify(await pane.find({ key: 'asana-editing-c1-1' }))).toContain('목록\\n하나')
+
+    // 저장이 거절되면 고치던 글을 둔다
+    await pane.input({ key: 'asana-editing-c1-1', text: '목록\n• 하나둘' })
+    await wait(50)
+    expect(toasts.join()).toContain('Forbidden')
+    expect(JSON.stringify(await pane.find({ key: 'asana-editing-c1-2' }))).toContain('하나둘')
+
+    status = 200
+    await pane.input({ key: 'asana-editing-c1-2', text: '목록\n• 하나둘' })
+    await wait(50)
+    expect(JSON.parse(fetched.filter(call => call.init?.method === 'PUT').at(-1)?.init?.body ?? '{}')).toEqual({
+      data: { html_text: '<body>목록\n<ul><li><strong>하나둘</strong></li></ul></body>' },
+    })
+    expect(JSON.stringify(await pane.drawn())).not.toContain('asana-editing-c1')
+    await pane.unmount()
+  })
+
+  test('댓글 고치기: 토큰이 없으면 REST 를 부르지 않고 넣는 법을 알린다', KO, async ($, on) => {
+    const fetched: Array<{ url: string }> = []
+    editMock(on, fetched)
+    const pane = await openTask($)
+    await pane.press({ key: 'asana-edit-c1' })
+    await wait(50)
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('개인 토큰(PAT)이 있어야')
+    expect(drawn).toContain('/plugin configure desk-look@cc-desktop-mod')
+    expect(fetched).toEqual([])
+    await pane.press({ key: 'asana-edit-c1' })
+    expect(JSON.stringify(await pane.drawn())).not.toContain('개인 토큰(PAT)이 있어야')
+    await pane.unmount()
+  })
+
   test('검색창: 워크스페이스 태스크를 담당자와 함께, 상세에서 돌아오면 검색 결과, ✕ 나 빈 검색이면 내 태스크', KO, async ($, on) => {
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
     const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
@@ -3184,7 +3377,7 @@ describe('Asana 패널', () => {
 
     await pane.press({ key: 'asana-task-7' })
     await wait(50)
-    expect(calls.at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: '7' } })
+    expect(calls.filter(call => call.tool === 'get_task').at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: '7' } })
     await pane.press({ key: 'asana-back' })
     expect(JSON.stringify(await pane.drawn())).toContain('JDK 25 문의')
 
@@ -3297,9 +3490,24 @@ describe('Asana 패널', () => {
     expect(drawn).not.toContain('세션 관리')
     await pane.press({ key: 'asana-section-1' })
 
+    // 모두 접기(z): 하나라도 펴져 있으면 다 접고, 다 접혔으면 다 편다. 다시 읽기는 r
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'asana-fold-all' }))).toContain('"hotkey":"z"')
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'asana-project-refresh' }))).toContain('"hotkey":"r"')
+    await pane.press({ key: 'asana-section-0' })
+    await pane.press({ key: 'asana-fold-all' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).not.toContain('정리')
+    expect(drawn).not.toContain('세션 관리')
+    expect(drawn).toContain('모두 펴기')
+    await pane.press({ key: 'asana-fold-all' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('정리')
+    expect(drawn).toContain('세션 관리')
+    expect(drawn).toContain('모두 접기')
+
     await pane.press({ key: 'asana-task-t3' })
     await wait(50)
-    expect(calls.at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: 't3' } })
+    expect(calls.filter(call => call.tool === 'get_task').at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: 't3' } })
     await pane.press({ key: 'asana-back' })
     expect(JSON.stringify(await pane.drawn())).toContain('세션 관리')
 

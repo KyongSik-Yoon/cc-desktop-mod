@@ -119,7 +119,7 @@ export type PrState = { status: 'loading' | 'ok' | 'none' | 'off'; branch: strin
 export type AsanaServer = { name: string; dialect: 'v2' | 'v1' }
 // assignee 는 검색 결과에만 있다(내 태스크 목록은 모두 나).
 export type AsanaTask = { gid: string; name: string; dueOn: string | null; project: string | null; section: string | null; url: string | null; assignee: string | null }
-export type AsanaComment = { gid: string; author: string; at: string; text: string }
+export type AsanaComment = { gid: string; author: string; authorGid: string | null; at: string; text: string }
 // 드롭다운(enum) 필드만 options 가 있다(패널에서 바꿀 수 있는 것). 수식 필드는 바꾸지 않는다.
 export type AsanaField = { gid: string; name: string; value: string | null; options: Array<{ gid: string; name: string }> | null }
 export type AsanaDetail = {
@@ -148,6 +148,9 @@ export type AsanaTab = 'mine' | 'projects'
 export type AsanaProject = { gid: string; name: string; url: string | null; members: number; open: number | null; isMine: boolean; modifiedAt: string }
 export type AsanaProjects = { status: 'loading' | 'ok' | 'failed'; projects: AsanaProject[]; error?: string }
 // 펼친 프로젝트의 열린 태스크(섹션은 task.section). isPartial: 읽는 쪽 수 한도에 걸려 뒤가 더 있다.
+// 댓글 고치기(PAT 가 있을 때만): notoken 은 토큰을 넣으라는 안내, loading 은 REST 로 원문을 읽는 중, saving 은 PUT 중.
+// story 는 원문 html_text 와 거기서 만든 고칠 글(저장할 때 둘을 견줘 바뀐 글자만 끼운다).
+export type AsanaEdit = { comment: string; status: 'notoken' | 'loading' | 'ready' | 'saving'; story: { text: string; html: string } | null }
 export type AsanaProjectView = { project: AsanaProject; status: 'loading' | 'ok' | 'failed'; tasks: AsanaTask[]; isPartial: boolean; error?: string }
 
 // /desk-slack: 엔진에 붙은 Slack MCP 서버(claude.ai 커넥터)로 읽는 나에게 온 DM·그룹 DM.
@@ -250,6 +253,7 @@ declare module 'claude-code' {
       asanaTab: AsanaTab
       asanaProjects: AsanaProjects | null
       asanaProject: AsanaProjectView | null
+      asanaEdit: AsanaEdit | null
       // /desk-slack: 받은 편지(store 를 비춘 것)와 펼친 대화방(null 이면 목록).
       slack: SlackState | null
       slackView: SlackView | null

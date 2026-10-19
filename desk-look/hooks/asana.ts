@@ -89,7 +89,7 @@ export function taskCall(server: AsanaServer, gid: string): AsanaCall {
 
 // v1 만: 댓글은 활동(story)에서 따로 읽는다. 정렬을 고를 수 없어 오래된 것부터 100개다.
 export function storiesCall(gid: string): AsanaCall {
-  return { tool: ASANA_TOOLS.v1.stories, args: { task_id: gid, limit: 100, opt_fields: 'text,created_at,created_by.name,resource_subtype' } }
+  return { tool: ASANA_TOOLS.v1.stories, args: { task_id: gid, limit: 100, opt_fields: 'text,created_at,created_by.name,created_by.gid,resource_subtype' } }
 }
 
 // 고른 사람이 글에 "@이름" 으로 남아 있으면 html_text 로 보낸다(<a data-asana-gid/> 가 멘션이 된다). 지웠으면 그냥 글.
@@ -98,18 +98,268 @@ export function commentCall(server: AsanaServer, gid: string, text: string, ment
   return { tool: ASANA_TOOLS[server.dialect].comment, args: html === null ? { task_id: gid, text } : { task_id: gid, html_text: html } }
 }
 
-// 긴 이름부터 맞춰 "Kim" 이 "Kim Lee" 의 앞을 먹지 않게 한다. 줄바꿈은 <body> 안에 그대로 둔다(<br> 은 허용 요소가 아니다).
+// 고른 사람의 "@이름" 을 <a data-asana-gid/> 로 바꾼다(Asana 가 이름으로 펼친다). 하나도 안 남았으면 null(그냥 글).
+// 긴 이름부터 맞춰 "Kim" 이 "Kim Lee" 의 앞을 먹지 않게 한다. 줄바꿈은 <body> 안에 그대로 둔다(Asana 도 html_text 에 \n 으로 둔다).
 export function mentionHtml(text: string, mentions: readonly AsanaUser[]): string | null {
-  const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  const byName = new Map(mentions.filter(user => user.name !== '').map(user => [escape(`@${user.name}`), user.gid]))
+  const byName = new Map(mentions.filter(user => user.name !== '').map(user => [escapeHtml(`@${user.name}`), user.gid]))
   if (byName.size === 0) return null
   const names = [...byName.keys()].sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   let isUsed = false
-  const body = escape(text).replace(new RegExp(names.join('|'), 'g'), name => {
+  const body = escapeHtml(text).replace(new RegExp(names.join('|'), 'g'), name => {
     isUsed = true
     return `<a data-asana-gid="${byName.get(name)}"/>`
   })
   return isUsed ? `<body>${body}</body>` : null
+}
+
+const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' }
+
+// 글 조각을 글자마다 원래 모양(엔티티면 &quot; 그대로)과 함께 푼다. 고친 조각도 안 바꾼 글자는 원래 모양으로 다시 쓴다.
+function decodeText(raw: string): { text: string; pieces: string[] } {
+  const pieces: string[] = []
+  let text = ''
+  for (const match of raw.matchAll(/&(#\d+|#x[0-9a-f]+|[a-z]+);|[\s\S]/gi)) {
+    const entity = match[1]
+    const code = entity?.startsWith('#x') || entity?.startsWith('#X') ? parseInt(entity.slice(2), 16) : entity?.startsWith('#') ? Number(entity.slice(1)) : null
+    const value = entity === undefined ? match[0] : code !== null ? String.fromCodePoint(code) : (ENTITIES[entity.toLowerCase()] ?? match[0])
+    // 한 글자가 UTF-16 두 칸이면 원래 모양은 첫 칸에만 둔다.
+    for (let unit = 0; unit < value.length; unit++) pieces.push(unit === 0 ? match[0] : '')
+    text += value
+  }
+  return { text, pieces }
+}
+const unescapeHtml = (raw: string) => decodeText(raw).text
+
+// 댓글 고치기: 두 Asana MCP 서버 모두 댓글(story)을 고치는 도구가 없어, 사람이 넣은 개인 토큰(PAT, userConfig asanaToken)이
+// 있을 때만 REST API 로 한다. story 의 text 는 멘션을 프로필 URL 로 풀고 서식을 버리므로, 고칠 글은 html_text 에서 만들고
+// 저장은 바뀐 글자만 원래 html_text 의 그 자리에 끼워 넣는다(storyPatch). 손대지 않은 태그·글은 바이트 그대로 남는다.
+export const ASANA_API = 'https://app.asana.com/api/1.0'
+
+export type AsanaStory = { gid: string; author: string | null; html: string; draft: string | null }
+
+export function toStory(json: unknown): AsanaStory | null {
+  const raw = dataOf(json) as { gid?: unknown; html_text?: unknown; created_by?: Named } | undefined
+  if (typeof raw?.gid !== 'string' || typeof raw.html_text !== 'string') return null
+  return { gid: raw.gid, author: str(raw.created_by?.gid), html: raw.html_text, draft: storyView(raw.html_text)?.text ?? null }
+}
+
+type Tok = { raw: string; kind: 'text' | 'open' | 'close' | 'self'; name: string; text: string; pieces: string[] }
+// 고칠 글의 글자 한 칸: 글 조각(seg 번째 토큰의 off 번째 글자) 아니면 고칠 수 없는 표시(group). 표시는 멘션·링크·이미지(인라인)와
+// 목록 기호·블록 앞뒤 줄바꿈(구조)이다. before·after 는 그 표시 앞뒤에 글을 끼울 수 있는 토큰 자리(끼울 수 없으면 null).
+type Cell = { seg: number; off: number } | { group: number }
+type Group = { start: number; end: number; before: number | null; after: number | null; isDeletable: boolean; first: number; last: number }
+
+function tokenize(html: string): Tok[] {
+  const body = html.replace(/^\s*<body>/, '').replace(/<\/body>\s*$/, '')
+  return (body.match(/<[^>]+>|[^<]+/g) ?? []).map(raw => {
+    if (!raw.startsWith('<')) return { raw, kind: 'text', name: '', ...decodeText(raw) }
+    const name = (/^<\/?\s*([a-zA-Z][a-zA-Z0-9]*)/.exec(raw)?.[1] ?? '').toLowerCase()
+    const kind = raw.startsWith('</') ? 'close' : raw.endsWith('/>') || name === 'img' || name === 'hr' || name === 'br' ? 'self' : 'open'
+    return { raw, kind, name, text: '', pieces: [] }
+  })
+}
+
+const BLOCKS = new Set(['h1', 'h2', 'blockquote', 'pre', 'ul', 'ol'])
+
+export function storyView(html: string): { text: string; cells: Cell[]; groups: Group[]; toks: Tok[] } | null {
+  const toks = tokenize(html)
+  const cells: Cell[] = []
+  const groups: Group[] = []
+  const lists: Array<{ ordered: boolean; n: number }> = []
+  let text = ''
+  let pendingBreak: number | null = null
+  const atLineStart = () => text === '' || text.endsWith('\n')
+  const fixed = (shown: string, at: Omit<Group, 'start' | 'end'>) => {
+    if (shown === '') return
+    const group = groups.length
+    groups.push({ ...at, start: text.length, end: text.length + shown.length })
+    for (const _ of shown) cells.push({ group })
+    text += shown
+  }
+  const flushBreak = (next: string) => {
+    if (pendingBreak !== null && !next.startsWith('\n') && !atLineStart()) fixed('\n', { before: null, after: pendingBreak, isDeletable: false, first: pendingBreak, last: pendingBreak })
+    pendingBreak = null
+  }
+  for (let i = 0; i < toks.length; i++) {
+    const tok = toks[i] as Tok
+    if (tok.kind === 'text') {
+      flushBreak(tok.text)
+      for (let off = 0; off < tok.text.length; off++) cells.push({ seg: i, off })
+      text += tok.text
+    } else if (tok.kind === 'open' && tok.name === 'a') {
+      // 링크·멘션은 통째로 하나의 표시: 안쪽 글자를 보이되 고칠 수 없고, 다 지우면 링크째 지운다.
+      let close = i + 1
+      while (close < toks.length && !(toks[close]?.kind === 'close' && toks[close]?.name === 'a')) close++
+      if (close >= toks.length) return null
+      flushBreak('')
+      fixed(toks.slice(i + 1, close).map(inner => inner.text).join(''), { before: i, after: close, isDeletable: true, first: i, last: close })
+      i = close
+    } else if (tok.kind === 'self' && tok.name === 'img') {
+      flushBreak('')
+      fixed(T.asanaImage, { before: i, after: i, isDeletable: false, first: i, last: i })
+    } else if (tok.kind === 'self' && tok.name === 'hr') {
+      flushBreak('')
+      fixed(`${atLineStart() ? '' : '\n'}———\n`, { before: i, after: i, isDeletable: false, first: i, last: i })
+    } else if (tok.kind === 'open' && (tok.name === 'ul' || tok.name === 'ol')) {
+      flushBreak('')
+      lists.push({ ordered: tok.name === 'ol', n: 0 })
+    } else if (tok.kind === 'open' && tok.name === 'li') {
+      flushBreak('')
+      const list = lists.at(-1)
+      if (list) list.n++
+      const mark = list?.ordered ? `${list.n}. ` : '• '
+      fixed(`${atLineStart() ? '' : '\n'}${'  '.repeat(Math.max(0, lists.length - 1))}${mark}`, { before: null, after: i, isDeletable: false, first: i, last: i })
+    } else if (tok.kind === 'open' && BLOCKS.has(tok.name)) {
+      flushBreak('')
+      if (!atLineStart()) fixed('\n', { before: i, after: i, isDeletable: false, first: i, last: i })
+    } else if (tok.kind === 'close' && BLOCKS.has(tok.name)) {
+      if (tok.name === 'ul' || tok.name === 'ol') lists.pop()
+      pendingBreak = i
+    }
+  }
+  return { text, cells, groups, toks }
+}
+
+// 글자 단위 diff(Myers). 앞뒤 같은 글은 먼저 걷어 낸다. 돌려주는 것은 옛 글의 [start, end) 를 text 로 바꾸는 덩어리들.
+// 바뀐 곳이 DIFF_LIMIT 를 넘으면(거의 새로 쓴 글) 기억이 D² 로 불어나므로, 가운데를 통째로 바꾸는 한 덩어리로 돌려준다.
+const DIFF_LIMIT = 500
+
+export function textDiff(a: string, b: string): Array<{ start: number; end: number; text: string }> {
+  let head = 0
+  while (head < a.length && head < b.length && a[head] === b[head]) head++
+  let tail = 0
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++
+  const x0 = a.slice(head, a.length - tail)
+  const y0 = b.slice(head, b.length - tail)
+  const n = x0.length
+  const m = y0.length
+  const max = n + m
+  const v = new Map<number, number>([[1, 0]])
+  const trace: Array<Map<number, number>> = []
+  let found = false
+  for (let d = 0; d <= max && !found; d++) {
+    if (d > DIFF_LIMIT) return [{ start: head, end: a.length - tail, text: y0 }]
+    trace.push(new Map(v))
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && (v.get(k - 1) ?? -1) < (v.get(k + 1) ?? -1)) ? (v.get(k + 1) ?? 0) : (v.get(k - 1) ?? 0) + 1
+      let y = x - k
+      while (x < n && y < m && x0[x] === y0[y]) {
+        x++
+        y++
+      }
+      v.set(k, x)
+      if (x >= n && y >= m) {
+        found = true
+        break
+      }
+    }
+  }
+  // 거꾸로 따라가며 한 칸씩 (지움 | 넣음 | 같음) 을 모은다.
+  const ops: Array<{ kind: 'eq' | 'del' | 'ins'; a: number; b: number }> = []
+  let x = n
+  let y = m
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const prev = trace[d] as Map<number, number>
+    const k = x - y
+    const prevK = k === -d || (k !== d && (prev.get(k - 1) ?? -1) < (prev.get(k + 1) ?? -1)) ? k + 1 : k - 1
+    const prevX = d === 0 ? 0 : (prev.get(prevK) ?? 0)
+    const prevY = d === 0 ? 0 : prevX - prevK
+    while (x > prevX && y > prevY) {
+      x--
+      y--
+      ops.push({ kind: 'eq', a: x, b: y })
+    }
+    if (d > 0) {
+      if (x === prevX) ops.push({ kind: 'ins', a: x, b: y - 1 })
+      else ops.push({ kind: 'del', a: x - 1, b: y })
+      x = prevX
+      y = prevY
+    }
+  }
+  ops.reverse()
+  const hunks: Array<{ start: number; end: number; text: string }> = []
+  for (const op of ops) {
+    if (op.kind === 'eq') continue
+    const last = hunks.at(-1)
+    const start = op.a
+    if (last && last.end === start) {
+      if (op.kind === 'del') last.end = op.a + 1
+      else last.text += y0[op.b]
+    } else hunks.push({ start, end: op.kind === 'del' ? op.a + 1 : start, text: op.kind === 'ins' ? (y0[op.b] as string) : '' })
+  }
+  return hunks.map(hunk => ({ start: hunk.start + head, end: hunk.end + head, text: hunk.text }))
+}
+
+// 고친 글을 원래 html_text 에 끼워 넣는다. 바뀐 덩어리가 고칠 수 없는 표시(목록 기호, 이미지, 멘션 글자의 일부)를 건드리면 거절한다.
+// 멘션·링크는 통째로 지우는 것만 된다. 끼워 넣는 글은 왼쪽 글 조각의 서식을 따르고, 없으면 오른쪽, 그것도 없으면 표시의 앞뒤 자리에 둔다.
+export function storyPatch(html: string, edited: string): { html: string } | { error: 'format' } | null {
+  const view = storyView(html)
+  if (view === null) return { error: 'format' }
+  const { cells, groups, toks } = view
+  const hunks = textDiff(view.text, edited)
+  if (hunks.length === 0) return null
+  const del = new Map<number, Set<number>>()
+  const ins = new Map<number, Map<number, string>>()
+  const extra = new Map<number, string>()
+  const removed = new Set<number>()
+  const putText = (seg: number, off: number, value: string) => {
+    const at = ins.get(seg) ?? new Map<number, string>()
+    at.set(off, (at.get(off) ?? '') + value)
+    ins.set(seg, at)
+  }
+  for (const hunk of hunks) {
+    const covered = cells.slice(hunk.start, hunk.end)
+    for (const cell of covered) {
+      if ('seg' in cell) {
+        const set = del.get(cell.seg) ?? new Set<number>()
+        set.add(cell.off)
+        del.set(cell.seg, set)
+        continue
+      }
+      const group = groups[cell.group] as Group
+      if (!group.isDeletable || group.start < hunk.start || group.end > hunk.end) return { error: 'format' }
+      for (let tok = group.first; tok <= group.last; tok++) removed.add(tok)
+    }
+    if (hunk.text === '') continue
+    const firstText = covered.find(cell => 'seg' in cell) as { seg: number; off: number } | undefined
+    const left = cells[hunk.start - 1]
+    const right = cells[hunk.end]
+    const groupOf = (cell: Cell | undefined) => (cell && 'group' in cell ? (groups[cell.group] as Group) : null)
+    // 줄 첫머리의 목록 기호 바로 앞에 쓴 글은 html 에서 앞 문단 끝으로 갈 수밖에 없어, 줄로 끝나지 않으면 거절한다.
+    const mark = groupOf(right)
+    if (mark && mark.before === null && mark.start === hunk.end && (hunk.start === 0 || view.text[hunk.start - 1] === '\n') && !hunk.text.endsWith('\n')) {
+      return { error: 'format' }
+    }
+    if (firstText) putText(firstText.seg, firstText.off, hunk.text)
+    else if (left && 'seg' in left) putText(left.seg, left.off + 1, hunk.text)
+    else if (right && 'seg' in right) putText(right.seg, right.off, hunk.text)
+    else {
+      const before = groupOf(left)
+      const after = groupOf(right)
+      if (before && before.end === hunk.start && before.after !== null) extra.set(before.after, (extra.get(before.after) ?? '') + hunk.text)
+      else if (after && after.start === hunk.end && after.before !== null) extra.set(after.before - 1, (extra.get(after.before - 1) ?? '') + hunk.text)
+      else if (!left && !right) extra.set(-1, (extra.get(-1) ?? '') + hunk.text)
+      else return { error: 'format' }
+    }
+  }
+  const out: string[] = [escapeHtml(extra.get(-1) ?? '')]
+  toks.forEach((tok, i) => {
+    if (!removed.has(i)) {
+      if (tok.kind === 'text' && (del.has(i) || ins.has(i))) {
+        const gone = del.get(i)
+        const added = ins.get(i)
+        let value = ''
+        for (let off = 0; off <= tok.text.length; off++) {
+          value += escapeHtml(added?.get(off) ?? '')
+          if (off < tok.text.length && !gone?.has(off)) value += tok.pieces[off]
+        }
+        out.push(value)
+      } else out.push(tok.raw)
+    }
+    if (extra.has(i)) out.push(escapeHtml(extra.get(i) as string))
+  })
+  return { html: `<body>${out.join('')}</body>` }
 }
 
 // 담당자나 드롭다운 필드 하나를 바꾼다. v2 는 여러 태스크를 받는 배열, v1 의 custom_fields 는 JSON 글자.
@@ -253,7 +503,7 @@ export function toProjects(json: unknown, me: string | null): AsanaProject[] {
 function toComment(raw: RawStory): AsanaComment | null {
   if (typeof raw?.gid !== 'string' || typeof raw.text !== 'string') return null
   if (raw.resource_subtype !== undefined && raw.resource_subtype !== 'comment_added') return null
-  return { gid: raw.gid, author: str(raw.created_by?.name) ?? '?', at: str(raw.created_at) ?? '', text: raw.text }
+  return { gid: raw.gid, author: str(raw.created_by?.name) ?? '?', authorGid: str(raw.created_by?.gid), at: str(raw.created_at) ?? '', text: raw.text }
 }
 
 // 상세: v2 는 get_task 에 댓글이 들어 있고, v1 은 활동 목록(stories)을 따로 받아 댓글만 고른다.

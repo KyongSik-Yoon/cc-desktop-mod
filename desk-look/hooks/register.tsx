@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, AsanaDetail, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
@@ -20,6 +20,7 @@ import type { ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
 import type { MergeAction, MergeResult, Ran } from './pr'
 import {
+  ASANA_API,
   asanaPrompt,
   commentCall,
   dueChip,
@@ -36,9 +37,11 @@ import {
   resultData,
   searchCall,
   storiesCall,
+  storyPatch,
   taskCall,
   toDetail,
   toProjects,
+  toStory,
   toTasks,
   toUsers,
   updateCall,
@@ -171,6 +174,15 @@ let asanaQuery = ''
 // 댓글 칸의 키 차례: 보낸 뒤나 멘션을 끼운 뒤 새 value 로 다시 그린다. 끼운 사람은 보낼 때 "@이름" 이 남은 것만 멘션.
 let asanaWriteRound = 0
 let asanaMentions: AsanaUser[] = []
+// 댓글 고치기: 사람이 넣은 Asana 개인 토큰(userConfig asanaToken, 없으면 ''), 패널에서 고치는 중인 글,
+// 내 gid(MCP 로 읽어 ✎ 를 내 댓글에만 붙인다)와 토큰 주인 gid(고치기 전에 원문 작성자와 견준다).
+const asanaEdit = atom({ plugin: 'desk-look', key: 'asanaEdit' } as const, null as AsanaEdit | null)
+let asanaToken = ''
+let asanaEditDraft = ''
+// 고치는 칸의 키 차례: 칸은 Enter 뒤에 비므로, 거절·실패하면 고치던 글을 새 키로 다시 그린다.
+let asanaEditRound = 0
+let asanaMe: string | null = null
+let asanaTokenMe: string | null = null
 let asanaFindText = ''
 let asanaFindRound = 0
 // /desk-slack: 받은 편지(store 를 비춘 것)와 펼친 대화방. 답장 글은 Input 이 갖고, 보내면 키를 바꿔 비운다.
@@ -1094,7 +1106,8 @@ async function closeAsanaProject($: EngineInterface) {
 // 태스크 하나를 펼친다(같은 태스크를 다시 읽는 동안은 전 내용을 그대로 보인다).
 async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
   await update($, asanaView, (view): AsanaView => ({ gid, status: 'loading', task: view?.gid === gid ? view.task : null }))
-  const got = await callAsana($, server, taskCall(server, gid))
+  const [got, me] = await Promise.all([callAsana($, server, taskCall(server, gid)), asanaMe === null ? callAsana($, server, meCall(server)) : null])
+  if (me?.ok) asanaMe = myGid(me.data)
   const stories = got.ok && server.dialect === 'v1' ? await callAsana($, server, storiesCall(gid)) : null
   const task = got.ok ? toDetail(got.data, stories?.ok ? stories.data : undefined) : null
   const error = got.ok ? (task ? undefined : 'unexpected result') : got.error
@@ -1106,6 +1119,7 @@ async function closeAsanaTask($: EngineInterface) {
   asanaQuery = ''
   asanaMentions = []
   await update($, asanaUsers, () => null)
+  await update($, asanaEdit, () => null)
   await update($, open, state => ({ ...state, 'asana:assign': false, 'asana:mention': false }))
   await update($, asanaView, () => null)
 }
@@ -1133,7 +1147,12 @@ async function postAsanaComment($: EngineInterface, server: AsanaServer, gid: st
   if (text === '') return
   const got = await callAsana($, server, commentCall(server, gid, text, asanaMentions))
   if (!got.ok) {
+    // 칸은 Enter 뒤에 비므로 쓰던 글을 새 키로 다시 그린다.
     $.ui.toast(T.asanaCommentFailed(got.error))
+    asanaDraft = value
+    asanaWriteRound++
+    await update($, asanaView, view => (view ? { ...view } : view))
+    await $.ui.focus({ requestId: ASANA_PANE, key: `asana-write-${gid}-${asanaWriteRound}` }).catch(() => undefined)
     return
   }
   asanaDraft = ''
@@ -1143,12 +1162,87 @@ async function postAsanaComment($: EngineInterface, server: AsanaServer, gid: st
   await openAsanaTask($, server, gid)
 }
 
+// Asana REST(댓글 고치기만). 토큰은 헤더로만 보내고 오류 글에도 싣지 않는다. 엔진이 거절해도 오류 글로.
+async function asanaRest($: EngineInterface, path: string, init: { method?: string; body?: unknown } = {}): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
+  const headers = { Authorization: `Bearer ${asanaToken}`, Accept: 'application/json', ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }) }
+  const request = { method: init.method ?? 'GET', headers, ...(init.body === undefined ? {} : { body: JSON.stringify({ data: init.body }) }) }
+  try {
+    const res = await $.http.fetch(`${ASANA_API}${path}`, request)
+    if (res.status === 401) return { ok: false, error: T.asanaTokenRejected }
+    const json = JSON.parse(res.text || 'null') as { errors?: Array<{ message?: string }> } | null
+    if (!res.ok) return { ok: false, error: json?.errors?.[0]?.message ?? `HTTP ${res.status}` }
+    return { ok: true, data: json }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+// ✎ 를 누르면: 토큰이 없으면 넣는 법을 펼치고, 있으면 REST 로 원문(html_text)과 토큰 주인을 읽어 고치는 칸을 연다.
+// 다시 누르거나 취소하면 닫는다. 토큰 주인이 쓴 댓글이 아니면 열지 않는다(Asana 는 남의 댓글도 is_editable 로 줄 때가 있다).
+async function startAsanaEdit($: EngineInterface, comment: string) {
+  const shown = await read($, asanaEdit)
+  if (shown?.comment === comment) return update($, asanaEdit, () => null)
+  if (asanaToken === '') return update($, asanaEdit, (): AsanaEdit => ({ comment, status: 'notoken', story: null }))
+  await update($, asanaEdit, (): AsanaEdit => ({ comment, status: 'loading', story: null }))
+  const [got, me] = await Promise.all([
+    asanaRest($, `/stories/${comment}?opt_fields=html_text,created_by.gid`),
+    asanaTokenMe === null ? asanaRest($, '/users/me?opt_fields=gid') : null,
+  ])
+  if (me?.ok) asanaTokenMe = myGid(me.data)
+  const story = got.ok ? toStory(got.data) : null
+  const problem =
+    !got.ok ? got.error : me && !me.ok ? me.error : story === null ? 'empty result' : story.author !== asanaTokenMe ? T.asanaEditNotMine : story.draft === null ? T.asanaEditFormatted : null
+  if (problem !== null || story === null || story.draft === null) {
+    $.ui.toast(T.asanaEditFailed(problem ?? ''))
+    return update($, asanaEdit, () => null)
+  }
+  asanaEditDraft = story.draft
+  asanaEditRound = 0
+  await update($, asanaEdit, (state): AsanaEdit | null => (state?.comment !== comment ? state : { comment, status: 'ready', story: { text: story.draft as string, html: story.html } }))
+  await $.ui.open({ id: ASANA_PANE, title: 'Asana', focus: true })
+  await $.ui.focus({ requestId: ASANA_PANE, key: `asana-editing-${comment}-${asanaEditRound}` }).catch(() => undefined)
+}
+
+async function saveAsanaEdit($: EngineInterface, server: AsanaServer, task: string, value: string) {
+  const state = await read($, asanaEdit)
+  if (state?.status !== 'ready' || state.story === null || value.trim() === '') return
+  // 바뀐 글자만 원문 html_text 에 끼운다. 목록 기호·이미지·멘션 글자를 건드렸으면 고치던 글을 두고 알린다.
+  const patch = storyPatch(state.story.html, value)
+  if (patch === null) return update($, asanaEdit, () => null)
+  if ('error' in patch) {
+    $.ui.toast(T.asanaEditFailed(T.asanaEditFormatted))
+    return keepAsanaEdit($, state.comment, value)
+  }
+  await update($, asanaEdit, (shown): AsanaEdit | null => (shown?.comment !== state.comment ? shown : { ...shown, status: 'saving' }))
+  const got = await asanaRest($, `/stories/${state.comment}?opt_fields=text`, { method: 'PUT', body: { html_text: patch.html } })
+  if (!got.ok) {
+    $.ui.toast(T.asanaEditFailed(got.error))
+    return keepAsanaEdit($, state.comment, value)
+  }
+  asanaEditDraft = ''
+  $.ui.toast(T.asanaEdited)
+  await update($, asanaEdit, () => null)
+  await openAsanaTask($, server, task)
+}
+
+async function keepAsanaEdit($: EngineInterface, comment: string, value: string) {
+  asanaEditDraft = value
+  asanaEditRound++
+  await update($, asanaEdit, (shown): AsanaEdit | null => (shown?.comment !== comment ? shown : { ...shown, status: 'ready' }))
+  await $.ui.focus({ requestId: ASANA_PANE, key: `asana-editing-${comment}-${asanaEditRound}` }).catch(() => undefined)
+}
+
 // 사람 찾기 칸은 담당자 바꾸기와 멘션이 함께 쓴다. 한쪽 결과를 다른 쪽에서 누르지 않게 하나만 열고 결과를 비운다.
 async function toggleAsanaFinder($: EngineInterface, mode: 'assign' | 'mention') {
   const other = mode === 'assign' ? 'asana:mention' : 'asana:assign'
   asanaQuery = ''
   await update($, asanaUsers, () => null)
-  await update($, open, state => ({ ...state, [`asana:${mode}`]: !(state[`asana:${mode}`] ?? false), [other]: false }))
+  const isOpening = !((await read($, open))[`asana:${mode}`] ?? false)
+  await update($, open, state => ({ ...state, [`asana:${mode}`]: isOpening, [other]: false }))
+  // 댓글 칸에 고리가 있으면 autoFocus 가 듣지 않아(사람이 옮긴 고리는 그대로) 연 찾기 칸으로 직접 옮긴다.
+  if (!isOpening) return
+  await $.ui.open({ id: ASANA_PANE, title: 'Asana', focus: true })
+  await $.ui.focus({ requestId: ASANA_PANE, key: mode === 'assign' ? 'asana-user-search' : 'asana-mention-search' }).catch(() => undefined)
 }
 
 // 댓글 칸에 "@이름 " 을 끼우고(비었으면 그것만, 쓰던 글이 있으면 뒤에) 다시 그 칸으로 커서를 돌린다.
@@ -2314,6 +2408,9 @@ export const register: Register = (on, options) => {
   setLang(language === 'auto' ? 'en' : language)
   registerAsk(on, options.askNotify !== 'off')
   slackNotify = options.slackNotify !== 'off'
+  asanaToken = typeof options.asanaToken === 'string' ? options.asanaToken.trim() : ''
+  asanaMe = null
+  asanaTokenMe = null
   const isPreviewAuto = options.previewAutoOpen !== 'off'
 
   on('session.start', async ($, e, next) => {
@@ -3731,7 +3828,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text, Button, Input, Link } = els
-    const [state, view, armed, found, search, tab, projects, project, now] = await Promise.all([
+    const [state, view, armed, found, search, tab, projects, project, editing, now] = await Promise.all([
       read($, asana),
       read($, asanaView),
       read($, open),
@@ -3740,6 +3837,7 @@ export const register: Register = (on, options) => {
       read($, asanaTab),
       read($, asanaProjects),
       read($, asanaProject),
+      read($, asanaEdit),
       $.clock.now(),
     ])
     const columns = Math.max(24, e.props.bodyColumns)
@@ -3755,7 +3853,7 @@ export const register: Register = (on, options) => {
       const head = (
         <Box columnGap={1}>
           <Button key="asana-back" plain dimColor label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
-          <Button key="asana-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaTask($, server, view.gid)} />
+          <Button key="asana-reload" plain dimColor hotkey="r" label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaTask($, server, view.gid)} />
         </Box>
       )
       if (task === null) {
@@ -3880,8 +3978,30 @@ export const register: Register = (on, options) => {
                 <Box columnGap={1}>
                   <Text color={COLORS.accent}>{comment.author}</Text>
                   <Text color={COLORS.muted}>{Number.isNaN(Date.parse(comment.at)) ? '' : ago(Date.parse(comment.at), now)}</Text>
+                  {asanaMe !== null && comment.authorGid === asanaMe && (
+                    <Button
+                      key={`asana-edit-${comment.gid}`}
+                      plain
+                      dimColor
+                      label={editing?.comment === comment.gid ? (editing.status === 'loading' || editing.status === 'saving' ? '…' : T.cancel) : T.asanaEdit}
+                      onPress={() => void startAsanaEdit($, comment.gid)}
+                    />
+                  )}
                 </Box>
-                <Text color={COLORS.text}>{comment.text.trim()}</Text>
+                {editing?.comment === comment.gid && editing.story !== null ? (
+                  <Input
+                    key={`asana-editing-${comment.gid}-${asanaEditRound}`}
+                    label={T.asanaEditLabel}
+                    rows={Math.min(12, Math.max(COMMENT_ROWS, editing.story.text.split('\n').length + 1))}
+                    value={asanaEditDraft}
+                    submitLabel={editing.status === 'saving' ? '…' : T.asanaEditSave}
+                    onInput={value => (asanaEditDraft = value)}
+                    onSubmit={value => void saveAsanaEdit($, server, task.gid, value)}
+                  />
+                ) : (
+                  <Text color={COLORS.text}>{comment.text.trim()}</Text>
+                )}
+                {editing?.comment === comment.gid && editing.status === 'notoken' && <Text color={COLORS.warning}>{T.asanaNeedToken}</Text>}
               </Box>
             ))}
             <Input
@@ -3939,6 +4059,10 @@ export const register: Register = (on, options) => {
     if (tab === 'projects' && !isUnready) {
       if (project !== null) {
         const groups = groupTasks(project.tasks, 'section')
+        const foldOf = (name: string | null) => `asana:fold:${project.project.gid}:${name ?? ''}`
+        // 하나라도 펴져 있으면 모두 접고, 다 접혀 있으면 모두 편다(diff 패널의 모두 접기와 같다).
+        const anyOpen = groups.some(group => !(armed[foldOf(group.name)] ?? false))
+        const foldAll = () => update($, open, state => ({ ...state, ...Object.fromEntries(groups.map(group => [foldOf(group.name), anyOpen])) }))
         const message =
           project.status === 'failed'
             ? T.asanaFailed(project.error ?? '')
@@ -3954,7 +4078,10 @@ export const register: Register = (on, options) => {
             <Box flexDirection="column">
               <Box columnGap={1}>
                 <Button key="asana-project-back" plain dimColor label={T.asanaProjectsBack} onPress={() => void closeAsanaProject($)} />
-                <Button key="asana-project-refresh" plain dimColor label={project.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaProject($, project.project)} />
+                <Button key="asana-project-refresh" plain dimColor hotkey="r" label={project.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaProject($, project.project)} />
+                {groups.length > 1 && (
+                  <Button key="asana-fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />
+                )}
               </Box>
               <Box columnGap={1}>
                 <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
@@ -3966,7 +4093,7 @@ export const register: Register = (on, options) => {
             </Box>
             {message !== null && <Text color={COLORS.muted}>{message}</Text>}
             {groups.map((group, index) => {
-              const fold = `asana:fold:${project.project.gid}:${group.name ?? ''}`
+              const fold = foldOf(group.name)
               const isFolded = armed[fold] ?? false
               return (
                 <Box key={`asana-sectionbox-${index}`} flexDirection="column">
@@ -4004,7 +4131,7 @@ export const register: Register = (on, options) => {
             <Text color={COLORS.text} weight="semibold">
               {T.asanaMyProjects(mine.length)}
             </Text>
-            <Button key="asana-projects-refresh" plain dimColor label={projects?.status === 'loading' ? '…' : '↻'} onPress={() => void refreshAsanaProjects($)} />
+            <Button key="asana-projects-refresh" plain dimColor hotkey="r" label={projects?.status === 'loading' ? '…' : '↻'} onPress={() => void refreshAsanaProjects($)} />
           </Box>
           {message !== null && <Text color={COLORS.muted}>{message}</Text>}
           <Box flexDirection="column">
@@ -4049,6 +4176,7 @@ export const register: Register = (on, options) => {
             key="asana-refresh"
             plain
             dimColor
+            hotkey="r"
             label={(search ?? state)?.status === 'loading' ? '…' : '↻'}
             onPress={() => void (search && server ? searchAsana($, server, search.query) : refreshAsana($))}
           />
