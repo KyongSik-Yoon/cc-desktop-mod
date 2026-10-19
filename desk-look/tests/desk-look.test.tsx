@@ -3874,3 +3874,27 @@ describe('Slack 패널', () => {
     await pane.unmount()
   })
 })
+
+import { splitPastes } from '../hooks/register'
+
+test('붙여넣기 태그: 걷어 내고 본문만 따로', KO, () => {
+  const text = '<pasted_content id="4d1d">\nhttps://a.b/?x=1\n둘째 줄\n</pasted_content id="4d1d">\n\n이거 봐줘'
+  expect(splitPastes(text)).toEqual({ text: '\n\n이거 봐줘', pastes: ['https://a.b/?x=1\n둘째 줄'] })
+  expect(splitPastes('그냥 글').pastes).toEqual([])
+})
+
+test('붙여넣은 글은 칩 한 줄, 누르면 펼침', KO, async $ => {
+  const text = '<pasted_content id="4d1d">\nhttps://a.b/?x=1\nSECOND-LINE\n</pasted_content id="4d1d">\n\n이거 봐줘'
+  const props = { text, origin: { kind: 'composer' }, isExpanded: false } as never
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: VIEWPORT, props })
+  const drawn = JSON.stringify(await row.drawn())
+  expect(drawn).not.toContain('pasted_content')
+  expect(drawn).toContain('붙여넣은 글 · 2줄')
+  expect(drawn).toContain('이거 봐줘')
+  expect(drawn).not.toContain('SECOND-LINE')
+  const key = /"key":"(paste-[^"]+)"/.exec(drawn)?.[1]
+  expect(key).toBeDefined()
+  await row.press({ key: key ?? '' })
+  expect(JSON.stringify(await row.drawn())).toContain('SECOND-LINE')
+  await row.unmount()
+})

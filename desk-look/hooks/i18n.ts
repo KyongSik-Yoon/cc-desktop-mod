@@ -7,6 +7,7 @@ export type LangSetting = Lang | 'auto'
 const ko = {
   // 공통
   moreLines: (count: number) => `… ${count}줄 더`,
+  pasted: (lines: number) => `붙여넣은 글 · ${lines}줄`,
   copied: (what: 'code' | 'answer', lines: number) => `${what === 'code' ? '코드' : '답변'} ${lines}줄을 복사했어요`,
   copyFailed: (reason: string) => `복사하지 못했어요: ${reason}`,
   filled: '입력창에 채웠어요. 고쳐서 Enter 로 보내세요.',
@@ -337,6 +338,7 @@ export type Strings = typeof ko
 
 const en: Strings = {
   moreLines: count => `… ${count} more line${count === 1 ? '' : 's'}`,
+  pasted: lines => `Pasted text · ${lines} line${lines === 1 ? '' : 's'}`,
   copied: (what, lines) => `Copied ${lines} line${lines === 1 ? '' : 's'} of the ${what}`,
   copyFailed: reason => `Couldn't copy: ${reason}`,
   filled: 'Put it in the prompt. Edit it and press Enter to send.',

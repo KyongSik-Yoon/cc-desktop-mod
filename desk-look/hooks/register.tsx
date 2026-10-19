@@ -2230,6 +2230,47 @@ function peerRow(els: Els, $: EngineInterface, name: string, text: string, openS
   )
 }
 
+// 긴 붙여넣기: 엔진이 모델에게 경계를 알리려 <pasted_content id="…"> 로 감싼 글. 화면에서는 태그를 걷어 낸다.
+const PASTE_BLOCK = /<pasted_content id="([^"]*)">\n?([\s\S]*?)\n?<\/pasted_content(?: id="\1")?>/g
+
+export function splitPastes(text: string): { text: string; pastes: string[] } {
+  const pastes: string[] = []
+  const rest = text.replace(PASTE_BLOCK, (_block, _id, body: string) => {
+    pastes.push(body)
+    return ''
+  })
+  return { text: rest, pastes }
+}
+
+// 붙여넣은 글 한 줄 칩: "❐ 붙여넣은 글 · 3줄  첫 줄 미리보기 ›", 누르면 그 자리에서 펼친다. ctrl+o 화면은 늘 펼침.
+function pasteChip(els: Els, $: EngineInterface, body: string, index: number, openState: Record<string, boolean>, columns: number, isExpanded: boolean, edge: 'flex-start' | 'flex-end') {
+  const { Box, Text } = els
+  const key = `paste-${textKey(body)}-${index}`
+  const isOpen = isExpanded || (openState[key] ?? false)
+  const label = T.pasted(body.split('\n').length)
+  const preview = body.split('\n').find(line => line.trim() !== '')?.trim() ?? ''
+  const width = Math.floor(columns * 0.85)
+  return (
+    <Box key={key} flexDirection="column" alignItems={edge}>
+      <Box columnGap={1}>
+        <Text color={COLORS.clay}>❐</Text>
+        {rowButton(
+          els,
+          { key, onPress: () => toggle($, key, isOpen) },
+          label,
+          !isOpen && preview !== '' && <Text color={COLORS.muted}>{`  ${clip(preview, Math.max(10, width - cellWidth(label) - 6))}`}</Text>,
+          !isExpanded && <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
+        )}
+      </Box>
+      {isOpen && (
+        <Box width={width} paddingX={1} borderStyle="round" borderColor={COLORS.border}>
+          <Text color={COLORS.text}>{body}</Text>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 // 서브에이전트 카드: 데스크톱처럼 에이전트마다 한 장. 종류·설명, 끝나면 도구 수·토큰·시간·바꾼 줄.
 // 설명을 누르면 결과 글을 마크다운으로 펼친다.
 export function formatTokens(count: number): string {
@@ -2786,15 +2827,17 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal' || e.props.origin.kind !== 'composer') {
       return next(e)
     }
-    const { Box, Text, Image } = $.ui.resolve(e)
-    const [face, known, canDraw] = await Promise.all([read($, surface), read($, images), read($, graphics)])
+    const els = $.ui.resolve(e)
+    const { Box, Text, Image } = els
+    const [face, known, canDraw, openState] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open)])
     const columns = e.viewport?.columns ?? 80
-    const attached = [...e.props.text.matchAll(IMAGE_TOKEN)]
+    const { text: typed, pastes } = splitPastes(e.props.text)
+    const attached = [...typed.matchAll(IMAGE_TOKEN)]
       .map(match => ({ number: match[1] ?? '', info: known[match[1] ?? ''] }))
       .filter((image): image is { number: string; info: ImageInfo } => canDraw && image.info !== undefined)
     const shown = new Set(attached.map(image => image.number))
     // 그림을 못 그리는 터미널에서는 [Image #N] 을 지운다. 엔진이 말풍선 아래 └ [Image #N] 줄로 이미 알려 준다.
-    const text = e.props.text
+    const text = typed
       .replace(IMAGE_TOKEN, (token, number: string) => (shown.has(number) || !canDraw ? '' : token))
       .replace(/[ \t]{2,}/g, ' ')
       .replace(/^\s*\n|\n\s*$/g, '')
@@ -2804,7 +2847,7 @@ export const register: Register = (on, options) => {
     const thumbColumns = Math.min(36, Math.floor(columns * 0.4))
 
     return (
-      <Box flexDirection="column" alignItems={edge} marginTop={1} rowGap={attached.length > 0 && text ? 1 : 0}>
+      <Box flexDirection="column" alignItems={edge} marginTop={1} rowGap={(attached.length > 0 ? 1 : 0) + (pastes.length > 0 ? 1 : 0) + (text ? 1 : 0) > 1 ? 1 : 0}>
         {attached.length > 0 && (
           <Box flexDirection="row" columnGap={1} flexWrap="wrap" justifyContent={edge}>
             {attached.map(image => (
@@ -2815,6 +2858,11 @@ export const register: Register = (on, options) => {
                 {...thumbnailSize(image.info, thumbColumns)}
               />
             ))}
+          </Box>
+        )}
+        {pastes.length > 0 && (
+          <Box flexDirection="column" alignItems={edge}>
+            {pastes.map((body, index) => pasteChip(els, $, body, index, openState, columns, e.props.isExpanded, edge))}
           </Box>
         )}
         {text !== '' &&

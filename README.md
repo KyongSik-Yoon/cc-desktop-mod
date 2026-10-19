@@ -43,7 +43,7 @@ The pane commands run at once even while Claude is working: they open the pane w
 
 | Area | Terminal default | desk-look |
 |---|---|---|
-| Your prompt | A line starting with `>` | A gray bubble (a pill for one line, a box with rounded corners for several), left (default) or right. Pasted images show as thumbnails above it |
+| Your prompt | A line starting with `>` | A gray bubble (a pill for one line, a box with rounded corners for several), left (default) or right. Pasted images show as thumbnails above it, and long pasted text as a one-line `❐ Pasted text · N lines` chip that unfolds when clicked |
 | Answers | `●` bullet + engine markdown | A markdown renderer in the desktop prose style |
 | Tables | Grid tables | Full-width tables with a gray header and row separators |
 | mermaid | Code block | Box diagrams ([lovely-mermaid](https://github.com/xl0/lovely-mermaid)) with arrowheads that touch the boxes |
