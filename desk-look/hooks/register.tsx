@@ -165,6 +165,8 @@ const diffGaps = atom({ plugin: 'desk-look', key: 'diffGaps' } as const, {} as R
 const diffFilter = atom({ plugin: 'desk-look', key: 'diffFilter' } as const, { isOpen: false, query: '' } as DiffFilter)
 // diff 패널이 마지막으로 그린 파일 머리 띠(위에서부터): 접기 id 와 첫 행. n·p 이동에 쓴다.
 let diffHeads: { id: string; top: number }[] = []
+// n·p·머리 띠 누름이 마지막으로 스크롤해 간 파일. 사람이 창을 옮기면 잊는다.
+let diffCursor: string | null = null
 
 const agents = atom({ plugin: 'desk-look', key: 'agents' } as const, {} as Record<string, AgentRecord>)
 const agentView = atom({ plugin: 'desk-look', key: 'agentView' } as const, null as string | null)
@@ -793,13 +795,22 @@ export function headAt(heads: ReadonlyArray<{ top: number }>, offset: number): n
   return at
 }
 
+// n·p 가 기준으로 삼는 지금 파일: 하나만 펴져 있으면 그것, 아니면 마지막으로 스크롤해 간 파일, 그것도 없으면 창 맨 위 행의 파일.
+// 창 위치만 보면 안 된다: 뒤쪽 파일은 내용이 짧아 엔진이 창을 끝에서 깎아, 머리 띠가 맨 위에 오지 못하고 창 맨 위는 앞 파일이 된다.
+export function currentHead(heads: ReadonlyArray<{ id: string; top: number }>, folds: Record<string, boolean>, cursor: string | null, offset: number): number {
+  const opened = heads.flatMap((head, index) => (folds[`fold:${head.id}`] === false ? [index] : []))
+  if (opened.length === 1) return opened[0]!
+  const at = cursor === null ? -1 : heads.findIndex(head => head.id === cursor)
+  return at !== -1 ? at : headAt(heads, offset)
+}
+
 // n·p: 다음·이전 파일. 하나만 펴 보는 중이면(펴진 파일이 하나 이하) 그 파일을 펴고(앞 파일은 접힌다), 여럿 펴 두었으면 머리 띠로 간다.
 async function stepFile($: EngineInterface, by: 1 | -1) {
   const heads = diffHeads
-  const at = headAt(heads, paneOffsets.get(PANE) ?? 0)
+  const state = await read($, open)
+  const at = currentHead(heads, state, diffCursor, paneOffsets.get(PANE) ?? 0)
   const target = at === -1 ? (by > 0 ? heads[0] : undefined) : heads[at + by]
   if (!target) return
-  const state = await read($, open)
   const opened = heads.filter(head => state[`fold:${head.id}`] === false).length
   if ((state[`fold:${target.id}`] ?? true) && opened <= 1) await pickFile($, target.id)
   else await scrollToFile($, target.id)
@@ -824,7 +835,10 @@ async function scrollToFile($: EngineInterface, id: string) {
   for (let tries = 0; tries < 20 && diffDrawnFolds[`fold:${id}`] !== false; tries++) await $.clock.sleep(25).catch(() => undefined)
   for (let tries = 0; tries < 8; tries++) {
     const moved = await $.ui.scroll({ to: { key: `file-${id}` }, in: PANE, block: 'start' }).catch(() => ({ deny: 'failed' }))
-    if (!moved.deny) return
+    if (!moved.deny) {
+      diffCursor = id
+      return
+    }
     await $.clock.sleep(100).catch(() => undefined)
   }
 }
@@ -3673,6 +3687,7 @@ export const register: Register = (on, options) => {
     const asked = restore === undefined ? e : { ...e, offset: restore }
     const moved = await next(asked)
     if (moved.deny !== undefined) return moved
+    if (e.requestId === PANE && e.origin.kind === 'person' && asked.offset !== paneOffsets.get(PANE)) diffCursor = null
     paneOffsets.set(e.requestId, asked.offset)
     if (e.requestId === PANE) {
       void update($, diffWindow, w =>
@@ -3708,6 +3723,8 @@ export const register: Register = (on, options) => {
     // 떨어졌거나 높이가 다르면 그것을 쓴다. 스크롤 없이 창이 바뀌는 때(터미널 크기·원격 접속 해상도)에는 ui.scroll 이
     // 불리지 않아, 적어 둔 창만 보면 늘어난 아래쪽이 스크롤할 때까지 비었다.
     const seen = (e.props as { scroll?: { offset: number; bodyRows: number } }).scroll
+    // 플러그인의 $.ui.scroll 은 ui.scroll 을 거치지 않아(2.1.304) 위치를 적지 못한다. 그린 창으로 적는다.
+    if (seen && seen.bodyRows > 0) paneOffsets.set(PANE, seen.offset)
     const shown =
       seen && seen.bodyRows > 0 && (seen.bodyRows !== window.bodyRows || Math.abs(seen.offset - window.offset) * 2 > seen.bodyRows) ? seen : window
     const allFiles = view.scope === 'branch' ? view.files : uncommitted

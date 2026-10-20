@@ -11,7 +11,7 @@ import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackText, tsCompare, unreadCount } from '../hooks/slack'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
-import { headAt } from '../hooks/register'
+import { currentHead, headAt } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -3135,6 +3135,12 @@ describe('diff 패널: 안 바뀐 줄 펴기·거르기·기준 고르기·파�
 
     const heads = [{ top: 3 }, { top: 10 }]
     expect([0, 3, 9, 10, 50].map(offset => headAt(heads, offset))).toEqual([-1, 0, 0, 1, 1])
+    // 지금 파일: 하나만 펴졌으면 그것, 아니면 마지막으로 간 파일, 없으면 창 위치. 뒤쪽 짧은 파일은 창이 끝에서 깎여 창 위치로는 앞 파일이 된다.
+    const files = [{ id: 'a', top: 3 }, { id: 'b', top: 4 }, { id: 'c', top: 5 }]
+    expect(currentHead(files, { 'fold:c': false }, null, 0)).toBe(2)
+    expect(currentHead(files, { 'fold:b': false, 'fold:c': false }, 'c', 0)).toBe(2)
+    expect(currentHead(files, { 'fold:b': false, 'fold:c': false }, null, 4)).toBe(1)
+    expect(currentHead(files, {}, 'gone', 0)).toBe(-1)
   })
 
   // 밝은 테마(truecolor)와 저장소 파일 읽기. 파일은 /repo/ 아래 경로로 준다.
