@@ -21,19 +21,17 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `/desk-diff [file\|branch\|commits]` | Diff pane: uncommitted changes, the whole branch, or per commit |
-| `/desk-tasks [number]` | Background tasks pane: agents, background shells and monitors |
-| `/desk-pr` | The current branch's pull request or merge request, with a merge button |
-| `/desk-asana` | The Asana tasks assigned to you, a search across the workspace, or your projects' tasks by section: details, comments, adding a comment, assignee, dropdown fields and status |
-| `/desk-slack` | The Slack DMs and group DMs sent to you, as conversations: recent messages, replying, closing |
-| `/desk-preview [file]` | Markdown preview pane: a document drawn like the transcript |
-| `/desk-context` | Context breakdown, usage limits and session cost |
-| `/desk-sessions [number]` | Recent sessions by project, with search; switch to one |
-| `/desk-fold` | Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position |
-| `/desk-quote` | Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it |
-| `/desk-update` | Update desk-look to the latest version |
+- `/desk-diff [file|branch|commits]`: Diff pane: uncommitted changes, the whole branch, or per commit
+- `/desk-tasks [number]`: Background tasks pane: agents, background shells and monitors
+- `/desk-pr`: The current branch's pull request or merge request, with a merge button
+- `/desk-asana`: The Asana tasks assigned to you, a search across the workspace, or your projects' tasks by section: details, comments, adding a comment, assignee, dropdown fields and status
+- `/desk-slack`: The Slack DMs and group DMs sent to you, as conversations: recent messages, replying, closing
+- `/desk-preview [file]`: Markdown preview pane: a document drawn like the transcript
+- `/desk-context`: Context breakdown, usage limits and session cost
+- `/desk-sessions [number]`: Recent sessions by project, with search; switch to one
+- `/desk-fold`: Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position
+- `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it
+- `/desk-update`: Update desk-look to the latest version
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
 
@@ -41,35 +39,35 @@ The pane commands run at once even while Claude is working: they open the pane w
 
 ![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](docs/screenshot.png)
 
-| Area | Terminal default | desk-look |
-|---|---|---|
-| Your prompt | A line starting with `>` | A gray bubble (a pill for one line, a box with rounded corners for several), left (default) or right. Pasted images show as thumbnails above it, and long pasted text as a one-line `❐ Pasted text · N lines` chip that unfolds when clicked |
-| Answers | `●` bullet + engine markdown | A markdown renderer in the desktop prose style |
-| Tables | Grid tables | Full-width tables with a gray header and row separators |
-| mermaid | Code block | Box diagrams ([lovely-mermaid](https://github.com/xl0/lovely-mermaid)) with arrowheads that touch the boxes |
-| `> [!NOTE]` alerts | Blockquote | A box with a border colored by alert type |
-| Code blocks | No way to copy | Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does |
-| Tool calls | One row per call + a result block | Consecutive calls fold into one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click. Expanded, edit diffs show right away (file line numbers, three lines of context), in the desktop diff style when the terminal theme is known. The ctrl+o transcript keeps the engine's full rows |
-| Subagents | One `Ran an agent` line; notifications and messages only expand with ctrl+o | A card per agent (type and description; tool count, tokens, time and changed lines; click for the result). Background notifications read `✓ description completed · 5s`; click an agent message `◆ name first line ›` to expand it in place. When a turn ends waiting on background agents, a row per agent under `Waiting for N background agents to finish`, `··· type description ›` (its status once it ends); click it for that agent in `/desk-tasks` |
-| Plan (ExitPlanMode) | Folded into one line with other tools | A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval dialog is the engine's own |
-| Questions (AskUserQuestion) | A list under the prompt | A question card right above the prompt. With an empty prompt, pick by number alone (`1`-`8` options, `0` submit, `9` the default dialog); multi-select with ☐/☑; `Other` takes two clicks to type (the first selects the row); hover an option for its preview. A notification goes out when the card opens, as the engine dialog does (`preferredNotifChannel`). The transcript records `Asked question → answer` |
-| End of turn | A duration line | A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer, with `❝ quote` beside it to put the text you selected in the conversation into the prompt as a quote |
-| Command output | Plain text | Output with tables, headings, code or quotes renders as markdown, like an answer |
+Each item reads terminal default → desk-look.
+
+- **Your prompt**: A line starting with `>` → A gray bubble (a pill for one line, a box with rounded corners for several), left (default) or right. Pasted images show as thumbnails above it, and long pasted text as a one-line `❐ Pasted text · N lines` chip that unfolds when clicked
+- **Answers**: `●` bullet + engine markdown → A markdown renderer in the desktop prose style
+- **Tables**: Grid tables → Full-width tables with a gray header and row separators
+- **mermaid**: Code block → Box diagrams ([lovely-mermaid](https://github.com/xl0/lovely-mermaid)) with arrowheads that touch the boxes
+- **`> [!NOTE]` alerts**: Blockquote → A box with a border colored by alert type
+- **Code blocks**: No way to copy → Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does
+- **Tool calls**: One row per call + a result block → Consecutive calls fold into one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click. Expanded, edit diffs show right away (file line numbers, three lines of context), in the desktop diff style when the terminal theme is known. The ctrl+o transcript keeps the engine's full rows
+- **Subagents**: One `Ran an agent` line; notifications and messages only expand with ctrl+o → A card per agent (type and description; tool count, tokens, time and changed lines; click for the result). Background notifications read `✓ description completed · 5s`; click an agent message `◆ name first line ›` to expand it in place. When a turn ends waiting on background agents, a row per agent under `Waiting for N background agents to finish`, `··· type description ›` (its status once it ends); click it for that agent in `/desk-tasks`
+- **Plan (ExitPlanMode)**: Folded into one line with other tools → A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval dialog is the engine's own
+- **Questions (AskUserQuestion)**: A list under the prompt → A question card right above the prompt. With an empty prompt, pick by number alone (`1`-`8` options, `0` submit, `9` the default dialog); multi-select with ☐/☑; `Other` takes two clicks to type (the first selects the row); hover an option for its preview. A notification goes out when the card opens, as the engine dialog does (`preferredNotifChannel`). The transcript records `Asked question → answer`
+- **End of turn**: A duration line → A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer, with `❝ quote` beside it to put the text you selected in the conversation into the prompt as a quote
+- **Command output**: Plain text → Output with tables, headings, code or quotes renders as markdown, like an answer
 
 ![A question card above the prompt: numbered options, Other, and the default dialog](docs/ask.png)
 
 ## Around the prompt
 
-| Area | Terminal default | desk-look |
-|---|---|---|
-| Chin band | — | A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right (click it for the `/desk-diff` pane), and `✎ N` while diff line comments wait for your next prompt |
-| PR chip | — | The current branch's pull request: `#12 ✓ 5/5`, `✗ 1` failing, `● 3/5` running, `◆ 2` unresolved review threads. GitLab merge requests show as `!7` with pipeline jobs and unresolved discussions. Click it for the `/desk-pr` pane |
-| Context chip | — | Once context passes half, `◑ 62%` (caution color from 75%, warning color from 90%). Click it for the `/desk-context` pane |
-| Tasks chip | `1 shell still running` | While background tasks run, `⋯ 2`. Click it for the `/desk-tasks` pane |
-| Checklist | Tool lines | A card above the prompt, `Tasks 2/5` (✓ done, ◉ in progress, ○ to do). Only in sessions that have `TodoWrite` or `TaskCreate` |
-| Progress | `✻ Simmering… (12s · ↓ 300 tokens)` | `●·· Running…  2m 29s` (a word that matches the work, clay-colored dots) |
-| Mode indicator | Dim text at the bottom right of the prompt | A pill chip (with the omarchy theme) |
-| Hint line | `? for shortcuts` | While a question card is open, ends with the keys that answer it (`pick by number · 9 default dialog · Esc cancel`) |
+Each item reads terminal default → desk-look.
+
+- **Chin band**: A rounded gray band like the chin under the desktop prompt: `repo  branch` on the left, `+N −M` on the right (click it for the `/desk-diff` pane), and `✎ N` while diff line comments wait for your next prompt
+- **PR chip**: The current branch's pull request: `#12 ✓ 5/5`, `✗ 1` failing, `● 3/5` running, `◆ 2` unresolved review threads. GitLab merge requests show as `!7` with pipeline jobs and unresolved discussions. Click it for the `/desk-pr` pane
+- **Context chip**: Once context passes half, `◑ 62%` (caution color from 75%, warning color from 90%). Click it for the `/desk-context` pane
+- **Tasks chip**: `1 shell still running` → While background tasks run, `⋯ 2`. Click it for the `/desk-tasks` pane
+- **Checklist**: Tool lines → A card above the prompt, `Tasks 2/5` (✓ done, ◉ in progress, ○ to do). Only in sessions that have `TodoWrite` or `TaskCreate`
+- **Progress**: `✻ Simmering… (12s · ↓ 300 tokens)` → `●·· Running…  2m 29s` (a word that matches the work, clay-colored dots)
+- **Mode indicator**: Dim text at the bottom right of the prompt → A pill chip (with the omarchy theme)
+- **Hint line**: `? for shortcuts` → While a question card is open, ends with the keys that answer it (`pick by number · 9 default dialog · Esc cancel`)
 
 ## Side panes
 
@@ -216,16 +214,14 @@ Answer `y` when asked to add the marketplace, and pick the user scope.
 
 Search for `desk-look` in `/config` to find these options.
 
-| Option | Values | Description |
-|---|---|---|
-| `language` | `auto` (default), `en`, `ko` | Language of the mod's own labels, panes, toasts and the text it puts in the prompt. `auto` follows Claude Code's `language` in `/config` when the session starts: Korean when it names Korean, English otherwise |
-| `bubbleSide` | `left` (default), `right` | Where your prompt bubble sits. The attachment lines the engine draws under the bubble (`└ 1 skill available` and so on) can't be moved by a plugin and always sit on the left, so `left` keeps them aligned. `right` is like the desktop app |
-| `askNotify` | `on` (default), `off` | Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself |
-| `prBar` | `on` (default), `off` | The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds, and, while a check (GitLab: a pipeline job) of an open PR is still running, between turns too: every 15 seconds, doubling up to every 2 minutes while nothing changes (a check that never reports, such as one waiting for a runner, would otherwise keep asking); without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting |
-| `previewAutoOpen` | `on` (default), `off` | Open a Markdown document Claude writes in the preview pane when the turn ends. `off` leaves it to the `◫` chips and `/desk-preview` |
-| `slackNotify` | `on` (default), `off` | Notify when a new Slack DM arrives (see `/desk-slack`). `off` keeps checking for the pane and the `✉` chip, without notifications |
-| `asanaToken` | empty (default) | An Asana personal access token, optional. Only `✎ Edit` on your Asana comments and changing a task type's status use it (see `/desk-asana`); set it with `/plugin configure desk-look@cc-desktop-mod` |
-| `contextChip` | `auto` (default), `always`, `off` | The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting |
+- `language`: `auto` (default), `en`, `ko`. Language of the mod's own labels, panes, toasts and the text it puts in the prompt. `auto` follows Claude Code's `language` in `/config` when the session starts: Korean when it names Korean, English otherwise
+- `bubbleSide`: `left` (default), `right`. Where your prompt bubble sits. The attachment lines the engine draws under the bubble (`└ 1 skill available` and so on) can't be moved by a plugin and always sit on the left, so `left` keeps them aligned. `right` is like the desktop app
+- `askNotify`: `on` (default), `off`. Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself
+- `prBar`: `on` (default), `off`. The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds, and, while a check (GitLab: a pipeline job) of an open PR is still running, between turns too: every 15 seconds, doubling up to every 2 minutes while nothing changes (a check that never reports, such as one waiting for a runner, would otherwise keep asking); without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting
+- `previewAutoOpen`: `on` (default), `off`. Open a Markdown document Claude writes in the preview pane when the turn ends. `off` leaves it to the `◫` chips and `/desk-preview`
+- `slackNotify`: `on` (default), `off`. Notify when a new Slack DM arrives (see `/desk-slack`). `off` keeps checking for the pane and the `✉` chip, without notifications
+- `asanaToken`: empty (default). An Asana personal access token, optional. Only `✎ Edit` on your Asana comments and changing a task type's status use it (see `/desk-asana`); set it with `/plugin configure desk-look@cc-desktop-mod`
+- `contextChip`: `auto` (default), `always`, `off`. The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting
 
 ## Update
 
