@@ -51,3 +51,4 @@ python3 .claude/skills/desk-release-check/scripts/release_check.py mark <설치 
 ```
 
 기준점은 `~/.cache/desk-release-check/last-checked` 에 있다. 저장소에도 메모리에도 적지 않는다.
+클라우드에서 도는 예약 루틴만 예외다. `~/.cache` 가 없어 원격 `cc-checked` 브랜치 하나에 둔다: 빈 트리 커밋 하나를 force-push 하고, 커밋 메시지 첫 줄이 `cc-checked X.Y.Z` 다.

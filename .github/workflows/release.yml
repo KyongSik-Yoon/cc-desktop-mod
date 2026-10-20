@@ -1,0 +1,43 @@
+# desk-look 버전이 바뀐 커밋이 main 에 오면 그 버전의 태그와 GitHub 릴리즈를 만든다.
+# 노트는 release-notes/<버전>.md. 노트가 없으면 실패해서 빠진 것을 알린다. 이미 있는 태그는 건너뛴다.
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - desk-look/.claude-plugin/plugin.json
+      - release-notes/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create the tag and release for the current version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version desk-look/.claude-plugin/plugin.json)
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "$tag already exists"
+            exit 0
+          fi
+          notes="release-notes/$version.md"
+          if [ ! -f "$notes" ]; then
+            echo "::error::$notes is missing: add the release notes for $tag"
+            exit 1
+          fi
+          # 태그는 버전을 올린 커밋(plugin.json 을 마지막으로 바꾼 커밋)에 단다. 노트가 뒤 커밋에 와도 같다.
+          target=$(git log -1 --format=%H -- desk-look/.claude-plugin/plugin.json)
+          gh release create "$tag" --target "$target" --title "desk-look $version" --notes-file "$notes" --latest

@@ -7,15 +7,10 @@ mod API 는 EARLY ACCESS 라 버전마다 바뀌고, 분기는 코드와 테스�
 
 ## 버전과 릴리즈
 
-desk-look 의 `desk-look/.claude-plugin/plugin.json` 버전을 올린 커밋을 푸시하면, 같은 흐름에서 그 버전의 GitHub 릴리즈를 만든다. 버전 하나에 릴리즈 하나이고, 여러 버전을 쌓았다가 묶어 올리지 않는다.
+desk-look 의 `desk-look/.claude-plugin/plugin.json` 버전을 올린 커밋을 main 에 푸시하면, `.github/workflows/release.yml` 이 그 버전의 태그(`vX.Y.Z`, 버전을 올린 커밋)와 GitHub 릴리즈를 만든다. 버전 하나에 릴리즈 하나이고, 여러 버전을 쌓았다가 묶어 올리지 않는다.
 
-```bash
-git tag vX.Y.Z <커밋>
-git push origin vX.Y.Z
-gh release create vX.Y.Z --verify-tag --title "desk-look X.Y.Z" --notes-file <노트> --latest
-```
-
-- 태그를 먼저 푸시한다. `--target` 에 짧은 SHA 를 주면 GitHub 가 422 로 거부한다.
+- 노트는 `release-notes/X.Y.Z.md` 로 버전을 올린 커밋에 함께 넣는다. 없으면 워크플로가 실패한다. 노트를 뒤 커밋으로 넣어도 그때 만든다.
+- 태그·릴리즈를 손으로 만들지 않는다. 이미 있는 태그면 워크플로가 건너뛴다. 릴리즈가 생겼는지는 `gh api repos/KyongSik-Yoon/cc-desktop-mod/releases/tags/vX.Y.Z` 로 본다.
 - 노트는 영어로, 기존 릴리즈 형식을 따른다: 첫 줄 한 문장 요약, 바뀐 점 불릿, 끝에 `## Install`
   (`/plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod`, 이미 설치했으면 `/desk-update` 후 `/reload-plugins`).
 - 버전을 올리지 않는 커밋(문서, `.claude/skills` 등)은 릴리즈하지 않는다.
