@@ -5,7 +5,7 @@
 **desk-look** 은 Claude Code CLI 터미널 UI 를 Claude 데스크톱 앱 Code 탭처럼 보이고 동작하게 만드는 Claude Code 플러그인(mod)입니다.
 Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면에 그리는 방식만 바꿉니다. 데스크톱 앱 Code 탭(`desktop` 화면)에서는 아무것도 바꾸지 않습니다.
 
-<img src="docs/demo.gif" alt="동작 중인 desk-look: 프롬프트, 한 줄로 접힌 도구 호출, 고친 파일 카드, 턴이 끝나면 저절로 열리는 마크다운 미리보기, diff 패널의 줄 댓글" width="960">
+<img src="docs/demo.gif" alt="동작 중인 desk-look: 프롬프트, 한 줄로 접힌 도구 호출, 고친 파일 카드, 턴이 끝나면 저절로 열리는 마크다운 미리보기, diff 패널의 줄 댓글" width="1280">
 
 **한눈에 보기**
 
