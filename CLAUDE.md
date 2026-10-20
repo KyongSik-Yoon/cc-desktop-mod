@@ -7,12 +7,15 @@ mod API 는 EARLY ACCESS 라 버전마다 바뀌고, 분기는 코드와 테스�
 
 ## 버전과 릴리즈
 
-desk-look 의 `desk-look/.claude-plugin/plugin.json` 버전을 올린 커밋을 푸시하면, 같은 흐름에서 그 버전의 GitHub 릴리즈를 만든다. 버전 하나에 릴리즈 하나이고, 여러 버전을 쌓았다가 묶어 올리지 않는다.
+desk-look 의 `desk-look/.claude-plugin/plugin.json` 버전을 올리는 커밋에 그 버전의 릴리즈 노트 `.github/release-notes/vX.Y.Z.md` 를 함께 넣는다. 커밋이 main 에 들어오면 `.github/workflows/release.yml` 이 그 버전 커밋에 태그 `vX.Y.Z` 를 달고 GitHub 릴리즈를 만든다. 버전 하나에 릴리즈 하나이고, 여러 버전을 쌓았다가 묶어 올리지 않는다.
+클라우드 세션은 태그·릴리즈를 직접 만들 수 없어서(403) 이렇게 Actions 에 맡긴다. 노트 파일이 없으면 워크플로가 빨갛게 실패하니, 노트를 더해 main 에 넣으면 다시 돈다. 이미 있는 태그는 건드리지 않는다.
+
+손으로 만들어야 할 때(Actions 가 막혔을 때):
 
 ```bash
 git tag vX.Y.Z <커밋>
 git push origin vX.Y.Z
-gh release create vX.Y.Z --verify-tag --title "desk-look X.Y.Z" --notes-file <노트> --latest
+gh release create vX.Y.Z --verify-tag --title "desk-look X.Y.Z" --notes-file .github/release-notes/vX.Y.Z.md --latest
 ```
 
 - 태그를 먼저 푸시한다. `--target` 에 짧은 SHA 를 주면 GitHub 가 422 로 거부한다.
