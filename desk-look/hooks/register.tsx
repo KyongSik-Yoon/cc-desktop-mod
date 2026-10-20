@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
@@ -10,7 +10,7 @@ import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rang
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
-import { ago, clip, filterSessions, groupSessions, numbered, sessionOf } from './sessions'
+import { ago, clip, filterSessions, groupSessions, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
@@ -132,6 +132,7 @@ const previewFile = atom({ plugin: 'desk-look', key: 'preview' } as const, null 
 const previewWritten = atom({ plugin: 'desk-look', key: 'previewWritten' } as const, null as string | null)
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
+const liveSessions = atom({ plugin: 'desk-look', key: 'liveSessions' } as const, {} as Record<string, LiveSession>)
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
 // 질문 카드 상태. ask.tsx 의 것과 같은 키다(상태 원본은 파일마다 선언해야 한다).
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
@@ -1618,8 +1619,13 @@ async function toggleFilter($: EngineInterface) {
   }
   await update($, diffFilter, previous => ({ ...previous, isOpen: true }))
   await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await focusInPane($, PANE, 'diff-filter')
+}
+
+// 패널을 열고 그 안의 입력칸으로 포커스를 옮긴다. 막 열린 패널은 아직 그려지지 않아 몇 번 다시 해 본다.
+async function focusInPane($: EngineInterface, requestId: string, key: string) {
   for (let tries = 0; tries < 10; tries++) {
-    const moved = await $.ui.focus({ requestId: PANE, key: 'diff-filter' }).catch(() => ({ deny: 'failed' }))
+    const moved = await $.ui.focus({ requestId, key }).catch(() => ({ deny: 'failed' }))
     if (!moved.deny) return
     await $.clock.sleep(50).catch(() => undefined)
   }
@@ -1785,10 +1791,41 @@ async function listImages($: EngineInterface): Promise<Record<string, ImageInfo>
   return found
 }
 
+// 세션마다 비워지는 상태를 다시 채운다: 세션이 시작될 때(플러그인을 다시 올릴 때 포함)와 창 안에서 다른 세션으로 넘어간 뒤.
+function refreshSessionState($: EngineInterface, showPr: boolean) {
+  void refreshDiff($).catch(() => undefined)
+  void refreshUsage($).catch(() => undefined)
+  if (showPr) void refreshPr($, false).catch(() => undefined)
+  void refreshSurface($).catch(() => undefined)
+  // 받은 편지 칩은 store 에서 바로.
+  void readInbox($)
+    .then(inbox => update($, slack, (state): SlackState => state ?? { status: 'loading', server: null, unruled: [], inbox }))
+    .catch(() => undefined)
+  void refreshRuns($).catch(() => undefined)
+  void refreshImages($).catch(() => undefined)
+  void refreshAgents($).catch(() => undefined)
+  void refreshGraphics($).catch(() => undefined)
+  void refreshOpenSessions($).catch(() => undefined)
+}
+
+// 세션 패널이 열려 있을 때만 목록을 다시 읽는다(기록 파일 80개를 읽는다).
+async function refreshOpenSessions($: EngineInterface) {
+  const panes = await $.ui.panes().catch(() => [])
+  if (panes.some(pane => pane.id === SESSIONS_PANE && pane.isPlaced)) await refreshSessions($)
+}
+
 async function refreshSessions($: EngineInterface) {
   // 빈 세션을 걸러 낸 뒤에도 40개가 차도록 넉넉히 읽는다
-  const next = (await listSessions($, 80).catch(() => [])).slice(0, 40)
-  await update($, sessions, () => next)
+  const [next] = await Promise.all([listSessions($, 80).catch(() => []), refreshLive($)])
+  await update($, sessions, () => next.slice(0, 40))
+}
+
+// 지금 떠 있는 세션(다른 창·백그라운드)과 그 상태. 엔진의 agents 화면이 쓰는 목록과 같다.
+async function refreshLive($: EngineInterface) {
+  const ran = await $.process.run(['claude', 'agents', '--json'], { timeoutMs: 5000 }).catch(() => null)
+  const next = ran?.exitCode === 0 ? liveSessionsOf(ran.stdout) : {}
+  await update($, liveSessions, () => next)
+  return next
 }
 
 // 기록 파일이 작으면 통째로 읽고, 크면 앞(작업 폴더)과 끝(제목)만 head·tail 로 읽는다($.fs.read 는 4 MiB 까지).
@@ -1831,9 +1868,35 @@ async function listSessions($: EngineInterface, count: number) {
 // $.command.run 은 턴이 기다리는 훅(/desk-sessions 의 command.run) 안에서는 거부되므로, 훅이 끝난 뒤
 // 타이머로 실행한다. 그래도 실패하면 입력창에 채워 Enter 한 번으로 넘어가게 한다.
 // 다른 폴더의 세션은 그 폴더에서 열어야 하므로 실행할 명령을 클립보드에 복사한다.
+// 떠 있는 세션은 엔진이 /resume 을 거부한다: 다른 창의 세션은 안내만, 백그라운드 세션은 claude stop 으로
+// 멈춘 뒤 가져온다(대화는 남는다). 작업 중이면 하던 턴이 끊기므로 5초 안에 한 번 더 눌러야 한다.
 async function openSession($: EngineInterface, entry: SessionEntry) {
   const cwd = await $.session.cwd()
   if (entry.id === (await $.session.id())) return
+  const live = (await refreshLive($))[entry.id]
+  if (live?.kind === 'interactive') {
+    $.ui.toast(T.openElsewhere(entry.title))
+    return
+  }
+  if (live && entry.cwd !== cwd && live.job) {
+    await copyCommand($, `claude attach ${live.job}`, T.attachCopied, T.attachOther)
+    return
+  }
+  if (live && entry.cwd === cwd && live.job) {
+    const key = `take:${entry.id}`
+    if (live.status === 'busy' && !(await read($, open))[key]) {
+      await update($, open, state => ({ ...state, [key]: true }))
+      $.clock.after(STOP_ARM_MS, () => void update($, open, state => ({ ...state, [key]: false })))
+      return
+    }
+    await update($, open, state => ({ ...state, [key]: false }))
+    const stopped = await $.process.run(['claude', 'stop', live.job], { timeoutMs: 15_000 }).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: String(error) }))
+    if (stopped.exitCode !== 0) {
+      $.ui.toast(T.takeFailed(lastLine(stopped.stderr || stopped.stdout)))
+      return
+    }
+    void refreshLive($)
+  }
   if (entry.cwd === cwd) {
     $.clock.after(50, () => {
       void $.command.run({ command: 'resume', args: entry.id }).catch(async () => {
@@ -1843,9 +1906,12 @@ async function openSession($: EngineInterface, entry: SessionEntry) {
     })
     return
   }
-  const shell = `cd '${entry.cwd.replace(/'/g, "'\\''")}' && claude --resume ${entry.id}`
+  await copyCommand($, `cd '${entry.cwd.replace(/'/g, "'\\''")}' && claude --resume ${entry.id}`, T.otherFolderCopied, T.otherFolder)
+}
+
+async function copyCommand($: EngineInterface, shell: string, copiedText: (shell: string) => string, plainText: (shell: string) => string) {
   const copied = await $.process.run(['wl-copy', '--', shell], { timeoutMs: 2000 }).catch(() => null)
-  $.ui.toast(copied?.exitCode === 0 ? T.otherFolderCopied(shell) : T.otherFolder(shell))
+  $.ui.toast(copied?.exitCode === 0 ? copiedText(shell) : plainText(shell))
 }
 
 // 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 멀티플렉서·SSH 안에서도 된다.
@@ -2747,31 +2813,27 @@ export const register: Register = (on, options) => {
       name: 'desk-update',
       description: T.cmdUpdate,
     })
-    void refreshDiff($).catch(() => undefined)
-    void refreshUsage($).catch(() => undefined)
-    if (showPr) void refreshPr($, false).catch(() => undefined)
-    void refreshSurface($).catch(() => undefined)
+    refreshSessionState($, showPr)
     // 테마를 바꾸면 3초 안에 말풍선·아래턱 색이 따라간다. 바뀌지 않았으면 다시 그리지 않는다.
     themeWatch?.cancel()
     themeWatch = $.clock.every(THEME_POLL, () => void refreshSurface($).catch(() => undefined))
-    // 받은 편지: 칩은 store 에서 바로, Slack 확인은 1분마다(MCP 서버는 시작 뒤에 붙는다).
-    void readInbox($)
-      .then(inbox => update($, slack, (state): SlackState => state ?? { status: 'loading', server: null, unruled: [], inbox }))
-      .catch(() => undefined)
+    // Slack 확인은 1분마다(MCP 서버는 시작 뒤에 붙는다).
     slackWatch?.cancel()
     slackWatch = $.clock.every(SLACK_POLL_MS, () => void pollSlack($, false).catch(() => undefined))
-    void refreshRuns($).catch(() => undefined)
-    void refreshImages($).catch(() => undefined)
-    void refreshAgents($).catch(() => undefined)
-    void refreshGraphics($).catch(() => undefined)
     return next(e)
+  })
+
+  // 창 안의 /resume·/clear 는 이 세션을 끝내고 새 세션으로 이어 가지만 session.start 는 오지 않는다.
+  // 상태(atom)는 세션마다라 비워진 채 칩·패널만 남으므로, 넘어간 뒤 다시 읽는다.
+  on('session.end', async ($, e, next) => {
+    const done = await next(e)
+    if (e.reason === 'resume' || e.reason === 'clear') $.clock.after(300, () => refreshSessionState($, showPr))
+    return done
   })
 
   // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다(타이머를 기다리지 않게).
   on('prompt.submit', async ($, e, next) => {
     void refreshSurface($).catch(() => undefined)
-    // /clear 는 atom 을 기본값으로 되돌리고 session.start 는 다시 오지 않는다. 그대로 두면 그 뒤 말풍선은 모서리 그림 대신 사선 글리프가 된다.
-    void refreshGraphics($).catch(() => undefined)
     // 사람이 어디서 입력했는지: 질문 카드가 Remote Control 세션에서 카드를 띄울지 고른다(ask.tsx)
     const origin = e.origin.kind
     if (origin === 'composer' || origin === 'bridge') await update($, promptOrigin, () => origin).catch(() => undefined)
@@ -3342,19 +3404,38 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text, Button, Input } = els
-    const [list, query, cwd, current, now, home] = await Promise.all([
+    const [list, query, cwd, current, now, home, live, folds] = await Promise.all([
       read($, sessions),
       read($, sessionQuery),
       $.session.cwd(),
       $.session.id(),
       $.clock.now(),
       $.env.get('HOME'),
+      read($, liveSessions),
+      read($, open),
     ])
     const room = Math.max(16, e.props.bodyColumns - 12)
     const label = (path: string) => (home && path.startsWith(home) ? `~${path.slice(home.length)}` : path)
     // 번호는 거르기 전 목록 기준이라 /desk-sessions <번호> 와 늘 맞는다.
     const order = numbered(list, cwd, PER_GROUP, current).map(entry => entry.id)
     const shown = filterSessions(list, query)
+    const groups = groupSessions(shown, cwd)
+    // 검색 중에는 맞은 세션이 숨지 않도록 모두 편다.
+    const isSearching = query.trim() !== ''
+    const isFolded = (group: string) => !isSearching && isGroupFolded(folds, group, cwd)
+    // 하나라도 펴져 있으면 모두 접고, 다 접혀 있으면 모두 편다(diff 패널의 모두 접기와 같다).
+    const anyOpen = groups.some(group => !isFolded(group.cwd))
+    const hasGroups = groupSessions(list, cwd).length > 1
+    const foldAll = () => update($, open, state => ({ ...state, ...Object.fromEntries(groups.map(group => [`sessions:fold:${group.cwd}`, anyOpen])) }))
+    // 줄 끝 칩: 떠 있는 세션의 상태. 작업 중인 백그라운드 세션을 한 번 누르면 확인 문구로 바뀐다.
+    const chip = (entry: SessionEntry) => {
+      const state = live[entry.id]
+      if (!state || entry.id === current) return null
+      if (folds[`take:${entry.id}`]) return <Text color={COLORS.warning}>{` ${T.takeConfirm}`}</Text>
+      if (state.kind === 'interactive') return <Text color={COLORS.muted}>{` · ${T.liveElsewhere}`}</Text>
+      const [label, color] = state.status === 'busy' ? [T.liveBusy, COLORS.clay] : state.status === 'waiting' ? [T.liveWaiting, COLORS.warning] : [T.liveIdle, COLORS.muted]
+      return <Text color={color}>{` · ${label}`}</Text>
+    }
 
     return (
       <Box flexDirection="column" rowGap={1}>
@@ -3362,7 +3443,10 @@ export const register: Register = (on, options) => {
           <Text color={COLORS.text} weight="semibold">
             {T.recentSessions(list.length)}
           </Text>
-          <Button key="sessions-refresh" plain dimColor label="↻" onPress={() => refreshSessions($)} />
+          <Button key="sessions-refresh" plain dimColor hotkey="r" label="↻" onPress={() => refreshSessions($)} />
+          <Button key="sessions-search-focus" plain dimColor hotkey="f" label={T.search} onPress={() => void focusInPane($, SESSIONS_PANE, 'sessions-search')} />
+          {/* 검색 중에도 그린다: 입력칸 앞 버튼이 사라지면 입력칸이 포커스를 잃는다 */}
+          {hasGroups && <Button key="sessions-fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />}
         </Box>
         <Input
           key="sessions-search"
@@ -3370,7 +3454,6 @@ export const register: Register = (on, options) => {
           placeholder={T.searchPlaceholder}
           value={query}
           submitLabel={T.openFirst}
-          autoFocus
           onInput={value => void update($, sessionQuery, () => value)}
           onSubmit={value => {
             const first = filterSessions(list, value).find(entry => entry.id !== current)
@@ -3378,26 +3461,35 @@ export const register: Register = (on, options) => {
           }}
         />
         {query.trim() !== '' && shown.length === 0 && <Text color={COLORS.muted}>{T.noMatch}</Text>}
-        {groupSessions(shown, cwd).map(group => (
-          <Box key={`group-${group.cwd}`} flexDirection="column">
-            <Text color={group.cwd === cwd ? COLORS.clay : COLORS.muted} weight="semibold" wrap="truncate-start">
-              {label(group.cwd)}
-            </Text>
-            {group.sessions.slice(0, PER_GROUP).map(entry => (
-              <Box key={`session-${entry.id}`} columnGap={1}>
-                <Text color={entry.id === current ? COLORS.clay : COLORS.muted}>
-                  {entry.id === current ? ' ●' : String(order.indexOf(entry.id) + 1).padStart(2)}
-                </Text>
-                {rowButton(
-                  els,
-                  { key: `open-${entry.id}`, dimColor: entry.id !== current, onPress: () => openSession($, entry) },
-                  clip(entry.title, room),
-                  <Text color={COLORS.muted}>{` ${ago(entry.updatedAt, now)}`}</Text>,
-                )}
-              </Box>
-            ))}
-          </Box>
-        ))}
+        <Box flexDirection="column">
+          {groups.map(group => (
+            <Box key={`group-${group.cwd}`} flexDirection="column" marginBottom={isFolded(group.cwd) ? 0 : 1}>
+              {rowButton(
+                els,
+                { key: `group-fold-${group.cwd}`, onPress: () => void toggle($, `sessions:fold:${group.cwd}`, group.cwd !== cwd) },
+                isFolded(group.cwd) ? '› ' : '⌄ ',
+                <Text color={group.cwd === cwd ? COLORS.clay : COLORS.muted} weight="semibold">
+                  {clip(label(group.cwd), room)}
+                </Text>,
+                <Text color={COLORS.muted}>{` · ${Math.min(group.sessions.length, PER_GROUP)}`}</Text>,
+              )}
+              {!isFolded(group.cwd) && group.sessions.slice(0, PER_GROUP).map(entry => (
+                <Box key={`session-${entry.id}`} columnGap={1}>
+                  <Text color={entry.id === current ? COLORS.clay : COLORS.muted}>
+                    {entry.id === current ? ' ●' : String(order.indexOf(entry.id) + 1).padStart(2)}
+                  </Text>
+                  {rowButton(
+                    els,
+                    { key: `open-${entry.id}`, dimColor: entry.id !== current, onPress: () => openSession($, entry) },
+                    clip(entry.title, room),
+                    <Text color={COLORS.muted}>{` ${ago(entry.updatedAt, now)}`}</Text>,
+                    chip(entry),
+                  )}
+                </Box>
+              ))}
+            </Box>
+          ))}
+        </Box>
       </Box>
     )
   })

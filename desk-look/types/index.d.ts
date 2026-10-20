@@ -65,6 +65,9 @@ export type PreviewFile = { path: string; text: string; error?: string }
 // 세션 패널 한 줄: ~/.claude/projects 의 기록 파일 하나.
 export type SessionEntry = { id: string; updatedAt: number; cwd: string; title: string }
 
+// 지금 떠 있는 세션 하나(`claude agents --json` 의 pid 있는 항목). job 은 백그라운드 세션의 짧은 id(attach·stop 이 받는 것).
+export type LiveSession = { kind: 'background' | 'interactive'; job: string | null; status: 'busy' | 'idle' | 'waiting' }
+
 // 컨텍스트 칩·패널: $.session.usage() 에서 그릴 것만 옮겨 둔 것. at 은 읽은 시각(ms).
 export type UsageInfo = {
   percent: number | null
@@ -247,6 +250,8 @@ declare module 'claude-code' {
       sessions: SessionEntry[]
       // 세션 패널 검색어.
       sessionQuery: string
+      // 세션 id → 지금 떠 있는 세션의 종류·상태.
+      liveSessions: Record<string, LiveSession>
       // 지금 턴이 시작된 시각(ms), 턴 밖이면 null.
       turnStartedAt: number | null
       // 스피너를 다시 그리게 하는 시계(ms).

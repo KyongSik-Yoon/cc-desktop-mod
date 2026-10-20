@@ -187,10 +187,14 @@ Replaces the `/context` grid:
 
 ### `/desk-sessions [number]`: recent sessions
 
-Recent sessions grouped by project, with a search box at the top (title and folder; Enter opens the first result). Click a row or give its number:
+Recent sessions grouped by project, with a search box at the top (title and folder; Enter opens the first result). Only the current folder's group starts expanded: click a group's header to expand or collapse it, or press `z` to collapse or expand them all; a search expands everything. `f` moves to the search box and `r` refreshes. Sessions that are open right now carry a chip at the end of the row, read from `claude agents --json`: `background` (idle), `working`, `needs input` for background sessions, and `open elsewhere` for a session open in another terminal.
+
+Click a row or give its number:
 
 - **A session in the same folder**: the current window switches to that session right away (runs `/resume <id>`). If running it is blocked, the command is placed in the prompt; press Enter.
-- **A session in another folder**: copies `cd <folder> && claude --resume <id>` to the clipboard (`wl-copy`).
+- **A background session in the same folder**: stops it with `claude stop <id>` (its conversation is kept), then switches to it. If it is working, the first press asks you to press again, because stopping cuts its turn short.
+- **A session open in another terminal**: only a notice; continue it in that window.
+- **A session in another folder**: copies `cd <folder> && claude --resume <id>` to the clipboard (`wl-copy`), or `claude attach <id>` for a running background session.
 
 ---
 

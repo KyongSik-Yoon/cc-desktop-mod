@@ -1,4 +1,4 @@
-import type { SessionEntry } from '../types'
+import type { LiveSession, SessionEntry } from '../types'
 import { cellWidth } from './markdown'
 import { T } from './i18n'
 
@@ -63,3 +63,24 @@ export function filterSessions(list: SessionEntry[], query: string): SessionEntr
     return words.every(word => hay.includes(word))
   })
 }
+
+// `claude agents --json` 에서 지금 떠 있는(pid 있는) 세션만, 세션 id 로. 끝난 백그라운드 세션은 pid 가 없다.
+export function liveSessionsOf(json: string): Record<string, LiveSession> {
+  let rows: unknown
+  try {
+    rows = JSON.parse(json)
+  } catch {
+    return {}
+  }
+  if (!Array.isArray(rows)) return {}
+  const live: Record<string, LiveSession> = {}
+  for (const row of rows as Array<Record<string, unknown>>) {
+    if (typeof row.pid !== 'number' || typeof row.sessionId !== 'string') continue
+    const status = row.status === 'busy' || row.status === 'waiting' ? row.status : 'idle'
+    live[row.sessionId] = { kind: row.kind === 'background' ? 'background' : 'interactive', job: typeof row.id === 'string' ? row.id : null, status }
+  }
+  return live
+}
+
+// 묶음을 접었는지: 사람이 고른 값이 없으면 지금 폴더만 펴 둔다.
+export const isGroupFolded = (folds: Record<string, boolean>, cwd: string, currentCwd: string) => folds[`sessions:fold:${cwd}`] ?? cwd !== currentCwd

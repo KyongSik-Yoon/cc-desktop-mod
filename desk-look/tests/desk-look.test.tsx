@@ -601,7 +601,7 @@ test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', KO, async ($,
   await row.unmount()
 })
 
-import { ago, clip, filterSessions, groupSessions, numbered, sessionOf } from '../hooks/sessions'
+import { ago, clip, filterSessions, groupSessions, isGroupFolded, liveSessionsOf, numbered, sessionOf } from '../hooks/sessions'
 
 test('세션 목록 읽기·묶기·표시', KO, async () => {
   setLang('ko')
@@ -668,8 +668,9 @@ test('세션 목록: 기록 폴더를 훑어 최근 것부터, 큰 기록은 앞
   const drawn = JSON.stringify(await pane.drawn())
   expect(drawn.indexOf('큰 기록')).toBeGreaterThan(-1)
   expect(drawn.indexOf('큰 기록')).toBeLessThan(drawn.indexOf('작은 기록'))
-  // 큰 기록만 head·tail 로, 셸 없이
-  expect(ran.map(argv => argv[0]).sort()).toEqual(['head', 'tail'])
+  // 큰 기록만 head·tail 로, 셸 없이. 떠 있는 세션은 엔진 목록(claude agents --json)에서
+  expect(ran.filter(argv => argv[0] !== 'claude').map(argv => argv[0]).sort()).toEqual(['head', 'tail'])
+  expect(ran.find(argv => argv[0] === 'claude')).toEqual(['claude', 'agents', '--json'])
   await pane.unmount()
 })
 
@@ -841,6 +842,138 @@ test('diff 패널 되돌리기는 두 번 눌러야 git restore', KO, async ($, 
   expect(JSON.stringify(await pane.drawn())).toContain('다시 누르면 되돌려요')
   await pane.press({ key: 'revert-a.txt' })
   expect(ran.find(argv => argv.includes('restore'))).toEqual(['git', 'restore', '--source=HEAD', '--staged', '--worktree', '--', 'a.txt'])
+  await pane.unmount()
+})
+
+test('떠 있는 세션 읽기와 묶음 기본 접힘', KO, () => {
+  const live = liveSessionsOf(
+    JSON.stringify([
+      { id: '29a7e71e', kind: 'background', sessionId: 'done-1', state: 'done' },
+      { pid: 1, kind: 'interactive', sessionId: 'win-1', status: 'idle' },
+      { pid: 2, id: '183ecfa3', kind: 'background', sessionId: 'bg-1', status: 'busy', state: 'running' },
+      { pid: 3, id: 'aa', kind: 'background', sessionId: 'bg-2', status: 'waiting' },
+    ]),
+  )
+  expect(live).toEqual({
+    'win-1': { kind: 'interactive', job: null, status: 'idle' },
+    'bg-1': { kind: 'background', job: '183ecfa3', status: 'busy' },
+    'bg-2': { kind: 'background', job: 'aa', status: 'waiting' },
+  })
+  expect(liveSessionsOf('')).toEqual({})
+  expect(isGroupFolded({}, '/a', '/a')).toBe(false)
+  expect(isGroupFolded({}, '/b', '/a')).toBe(true)
+  expect(isGroupFolded({ 'sessions:fold:/b': false }, '/b', '/a')).toBe(false)
+})
+
+test('세션 패널: 다른 폴더는 접힘, z 로 모두 펴기, 칩, 떠 있는 세션 누르기', KO, async ($, on) => {
+  const root = '/home/u/.claude/projects'
+  const id = (n: number) => `0000000${n}-0000-0000-0000-000000000000`
+  const record = (cwd: string, title: string) => [JSON.stringify({ cwd }), JSON.stringify({ aiTitle: title })].join('\n')
+  const files: Record<string, string> = {
+    [id(1)]: record('/home/u/repo', '쉬는 백그라운드'),
+    [id(2)]: record('/home/u/repo', '일하는 백그라운드'),
+    [id(3)]: record('/home/u/repo', '다른 창 세션'),
+    [id(4)]: record('/home/u/other', '다른 폴더 세션'),
+  }
+  const agents = [
+    { pid: 1, id: 'job1', kind: 'background', sessionId: id(1), status: 'idle' },
+    { pid: 2, id: 'job2', kind: 'background', sessionId: id(2), status: 'busy' },
+    { pid: 3, kind: 'interactive', sessionId: id(3), status: 'busy' },
+  ]
+  const ran: string[][] = []
+  const resumed: string[] = []
+  const toasts: string[] = []
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('fs.list', ($, e) => {
+    const path = (e as { path?: string }).path
+    if (path === root) return { value: [{ name: 'p', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never
+    return { value: Object.keys(files).map((name, index) => ({ name: `${name}.jsonl`, kind: 'file', size: 10, mtimeMs: 9 - index, isLink: false })) } as never
+  })
+  on('fs.read', ($, e) => ({ value: files[(e as { path: string }).path.split('/').pop()!.replace('.jsonl', '')] }) as never)
+  on('process.run', ($, e) => {
+    ran.push([...e.argv])
+    const stdout = e.argv[1] === 'agents' ? JSON.stringify(agents) : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.run', { command: 'resume' }, ($, e) => {
+    resumed.push(e.args)
+    return { text: '' }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push((e as { text: string }).text)
+    return { value: undefined } as never
+  })
+  on('session.cwd', () => ({ value: '/home/u/repo' }))
+  on('session.id', () => ({ value: 'current' }))
+  // 넘어가기(50ms)는 바로 돌리고, 확인 문구가 사라지는 5초는 붙잡아 둔다
+  on('clock.after', ($, e) => new Promise(resolve => {
+    if (e.ms < 1000) resolve({ value: undefined })
+  }) as never)
+  on('clock.now', () => ({ value: 10_000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-sessions', args: '' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-sessions', viewport: VIEWPORT, props: { title: '세션', isFocused: true, bodyColumns: 70 } as never })
+  let drawn = JSON.stringify(await pane.drawn())
+  // 지금 폴더는 펴 있고 다른 폴더는 접혀 있다
+  expect(drawn).toContain('쉬는 백그라운드')
+  expect(drawn).not.toContain('다른 폴더 세션')
+  expect(drawn).toContain('백그라운드')
+  expect(drawn).toContain('작업 중')
+  expect(drawn).toContain('다른 창')
+  await pane.press({ key: 'sessions-fold-all' })
+  drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).not.toContain('쉬는 백그라운드')
+  await pane.press({ key: 'sessions-fold-all' })
+  expect(JSON.stringify(await pane.drawn())).toContain('다른 폴더 세션')
+
+  // 다른 창에서 열린 세션: 멈추지도 넘어가지도 않고 안내만
+  await pane.press({ key: `open-${id(3)}` })
+  expect(toasts.at(-1)).toContain('다른 창에서 열려')
+  // 쉬는 백그라운드 세션: claude stop 뒤 /resume
+  await pane.press({ key: `open-${id(1)}` })
+  expect(ran).toContainEqual(['claude', 'stop', 'job1'])
+  for (let tries = 0; tries < 50 && resumed.length === 0; tries++) await wait(10)
+  expect(resumed).toEqual([id(1)])
+  // 일하는 백그라운드 세션: 한 번은 확인만, 두 번째에 멈추고 가져온다
+  await pane.press({ key: `open-${id(2)}` })
+  expect(ran).not.toContainEqual(['claude', 'stop', 'job2'])
+  expect(JSON.stringify(await pane.drawn())).toContain('다시 누르면 멈추고 가져와요')
+  await pane.press({ key: `open-${id(2)}` })
+  expect(ran).toContainEqual(['claude', 'stop', 'job2'])
+  await pane.unmount()
+})
+
+test('창 안의 /resume 으로 넘어와도 열려 있던 세션 패널을 다시 채운다', KO, async ($, on) => {
+  const record = [JSON.stringify({ cwd: '/home/u/repo' }), JSON.stringify({ aiTitle: '넘어온 뒤에도 보임' })].join('\n')
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('fs.list', ($, e) => {
+    if ((e as { path?: string }).path === '/home/u/.claude/projects') return { value: [{ name: 'p', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never
+    return { value: [{ name: '00000001-0000-0000-0000-000000000000.jsonl', kind: 'file', size: 10, mtimeMs: 1, isLink: false }] } as never
+  })
+  on('fs.read', () => ({ value: record }) as never)
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.cwd', () => ({ value: '/home/u/repo' }))
+  on('session.id', () => ({ value: 'current' }))
+  on('clock.now', () => ({ value: 10_000 }))
+  on('ui.panes', () => ({ value: [{ id: 'desk-sessions', title: '세션', isShown: true, isFocused: false, isPlaced: true }] }) as never)
+  on('clock.every', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined as never }))
+  on('session.start', ($, e) => e as never)
+  on('clock.after', ($, e) => new Promise(resolve => {
+    if (e.ms < 1000) resolve({ value: undefined })
+  }) as never)
+  on('session.end', ($, e) => ({ sessionId: (e as { sessionId: string }).sessionId }) as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-sessions', viewport: VIEWPORT, props: { title: '세션', isFocused: true, bodyColumns: 70 } as never })
+  const shows = async () => {
+    for (let tries = 0; tries < 50; tries++) {
+      if (JSON.stringify(await pane.drawn()).includes('넘어온 뒤에도 보임')) return true
+      await wait(10)
+    }
+    return false
+  }
+  // 창 안의 /resume: 이 세션이 끝나고 session.start 없이 새 세션으로 이어진다
+  await $.session.end({ reason: 'resume', sessionId: 'old', resume: { id: 'old' } } as never)
+  expect(await shows()).toBe(true)
   await pane.unmount()
 })
 
