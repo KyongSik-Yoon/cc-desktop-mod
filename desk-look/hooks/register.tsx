@@ -1877,6 +1877,34 @@ function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentR
   }
 }
 
+// 턴 끝 "Waiting for 2 background agents to finish" 아래 줄들: "··· general-purpose  설명 ›". 끝나면 상태를 단다.
+// 그 줄은 에이전트가 끝나도 남으니 지금 상태는 에이전트 기록에서 읽는다. 기록이 아직 없으면 종류만.
+function waitingRows(els: Els, $: EngineInterface, waited: ReadonlyArray<{ id: string; agentType: string }>, records: Record<string, AgentRecord>, columns: number) {
+  if (waited.length === 0) return null
+  const { Box, Text } = els
+  return (
+    <Box flexDirection="column" paddingLeft={2}>
+      {waited.map(({ id, agentType }) => {
+        const agent = records[id]
+        const live = agent === undefined || isLive(agent.status)
+        return (
+          <Box key={`waiting-${id}`} columnGap={1}>
+            <Text color={COLORS.clay}>{live ? '···' : '◆'}</Text>
+            <Text color={COLORS.muted}>{agent?.type ?? agentType}</Text>
+            {rowButton(
+              els,
+              { key: `waiting-row-${id}`, dimColor: true, onPress: () => void openAgents($, id) },
+              clip(agent?.description ?? '', Math.max(10, columns - cellWidth(agent?.type ?? agentType) - 24)),
+              !live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{` ${T.agentStatus[agent.status] ?? agent.status}`}</Text>,
+              <Text color={COLORS.muted}> ›</Text>,
+            )}
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
 // 아래턱의 "✉ 3": 안 읽은 Slack 메시지 수. 누르면 /desk-slack 패널.
 function slackChip(els: Els, $: EngineInterface, state: SlackState | null) {
   const count = state ? unreadCount(state.inbox) : 0
@@ -2476,6 +2504,12 @@ export function planRow(ids: ReadonlyArray<string>, runs: Runs): RowPlan {
   return calls.length > ids.length ? { kind: 'run', first, calls } : { kind: 'own' }
 }
 
+// 묶음에 호출 말고 다른 줄(떠올린 메모리, 훅 시간)이 섞였는지. 그 줄은 props 에 없어 그릴 수 없으니 엔진에 맡긴다.
+// isCallsOnly 는 실패·중단된 호출에도 false 라, 그런 호출이 있으면 가릴 수 없어 desk-look 이 그린다(실패는 직접 알린다).
+// 더 큰 묶음의 일부인 행에는 쓰지 않는다: 그 묶음의 다른 행이 비어 있어 넘기면 호출이 사라진다.
+export const hasOtherRows = (props: { calls: ReadonlyArray<ToolGroupCall>; isCallsOnly?: boolean }) =>
+  props.isCallsOnly === false && !props.calls.some(call => call.isErrored || call.isInterrupted)
+
 const asRunCall = (call: ToolGroupCall | (Call & { tool_use_id: string })): RunCall => ({
   tool_use_id: call.tool_use_id ?? '',
   tool: call.tool,
@@ -2906,8 +2940,9 @@ export const register: Register = (on, options) => {
   })
 
   // 도구 호출 행. 묶음의 첫 행이 묶음 전체 한 줄을 그리고, 나머지 행은 비운다.
+  // ctrl+o 화면·--verbose 는 엔진 그대로(호출마다 전부 보이게).
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (e.surface !== 'terminal') {
+    if (e.surface !== 'terminal' || e.props.isExpanded) {
       return next(e)
     }
     const els = $.ui.resolve(e)
@@ -2928,7 +2963,7 @@ export const register: Register = (on, options) => {
 
   // 데스크톱은 결과를 따로 그리지 않는다. 펼친 행 안에서 보여 준다.
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (e.surface !== 'terminal') {
+    if (e.surface !== 'terminal' || e.props.isExpanded) {
       return next(e)
     }
     const { Box } = $.ui.resolve(e)
@@ -2937,7 +2972,7 @@ export const register: Register = (on, options) => {
 
   // 엔진이 접은 읽기·검색 묶음. 더 큰 묶음의 일부면 그 묶음 규칙을 따른다.
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (e.surface !== 'terminal') {
+    if (e.surface !== 'terminal' || e.props.isExpanded) {
       return next(e)
     }
     const els = $.ui.resolve(e)
@@ -2946,6 +2981,7 @@ export const register: Register = (on, options) => {
     const plan = planRow(ids, state)
     if (plan.kind === 'hide') return <els.Box display="none" />
     if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80)
+    if (hasOtherRows(e.props)) return next(e)
     return runLine(els, $, e.requestId, e.props.calls.map(asRunCall), openState, e.viewport?.columns ?? 80)
   })
 
@@ -3064,12 +3100,22 @@ export const register: Register = (on, options) => {
   })
 
   // 턴 끝 카드: 데스크톱의 "Edited N files +51 −37" 상자. 편집이 없던 턴은 원래 줄만 둔다.
+  // 백그라운드 에이전트를 기다리는 줄이면 그 아래에 에이전트마다 한 줄(누르면 /desk-tasks 의 그 작업).
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
-    const line = await next(e)
-    if (e.surface !== 'terminal') return line
+    const engineLine = await next(e)
+    if (e.surface !== 'terminal') return engineLine
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const waited = e.props.waitingFor && !e.props.isExpanded ? waitingRows($.ui.resolve(e), $, e.props.waitingFor.agents, await read($, agents), e.viewport?.columns ?? 80) : null
+    const line = waited ? (
+      <Box flexDirection="column">
+        {engineLine}
+        {waited}
+      </Box>
+    ) : (
+      engineLine
+    )
     const card = cardFor(await read($, turnCards), e.props.durationMs)
     if (!card) return line
-    const { Box, Text, Button } = $.ui.resolve(e)
     const answer = card.text ?? ''
     // 데스크톱 답변 아래의 복사 버튼: 턴 끝 줄과 나란히, 오른쪽 끝에 흐리게. 그 줄이 위에 빈 줄을
     // 두면(paneline 등) 버튼은 그 빈 줄, 곧 답변 바로 아래에 놓인다. 줄은 늘지 않는다.

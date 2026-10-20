@@ -266,6 +266,84 @@ describe('도구 활동', () => {
     await group.unmount()
   })
 
+  test('ctrl+o 화면(isExpanded)에서는 도구 행·결과·묶음을 엔진이 그린다', KO, async ($, on) => {
+    on('ui.render', { component: 'ToolUse' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-use</Text>
+    })
+    on('ui.render', { component: 'ToolResult' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-result</Text>
+    })
+    on('ui.render', { component: 'ToolGroup' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-group</Text>
+    })
+    const use = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolUse',
+      requestId: 'x1',
+      viewport: VIEWPORT,
+      props: { tool_use_id: 'x1', ...call('Read', { file_path: '/r/a.ts' }), isExpanded: true },
+    })
+    expect(JSON.stringify(await use.drawn())).toContain('engine-use')
+    await use.unmount()
+    const result = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolResult',
+      viewport: VIEWPORT,
+      props: { tool_use_id: 'x1', tool: 'Bash', output: { stdout: 'hi', stderr: '' }, isErrored: false, isExpanded: true },
+    })
+    expect(JSON.stringify(await result.drawn())).toContain('engine-result')
+    await result.unmount()
+    const group = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolGroup',
+      requestId: 'x2',
+      viewport: VIEWPORT,
+      props: { calls: [{ tool_use_id: 'x2', ...call('Read', { file_path: '/r/b.ts' }) }], isActive: false, isExpanded: true },
+    })
+    expect(JSON.stringify(await group.drawn())).toContain('engine-group')
+    await group.unmount()
+  })
+
+  test('호출 말고 다른 줄이 섞인 묶음(isCallsOnly false)은 엔진이, 실패가 있으면 desk-look 이 그린다', KO, async ($, on) => {
+    on('ui.render', { component: 'ToolGroup' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-group</Text>
+    })
+    const mount = (requestId: string, isCallsOnly: boolean, isErrored: boolean) =>
+      $.ui.mount({
+        plugin: 'desk-look',
+        surface: 'terminal',
+        component: 'ToolGroup',
+        requestId,
+        viewport: VIEWPORT,
+        props: {
+          calls: [
+            { tool_use_id: `${requestId}-a`, ...call('Read', { file_path: '/r/a.ts' }) },
+            { tool_use_id: `${requestId}-b`, ...call('Grep', { pattern: 'TODO' }, { isErrored }) },
+          ],
+          isActive: false,
+          isExpanded: false,
+          isCallsOnly,
+        },
+      })
+    const mixed = await mount('m1', false, false)
+    expect(JSON.stringify(await mixed.drawn())).toContain('engine-group')
+    await mixed.unmount()
+    const failed = await mount('m2', false, true)
+    expect(JSON.stringify(await failed.drawn())).toContain('Read a file, searched (1 failed)')
+    await failed.unmount()
+    const plain = await mount('m3', true, false)
+    expect(JSON.stringify(await plain.drawn())).toContain('Read a file, searched')
+    expect(JSON.stringify(await plain.drawn())).not.toContain('engine-group')
+    await plain.unmount()
+  })
+
   test('입력창 위 밴드는 다른 플러그인의 밴드를 지우지 않는다', KO, async ($, on) => {
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
@@ -1247,6 +1325,39 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   expect(await pane.find({ type: 'Code' })).toBeDefined()
   await pane.unmount()
   await row.unmount()
+})
+
+test('백그라운드 에이전트를 기다리는 턴 끝 줄: 에이전트마다 한 줄, 누르면 그 작업, 끝나면 상태', KO, async ($, on) => {
+  const opened: string[] = []
+  let status = 'running'
+  on('process.run', gitStub as never)
+  on('clock.now', () => ({ value: 0 }))
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('agent.list', () => ({ value: [{ id: 'a1', description: '서울 날씨 조사', type: 'Explore', status }] as never }))
+  on('session.messages', () => ({ value: [] as never }))
+  on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>Waiting for 1 background agent to finish</Text>
+  })
+  const waitingFor = { agents: [{ id: 'a1', agentType: 'Explore', tool_use_id: 't1' }], workflows: 0 }
+  const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 7000, waitingFor } })
+  const before = JSON.stringify(await row.drawn())
+  expect(before).toContain('Waiting for 1 background agent to finish')
+  expect(before).toContain('Explore')
+  await row.press({ key: 'waiting-row-a1' })
+  expect(opened).toEqual(['desk-tasks'])
+  expect(JSON.stringify(await row.drawn())).toContain('서울 날씨 조사')
+  status = 'completed'
+  await $.command.run({ command: 'desk-tasks', args: '' } as never)
+  expect(JSON.stringify(await row.drawn())).toContain('완료')
+  await row.unmount()
+  // ctrl+o 화면에서는 엔진 줄만
+  const expanded = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 7000, waitingFor, isExpanded: true } })
+  expect(await expanded.find({ type: 'Button', key: 'waiting-row-a1' })).toBeUndefined()
+  await expanded.unmount()
 })
 
 test('턴 끝 줄의 ❝ 칩과 /desk-quote 는 선택한 글을 인용으로 입력창에 넣는다', KO, async ($, on) => {
