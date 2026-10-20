@@ -2372,7 +2372,8 @@ test('에이전트 패널: 띄우면 칩과 목록 카드, 누르면 대화', KO
   expect(viewedDetail).not.toContain('결론: 맑음')
   await viewed.press({ key: 'agent-main-back' })
   expect(views.at(-1)).toEqual({})
-  await viewed.press({ key: 'agent-back' })
+  // 맨 아래 뒤로가기도 같은 동작
+  await viewed.press({ key: 'agent-back-end' })
   expect(JSON.stringify(await viewed.drawn())).toContain('◉ 보는 중')
   await viewed.unmount()
   pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: paneProps as never })
@@ -3620,10 +3621,10 @@ describe('Asana 패널', () => {
     await pane.press({ key: 'asana-task-t3' })
     await wait(50)
     expect(calls.filter(call => call.tool === 'get_task').at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: 't3' } })
-    await pane.press({ key: 'asana-back' })
+    await pane.press({ key: 'asana-back-end' })
     expect(JSON.stringify(await pane.drawn())).toContain('세션 관리')
 
-    await pane.press({ key: 'asana-project-back' })
+    await pane.press({ key: 'asana-project-back-end' })
     expect(JSON.stringify(await pane.drawn())).toContain('내 프로젝트 1')
     await pane.press({ key: 'asana-tab-mine' })
     expect(JSON.stringify(await pane.drawn())).toContain('내 태스크 0')
@@ -3912,7 +3913,7 @@ describe('Slack 패널', () => {
     await wait(50)
     expect(calls.findLast(call => call.tool === 'slack_send_message')?.args).toEqual({ channel_id: 'D01', message: '스레드 답장', thread_ts: '1792131860.241069' })
     expect(calls.at(-1)?.tool).toBe('slack_read_thread')
-    await pane.press({ key: 'slack-back' })
+    await pane.press({ key: 'slack-back-end' })
     await wait(50)
     expect(calls.at(-1)?.tool).toBe('slack_read_channel')
 

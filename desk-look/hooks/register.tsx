@@ -3227,7 +3227,8 @@ export const register: Register = (on, options) => {
     const inView = e.props.view?.agentId
 
     const agent = view === null ? undefined : records[view]
-    const back = rowButton(els, { key: 'agent-back', dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)
+    // 상세가 길면 위로 되돌아가지 않도록 맨 아래에도 같은 버튼을 둔다.
+    const back = (key: string) => rowButton(els, { key, dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)
     // 셸·모니터 상세: 데스크톱·엔진의 Shell details 처럼 상태, 실행 시간, 명령, 요약, 출력 끝부분.
     if (agent && (agent.kind === 'shell' || agent.kind === 'monitor')) {
       const live = isLive(agent.status)
@@ -3241,7 +3242,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
-            {back}
+            {back('agent-back')}
             <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
               {agent.description}
             </Text>
@@ -3258,6 +3259,7 @@ export const register: Register = (on, options) => {
             <Text color={shownOutput ? COLORS.text : COLORS.muted}>{shownOutput ?? (live ? T.outputWhenDone : T.noOutput)}</Text>
           </Box>
           {live && stopButton(els, $, agent, openState)}
+          <Box>{back('agent-back-end')}</Box>
         </Box>
       )
     }
@@ -3270,7 +3272,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
-            {back}
+            {back('agent-back')}
             <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
               {agent?.description ?? view}
             </Text>
@@ -3315,6 +3317,7 @@ export const register: Register = (on, options) => {
               {live && agent?.activity && <Text color={COLORS.clay}>{`${spinnerDots(now)} ${agent.activity}`}</Text>}
             </Box>
           )}
+          <Box>{back('agent-back-end')}</Box>
         </Box>
       )
     }
@@ -3828,16 +3831,20 @@ export const register: Register = (on, options) => {
     const room = view === null ? undefined : state?.inbox.rooms[view.channel]
     if (view !== null && server !== null) {
       const title = room?.title ?? view.channel
+      // 글이 길게 쌓이면 위로 되돌아가지 않도록 답장 칸 아래에도 같은 버튼을 둔다.
+      const back = (key: string) => (
+        <Button
+          key={key}
+          plain
+          dimColor
+          label={view.thread === null ? T.slackBack : `← ${title}`}
+          onPress={() => void (view.thread === null ? closeSlackView($) : openSlackRoom($, server, view.channel))}
+        />
+      )
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
-            <Button
-              key="slack-back"
-              plain
-              dimColor
-              label={view.thread === null ? T.slackBack : `← ${title}`}
-              onPress={() => void (view.thread === null ? closeSlackView($) : openSlackRoom($, server, view.channel))}
-            />
+            {back('slack-back')}
             <Button key="slack-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openSlackRoom($, server, view.channel, view.thread)} />
           </Box>
           <Box flexDirection="column">
@@ -3887,6 +3894,7 @@ export const register: Register = (on, options) => {
             onInput={value => (slackDraft = value)}
             onSubmit={value => void sendSlack($, server, view.channel, view.thread, value)}
           />
+          <Box>{back('slack-back-end')}</Box>
         </Box>
       )
     }
@@ -4168,6 +4176,9 @@ export const register: Register = (on, options) => {
             </Box>
             {isMentioning && finder('asana-mention-search', found?.status === 'ok' ? found.users.map(mentionRow) : [])}
           </Box>
+          <Box>
+            <Button key="asana-back-end" plain dimColor label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
+          </Box>
         </Box>
       )
     }
@@ -4278,6 +4289,10 @@ export const register: Register = (on, options) => {
               </Box>
             )}
             {project.isPartial && <Text color={COLORS.muted}>{T.asanaProjectPartial(project.tasks.length)}</Text>}
+            {/* 목록이 길면 위로 되돌아가지 않도록 맨 아래에도 같은 버튼 */}
+            <Box>
+              <Button key="asana-project-back-end" plain dimColor label={T.asanaProjectsBack} onPress={() => void closeAsanaProject($)} />
+            </Box>
           </Box>
         )
       }
