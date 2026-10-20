@@ -19,3 +19,4 @@ gh release create vX.Y.Z --verify-tag --title "desk-look X.Y.Z" --notes-file <�
 - 노트는 영어로, 기존 릴리즈 형식을 따른다: 첫 줄 한 문장 요약, 바뀐 점 불릿, 끝에 `## Install`
   (`/plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod`, 이미 설치했으면 `/desk-update` 후 `/reload-plugins`).
 - 버전을 올리지 않는 커밋(문서, `.claude/skills` 등)은 릴리즈하지 않는다.
+- 기능의 완성 여부는 실제 클로드를 실행하여 눈으로 확인 후 판단한다. 단, 시스템은 화면이 잠겨있을 가능성을 사전 고려한다. 
