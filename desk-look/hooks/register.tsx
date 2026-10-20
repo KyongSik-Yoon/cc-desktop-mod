@@ -1,11 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
-import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, patchBlocks, windowPlan } from './diffview'
-import type { DiffBlock, DiffLine, DiffPalette, DiffRow } from './diffview'
+import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
+import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
 import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
@@ -51,7 +51,7 @@ import {
   usersCall,
 } from './asana'
 import type { AsanaCall } from './asana'
-import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, parseCommits, scopeLabel, scopeOf } from './gitview'
+import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matchesPath, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import {
   FIRST_FILL_S,
@@ -155,10 +155,16 @@ let commentSeq = 0
 const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
   scope: 'uncommitted',
   base: null,
+  baseRef: null,
+  bases: null,
   files: [],
   commits: [],
   commitFiles: {},
 } as DiffView)
+const diffGaps = atom({ plugin: 'desk-look', key: 'diffGaps' } as const, {} as Record<string, OpenedGaps>)
+const diffFilter = atom({ plugin: 'desk-look', key: 'diffFilter' } as const, { isOpen: false, query: '' } as DiffFilter)
+// diff 패널이 마지막으로 그린 파일 머리 띠(위에서부터): 접기 id 와 첫 행. n·p 이동에 쓴다.
+let diffHeads: { id: string; top: number }[] = []
 
 const agents = atom({ plugin: 'desk-look', key: 'agents' } as const, {} as Record<string, AgentRecord>)
 const agentView = atom({ plugin: 'desk-look', key: 'agentView' } as const, null as string | null)
@@ -776,6 +782,27 @@ async function openDiffAt($: EngineInterface, path: string) {
   // git 밖 파일이면 묶음도 편다: 접힌 묶음 안의 파일 머리 띠는 그리지 않아 스크롤해 갈 곳이 없다.
   await update($, open, state => ({ ...onlyOpen(state, target), ...(inGit === null ? { [OUTSIDE_GROUP]: false } : {}) }))
   await scrollToFile($, target)
+}
+
+// 창 맨 위 행이 속한 파일: 머리 띠가 그 행이거나 그 위에 있는 마지막 파일. 첫 머리 띠보다 위면 -1.
+export function headAt(heads: ReadonlyArray<{ top: number }>, offset: number): number {
+  let at = -1
+  heads.forEach((head, index) => {
+    if (head.top <= offset) at = index
+  })
+  return at
+}
+
+// n·p: 다음·이전 파일. 하나만 펴 보는 중이면(펴진 파일이 하나 이하) 그 파일을 펴고(앞 파일은 접힌다), 여럿 펴 두었으면 머리 띠로 간다.
+async function stepFile($: EngineInterface, by: 1 | -1) {
+  const heads = diffHeads
+  const at = headAt(heads, paneOffsets.get(PANE) ?? 0)
+  const target = at === -1 ? (by > 0 ? heads[0] : undefined) : heads[at + by]
+  if (!target) return
+  const state = await read($, open)
+  const opened = heads.filter(head => state[`fold:${head.id}`] === false).length
+  if ((state[`fold:${target.id}`] ?? true) && opened <= 1) await pickFile($, target.id)
+  else await scrollToFile($, target.id)
 }
 
 // diff 패널 파일은 하나만 펴진다: 펴 둔 파일 키를 모두 접고 이것만 편다. 기록이 없는 파일은 접힌 것이다.
@@ -1496,8 +1523,10 @@ async function armSlackClose($: EngineInterface, channel: string | null, isArmed
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
 async function findBase($: EngineInterface) {
   const opts = { timeoutMs: 8000 }
-  const [originHead, state] = await Promise.all([$.process.run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], opts), read($, pr)])
-  const candidates = baseCandidates(state?.pr?.base ?? null, originHead.exitCode === 0 ? originHead.stdout.trim() : null)
+  const [originHead, state, view] = await Promise.all([$.process.run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], opts), read($, pr), read($, diffView)])
+  // 사람이 고른 기준이 먼저, 그 브랜치가 없어졌으면 자동 후보로.
+  const auto = baseCandidates(state?.pr?.base ?? null, originHead.exitCode === 0 ? originHead.stdout.trim() : null)
+  const candidates = view.baseRef ? [view.baseRef, ...auto.filter(ref => ref !== view.baseRef)] : auto
   for (const ref of candidates) {
     const found = await $.process.run(['git', 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], opts)
     if (found.exitCode !== 0) continue
@@ -1505,6 +1534,81 @@ async function findBase($: EngineInterface) {
     if (base.exitCode === 0 && base.stdout.trim() !== '') return { ref, sha: base.stdout.trim() }
   }
   return null
+}
+
+// 기준 고르기: 목록이 열려 있으면 닫고, 아니면 최근 커밋 순 브랜치(로컬·원격)를 읽어 연다. 지금 기준이 목록에 없으면 맨 앞에.
+async function toggleBases($: EngineInterface) {
+  const view = await read($, diffView)
+  if (view.bases) {
+    await update($, diffView, previous => ({ ...previous, bases: null }))
+    return
+  }
+  const opts = { timeoutMs: 5000 }
+  const [refs, branch] = await Promise.all([
+    $.process.run(['git', 'for-each-ref', '--sort=-committerdate', '--count=40', '--format=%(refname)', 'refs/heads', 'refs/remotes'], opts).catch(() => null),
+    $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], opts).catch(() => null),
+  ])
+  const found = refs?.exitCode === 0 ? branchChoices(refs.stdout, branch?.exitCode === 0 ? branch.stdout.trim() : null) : []
+  const now = view.base?.ref
+  const bases = now && !found.includes(now) ? [now, ...found].slice(0, 8) : found
+  await update($, diffView, previous => ({ ...previous, bases }))
+}
+
+// 기준을 고르면(null 은 자동) 목록을 닫고 브랜치 전체·커밋별을 그 기준으로 다시 읽는다.
+async function pickBase($: EngineInterface, ref: string | null) {
+  await update($, diffView, previous => ({ ...previous, baseRef: ref, bases: null }))
+  await refreshDiffView($)
+}
+
+// 안 바뀐 구간을 누름: 새 쪽 파일(작업 트리, 커밋별이면 그 커밋)에서 구간의 줄을 읽어 그 자리에 편다.
+// 읽은 줄 수가 구간과 다르면 파일이 diff 를 읽은 뒤 바뀐 것이라 diff 를 다시 읽는다.
+type GapSource = { kind: 'worktree' } | { kind: 'commit'; sha: string }
+type GapPress = { key: string; patch: string; path: string; source: GapSource; gap: Gap }
+
+async function openGap($: EngineInterface, at: GapPress) {
+  const lines = await gapSource($, at.path, at.source)
+  if (lines === null) {
+    $.ui.toast(T.gapUnreadable)
+    return
+  }
+  const hidden = lines.slice(at.gap.newStart - 1, at.gap.newStart - 1 + at.gap.count)
+  if (hidden.length !== at.gap.count) {
+    await refreshDiffView($)
+    return
+  }
+  await update($, diffGaps, gaps => {
+    const kept = gaps[at.key]?.patch === at.patch ? (gaps[at.key]?.lines ?? {}) : {}
+    return { ...gaps, [at.key]: { patch: at.patch, lines: { ...kept, [at.gap.newStart]: hidden.map(untab) } } }
+  })
+}
+
+// 새 쪽 파일의 줄들. 커밋 안의 파일은 git cat-file 로(커밋:경로는 stdin 으로), 첫 줄은 머리말이고 끝에 줄바꿈 하나가 붙는다.
+async function gapSource($: EngineInterface, path: string, source: GapSource): Promise<string[] | null> {
+  if (source.kind === 'worktree') {
+    const root = (await read($, repo))?.root
+    const text = root ? await $.fs.read(`${root}/${path}`).catch(() => null) : null
+    return text === null ? null : text.split('\n')
+  }
+  const ran = await $.process.run(['git', 'cat-file', '--batch'], { timeoutMs: 5000, stdin: `${source.sha}:${path}\n` }).catch(() => null)
+  const end = ran?.exitCode === 0 ? ran.stdout.indexOf('\n') : -1
+  if (!ran || end < 0 || !ran.stdout.slice(0, end).includes(' blob ')) return null
+  return ran.stdout.slice(end + 1).replace(/\n$/, '').split('\n')
+}
+
+// 거르기 줄: 열면 입력칸에 키를 준다(막 그려지는 중이면 잠깐 다시). 닫으면 거른 글도 지운다.
+async function toggleFilter($: EngineInterface) {
+  const filter = await read($, diffFilter)
+  if (filter.isOpen) {
+    await update($, diffFilter, () => ({ isOpen: false, query: '' }))
+    return
+  }
+  await update($, diffFilter, previous => ({ ...previous, isOpen: true }))
+  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  for (let tries = 0; tries < 10; tries++) {
+    const moved = await $.ui.focus({ requestId: PANE, key: 'diff-filter' }).catch(() => ({ deny: 'failed' }))
+    if (!moved.deny) return
+    await $.clock.sleep(50).catch(() => undefined)
+  }
 }
 
 async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
@@ -2018,7 +2122,7 @@ function diffLines(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette
 type DiffSection =
   | { kind: 'note'; key: string; text: string; indent?: number }
   | { kind: 'element'; key: string; node: unknown }
-  | { kind: 'file'; file: FileDiff; prefix: string; canRevert: boolean; indent: number }
+  | { kind: 'file'; file: FileDiff; prefix: string; canRevert: boolean; indent: number; source: GapSource }
   | { kind: 'session'; edit: SessionEdit }
 
 type VirtualDiff = {
@@ -2032,6 +2136,24 @@ type VirtualDiff = {
   fileHeader: (file: FileDiff, prefix: string, canRevert: boolean, indent: number) => unknown
   sessionHeader: (edit: SessionEdit) => unknown
   notes: DiffNotes
+  // 편 안 바뀐 구간(패치 키마다)과 구간 누름. git 파일만 편다(세션 기록의 편집은 그때의 줄 번호라 지금 파일과 안 맞는다).
+  gaps: Record<string, OpenedGaps>
+  onGap: (at: GapPress) => void
+}
+
+// 편 구간을 넣은 행과 덩어리: 스크롤마다 다시 만들지 않게 패치 키마다 하나 기억한다.
+const openedCache = new Map<string, { patch: string; starts: string; made: { rows: DiffRow[]; blocks: DiffBlock[] } }>()
+
+function withOpenedGaps(key: string, patch: string, opened: OpenedGaps | undefined): { rows: DiffRow[]; blocks: DiffBlock[] } {
+  const made = patchBlocks(patch)
+  if (!opened || opened.patch !== patch) return made
+  const starts = Object.keys(opened.lines).join(',')
+  const hit = openedCache.get(key)
+  if (hit && hit.patch === patch && hit.starts === starts) return hit.made
+  const rows = openGaps(made.rows, new Map(Object.entries(opened.lines).map(([start, lines]) => [Number(start), lines])))
+  const next = { rows, blocks: diffBlocks(rows) }
+  openedCache.set(key, { patch, starts, made: next })
+  return next
 }
 
 // 줄 댓글을 패널에 잇는 것들: 고른 범위·단 댓글, diff 범위 이름, 번호 누름, 끼울 행 두 가지(높이 1).
@@ -2060,8 +2182,10 @@ function virtualDiff(v: VirtualDiff) {
     return at + height > windowTop && at < windowTop + rows
   }
   const spacer = (key: string) => items.push({ key, height: 1, node: () => <Box key={key} height={1} /> })
-  const rowItems = ({ rows, blocks }: { rows: DiffRow[]; blocks: DiffBlock[] }, key: string, path: string, indent: number, scope: string) => {
-    const options = { path, gutter: gutterWidth(rows), columns: v.columns - indent, unmodified: T.unmodifiedLines }
+  const rowItems = (patch: string, key: string, path: string, indent: number, scope: string, source?: GapSource) => {
+    const { rows, blocks } = source ? withOpenedGaps(key, patch, v.gaps[key]) : patchBlocks(patch)
+    const gap = source ? { Button: v.els.Button, onPress: (at: Gap) => v.onGap({ key, patch, path, source, gap: at }) } : undefined
+    const options = { path, gutter: gutterWidth(rows), columns: v.columns - indent, unmodified: T.unmodifiedLines, ...(gap ? { gap } : {}) }
     // 이 패치에 단 댓글과 쓰는 중인 댓글은 범위 끝 줄 뒤에 한 행씩 끼운다: 덩어리를 그 줄에서 나눈다.
     const pad = indent + 1 + options.gutter
     const draft = v.notes.draft?.patch === key ? v.notes.draft : null
@@ -2122,12 +2246,17 @@ function virtualDiff(v: VirtualDiff) {
     })
   }
 
+  // 머리(범위 탭 아래 한 칸), 그리고 목록 앞과 git 밖 편집 묶음 앞에만 빈 줄. 파일 머리 띠끼리는 띄우지 않는다(데스크톱처럼 띠 바탕으로 나뉜다).
   v.head.forEach((node, index) => {
-    if (index > 0) spacer(`h-gap-${index}`)
+    if (index === 1) spacer('h-gap')
     items.push({ key: `h-${index}`, height: 1, always: true, node: () => node })
   })
-  for (const section of v.sections) {
-    spacer(`gap-${items.length}`)
+  const heads: { id: string; key: string }[] = []
+  v.sections.forEach((section, index) => {
+    if (index === 0 || (section.kind === 'element' && section.key === 'outside')) spacer(`gap-${items.length}`)
+    rowSection(section)
+  })
+  function rowSection(section: DiffSection) {
     if (section.kind === 'note') note(`note-${section.key}`, section.text, section.indent)
     else if (section.kind === 'element') {
       items.push({
@@ -2144,20 +2273,22 @@ function virtualDiff(v: VirtualDiff) {
     else if (section.kind === 'file') {
       const { file, prefix, indent } = section
       const id = `${prefix}${file.path}`
+      heads.push({ id, key: `fh-${id}` })
       items.push({ key: `fh-${id}`, height: 1, always: true, node: () => v.fileHeader(file, prefix, section.canRevert, indent) })
-      if (v.isFolded(id)) continue
+      if (v.isFolded(id)) return
       if (!file.patch) note(`bin-${id}`, T.binary, indent + 2)
-      else rowItems(patchBlocks(file.patch), `d-${id}`, file.path, indent, v.notes.scopeOf(prefix))
+      else rowItems(file.patch, `d-${id}`, file.path, indent, v.notes.scopeOf(prefix), section.source)
     } else {
       const { edit } = section
       const id = `${OUTSIDE}${edit.path}`
+      heads.push({ id, key: `fh-${id}` })
       items.push({ key: `fh-${id}`, height: 1, always: true, node: () => v.sessionHeader(edit) })
-      if (v.isFolded(id)) continue
+      if (v.isFolded(id)) return
       if (edit.patches.length === 0) note(`bin-${id}`, T.binary, 2)
       // 편집마다 따로: 서로 다른 시점의 줄 번호를 한 diff 로 잇지 않는다.
       edit.patches.forEach((patch, index) => {
         if (index > 0) note(`next-${id}-${index}`, T.nextEdit, 2)
-        rowItems(patchBlocks(patch), `s-${id}-${index}`, edit.path, 0, v.notes.scopeOf(OUTSIDE))
+        rowItems(patch, `s-${id}-${index}`, edit.path, 0, v.notes.scopeOf(OUTSIDE))
       })
     }
   }
@@ -2168,6 +2299,7 @@ function virtualDiff(v: VirtualDiff) {
     tops.set(item.key, top)
     top += item.height
   }
+  diffHeads = heads.map(head => ({ id: head.id, top: tops.get(head.key) ?? 0 }))
   // 내용이 줄어 창이 끝을 넘으면 엔진은 다시 묻지 않고 창을 끝으로 깎는다. 그 자리를 미리 그린다.
   windowTop = Math.max(0, Math.min(windowTop, top - rows))
   const steps = windowPlan(items, windowTop, rows)
@@ -3555,7 +3687,7 @@ export const register: Register = (on, options) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
     const { Box, Text, Button, Code, Input } = els
-    const [uncommitted, view, armed, info, edits, home, face, window, draft, comments] = await Promise.all([
+    const [uncommitted, view, armed, info, edits, home, face, window, draft, comments, gaps, filter] = await Promise.all([
       read($, diff),
       read($, diffView),
       read($, open),
@@ -3566,6 +3698,8 @@ export const register: Register = (on, options) => {
       read($, diffWindow),
       read($, commentDraft),
       read($, lineComments),
+      read($, diffGaps),
+      read($, diffFilter),
     ])
     diffDrawnFolds = armed
     // 패널 몸통 폭: viewport.columns 는 패널 폭이 아니다(구분선을 끌면 어긋나 단어 강조 조각이 일찍 잘렸다).
@@ -3576,16 +3710,22 @@ export const register: Register = (on, options) => {
     const seen = (e.props as { scroll?: { offset: number; bodyRows: number } }).scroll
     const shown =
       seen && seen.bodyRows > 0 && (seen.bodyRows !== window.bodyRows || Math.abs(seen.offset - window.offset) * 2 > seen.bodyRows) ? seen : window
-    const files = view.scope === 'branch' ? view.files : uncommitted
+    const allFiles = view.scope === 'branch' ? view.files : uncommitted
     // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
-    const outside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
+    const allOutside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
+    // 파일 이름 거르기: 목록·n·p·z 는 걸러진 파일만. 제목의 파일 수와 +/− 합계는 전체로 센다.
+    const query = filter.query.trim()
+    const isMatch = (path: string) => matchesPath(path, query)
+    const files = allFiles.filter(file => isMatch(file.path))
+    const outside = allOutside.filter(edit => isMatch(edit.path))
+    const commitFilesOf = (sha: string) => view.commitFiles[sha]?.filter(file => isMatch(file.path))
     // 파일은 하나만 펴진다(pickFile): 펴 둔 기록이 없으면 접힌 것이라 패널은 접힌 목록으로 열린다.
     const isFolded = (id: string) => armed[`fold:${id}`] ?? true
     // git 밖 편집 묶음을 접으면 머리 줄만 남는다. 개수·+/− 합계에는 그대로 센다.
     const outsideFolded = armed[OUTSIDE_GROUP] ?? false
     const outsideShown = outsideFolded ? [] : outside
-    const added = [...files, ...outside].reduce((sum, file) => sum + file.added, 0)
-    const removed = [...files, ...outside].reduce((sum, file) => sum + file.removed, 0)
+    const added = [...allFiles, ...allOutside].reduce((sum, file) => sum + file.added, 0)
+    const removed = [...allFiles, ...allOutside].reduce((sum, file) => sum + file.removed, 0)
     const shortPath = (path: string) => (home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)
     const empty =
       info?.isRepo === false
@@ -3650,11 +3790,17 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const shownCount = files.length + outside.length
+    const shownCount = allFiles.length + allOutside.length
     // 모두 접기·펴기: 하나라도 펴져 있으면 모두 접고, 아니면 모두 편다.
     // 파일 탭은 지금 보이는 파일 블록의 접기 키(fileBlock·outsideBlock 과 같은 모양), 커밋별 탭은 커밋 줄이 대상이다.
     const foldIds = [...files.map(file => `${view.scope === 'branch' ? 'b:' : ''}${file.path}`), ...outsideShown.map(edit => `${OUTSIDE}${edit.path}`)]
     const foldCount = view.scope === 'commits' ? view.commits.length : foldIds.length
+    // 걸러 낸 뒤 보이는 파일(커밋별은 펼친 커밋 안의 것): 거르기 줄의 개수와 Enter(첫 파일 열기).
+    const matchIds =
+      view.scope === 'commits'
+        ? view.commits.flatMap(commit => (commitFilesOf(commit.sha) ?? []).map(file => `c:${commit.short}:${file.path}`))
+        : foldIds
+    const matchTotal = view.scope === 'commits' ? view.commits.reduce((sum, commit) => sum + (view.commitFiles[commit.sha]?.length ?? 0), 0) : shownCount
     const anyOpen = view.scope === 'commits' ? Object.keys(view.commitFiles).length > 0 : foldIds.some(id => !isFolded(id))
     const foldAll = () =>
       view.scope === 'commits' ? foldCommits($) : update($, open, state => ({ ...state, ...Object.fromEntries(foldIds.map(id => [`fold:${id}`, anyOpen])) }))
@@ -3747,21 +3893,71 @@ export const register: Register = (on, options) => {
           </Text>
         </Box>
         {view.scope !== 'commits' && shownCount > 0 && <Box flexShrink={0}>{diffChips(Text, added, removed)}</Box>}
-        {view.scope !== 'uncommitted' && view.base && (
+        {view.scope !== 'uncommitted' && (
           <Box flexShrink={0}>
-            <Text color={COLORS.muted}>{`vs ${view.base.ref}`}</Text>
-          </Box>
-        )}
-        <Box flexShrink={0}>
-          <Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />
-        </Box>
-        {foldCount > 1 && (
-          <Box flexShrink={0}>
-            <Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />
+            <Button key="base-pick" plain dimColor={!view.bases} label={`${view.base ? `vs ${view.base.ref}` : T.pickBase} ${view.bases ? '⌃' : '⌄'}`} onPress={() => void toggleBases($)} />
           </Box>
         )}
       </Box>
     )
+    // 도구 줄: 다시 읽기, 이전·다음 파일(데스크톱 모양일 때, 파일이 둘 이상), 거르기, 모두 접기·펴기.
+    const canStep = !!(face && diffColors) && (view.scope === 'commits' ? matchIds.length : foldIds.length) > 1
+    const tool = (node: unknown) => <Box flexShrink={0}>{node as never}</Box>
+    const toolsRow = (
+      <Box key="diff-tools" columnGap={2} height={1} overflow="hidden">
+        {tool(<Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />)}
+        {canStep && tool(<Button key="file-prev" plain dimColor hotkey="p" label={T.prevFile} onPress={() => void stepFile($, -1)} />)}
+        {canStep && tool(<Button key="file-next" plain dimColor hotkey="n" label={T.nextFile} onPress={() => void stepFile($, 1)} />)}
+        {(matchTotal > 1 || filter.isOpen) && tool(<Button key="filter" plain dimColor={!filter.isOpen} hotkey="f" label={T.filterFiles} onPress={() => void toggleFilter($)} />)}
+        {foldCount > 1 && tool(<Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />)}
+      </Box>
+    )
+    // 거르기 줄: 입력칸, 걸러진 수, 닫기. Enter 는 걸러진 첫 파일을 편다.
+    const filterRow = filter.isOpen && (
+      <Box key="diff-filter-row" height={1} columnGap={1} overflow="hidden">
+        <Box flexGrow={1} flexShrink={1} overflow="hidden">
+          <Input
+            key="diff-filter"
+            label={T.filterLabel}
+            placeholder={T.filterPlaceholder}
+            value={filter.query}
+            submitLabel={T.filterOpen}
+            onInput={value => void update($, diffFilter, previous => ({ ...previous, query: value }))}
+            onSubmit={() => {
+              const first = matchIds[0]
+              if (first) void pickFile($, first)
+            }}
+          />
+        </Box>
+        {/* 커밋별에서 펼친 커밋이 없으면 걸러 볼 파일이 아직 없다: "맞는 파일이 없어요" 대신 아무것도 */}
+        {query !== '' && matchTotal > 0 && (
+          <Box flexShrink={0}>
+            <Text color={matchIds.length === 0 ? COLORS.danger : COLORS.muted}>{matchIds.length === 0 ? T.noFileMatch : `${matchIds.length}/${matchTotal}`}</Text>
+          </Box>
+        )}
+        <Box flexShrink={0}>
+          <Button key="filter-close" plain dimColor label="✕" onPress={() => void toggleFilter($)} />
+        </Box>
+      </Box>
+    )
+    // 기준 고르기 목록: 자동, 그리고 최근 커밋 순 브랜치. 고른 것에 ●.
+    const baseRows = view.scope !== 'uncommitted' && view.bases
+      ? [
+          { key: 'base-auto', label: T.baseAuto(view.baseRef === null ? (view.base?.ref ?? null) : null), isOn: view.baseRef === null, ref: null },
+          ...view.bases.map(ref => ({ key: `base-${ref}`, label: ref, isOn: view.baseRef === ref, ref })),
+        ].map(row => (
+          <Box key={`${row.key}-row`} height={1} overflow="hidden" paddingLeft={2}>
+            <Button key={row.key} plain dimColor={!row.isOn} label={`${row.isOn ? '●' : '○'} ${row.label}`} onPress={() => void pickBase($, row.ref)} />
+          </Box>
+        ))
+      : []
+    const baseEmpty = view.scope !== 'uncommitted' && view.bases?.length === 0 && (
+      <Box key="base-none" height={1} paddingLeft={2}>
+        <Text color={COLORS.muted}>{T.noBranches}</Text>
+      </Box>
+    )
+    // 거르기 줄은 도구 줄 위에: 치는 동안 걸러진 수에 따라 도구 버튼이 나고 들면, 그보다 뒤에 그린 입력칸은 키를 잃는다(실화면).
+    const head = [tabs, titleRow, ...(filterRow ? [filterRow] : []), toolsRow, ...baseRows, ...(baseEmpty ? [baseEmpty] : [])]
 
     if (face && diffColors) {
       return virtualDiff({
@@ -3769,11 +3965,18 @@ export const register: Register = (on, options) => {
         palette: diffColors,
         window: shown,
         columns,
-        head: [tabs, titleRow],
+        head,
         sections: [
           ...(view.scope !== 'commits' && shownCount === 0 ? [{ kind: 'note' as const, key: 'empty', text: empty }] : []),
           ...(view.scope !== 'commits'
-            ? files.map(file => ({ kind: 'file' as const, file, prefix: view.scope === 'branch' ? 'b:' : '', canRevert: view.scope === 'uncommitted', indent: 0 }))
+            ? files.map(file => ({
+                kind: 'file' as const,
+                file,
+                prefix: view.scope === 'branch' ? 'b:' : '',
+                canRevert: view.scope === 'uncommitted',
+                indent: 0,
+                source: { kind: 'worktree' as const },
+              }))
             : []),
           ...(outside.length > 0 ? [{ kind: 'element' as const, key: 'outside', node: outsideHeader }] : []),
           ...outsideShown.map(edit => ({ kind: 'session' as const, edit })),
@@ -3784,11 +3987,20 @@ export const register: Register = (on, options) => {
             ? view.commits.flatMap(commit => [
                 { kind: 'element' as const, key: `commit-${commit.sha}`, node: commitRow(commit) },
                 ...(view.commitFiles[commit.sha]?.length === 0 ? [{ kind: 'note' as const, key: `empty-${commit.sha}`, text: T.emptyCommit, indent: 2 }] : []),
-                ...(view.commitFiles[commit.sha] ?? []).map(file => ({ kind: 'file' as const, file, prefix: `c:${commit.short}:`, canRevert: false, indent: 2 })),
+                ...(commitFilesOf(commit.sha) ?? []).map(file => ({
+                  kind: 'file' as const,
+                  file,
+                  prefix: `c:${commit.short}:`,
+                  canRevert: false,
+                  indent: 2,
+                  source: { kind: 'commit' as const, sha: commit.sha },
+                })),
               ])
             : []),
         ],
         isFolded,
+        gaps,
+        onGap: at => void openGap($, at).catch(() => undefined),
         fileHeader: (file, prefix, canRevert, indent) => diffFileHeader(file.path, prefix, file.added, file.removed, file.isNew, canRevert, indent),
         sessionHeader: edit => diffFileHeader(edit.path, OUTSIDE, edit.added, edit.removed, false, false, 0, shortPath(edit.path)),
         notes: {
@@ -3828,12 +4040,16 @@ export const register: Register = (on, options) => {
       })
     }
 
+    // 테마를 모를 때(엔진 diff): 이전·다음 파일은 없다(머리 띠 자리를 셈하지 않는다).
+    diffHeads = []
     return (
       <Box flexDirection="column" rowGap={1}>
         {tabs}
-        {titleRow}
+        <Box flexDirection="column">{head.slice(1) as never}</Box>
         {view.scope !== 'commits' && shownCount === 0 && <Text color={COLORS.muted}>{empty}</Text>}
-        {view.scope !== 'commits' && files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}
+        {view.scope !== 'commits' && (
+          <Box flexDirection="column">{files.map(file => fileBlock(file, view.scope === 'branch' ? 'b:' : '', view.scope === 'uncommitted'))}</Box>
+        )}
         {outside.length > 0 && outsideHeader}
         {outsideShown.map(outsideBlock)}
         {view.scope === 'commits' && view.commits.length === 0 && (
@@ -3841,12 +4057,12 @@ export const register: Register = (on, options) => {
         )}
         {view.scope === 'commits' &&
           view.commits.map(commit => {
-            const changed = view.commitFiles[commit.sha]
+            const changed = commitFilesOf(commit.sha)
             return (
               <Box key={`commit-${commit.sha}`} flexDirection="column">
                 {commitRow(commit)}
                 {changed && (
-                  <Box flexDirection="column" rowGap={1} paddingLeft={2}>
+                  <Box flexDirection="column" paddingLeft={2}>
                     {changed.length === 0 && <Text color={COLORS.muted}>{T.emptyCommit}</Text>}
                     {changed.map(file => fileBlock(file, `c:${commit.short}:`, false))}
                   </Box>

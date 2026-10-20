@@ -44,3 +44,24 @@ export function baseCandidates(prBase: string | null, originHead: string | null)
   ]
   return [...new Set(names.filter((name): name is string => !!name))]
 }
+
+// 파일 이름 거르기: 띄어 쓴 조각이 모두 경로에 들어 있으면(대소문자 무시) 맞는다. 빈 글은 모두 맞는다.
+export function matchesPath(path: string, query: string): boolean {
+  const lower = path.toLowerCase()
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every(part => lower.includes(part))
+}
+
+// 기준 고르기 목록: for-each-ref 의 전체 이름(최근 커밋 순)을 짧게. 원격의 HEAD 와 지금 브랜치는 뺀다.
+export function branchChoices(text: string, current: string | null, max = 8): string[] {
+  const names = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => !line.endsWith('/HEAD'))
+    .map(line => line.replace(/^refs\/heads\//, '').replace(/^refs\/remotes\//, ''))
+    .filter(name => name !== '' && !name.startsWith('refs/') && name !== current)
+  return [...new Set(names)].slice(0, max)
+}

@@ -180,7 +180,20 @@ export type SlackView = { channel: string; thread: string | null; status: 'loadi
 export type DiffScope = 'uncommitted' | 'branch' | 'commits'
 export type CommitInfo = { sha: string; short: string; subject: string; author: string; ago: string }
 // base: 비교 기준(브랜치 이름과 merge-base), 못 찾으면 null. commit: 커밋별에서 펼친 커밋.
-export type DiffView = { scope: DiffScope; base: { ref: string; sha: string } | null; files: FileDiff[]; commits: CommitInfo[]; commitFiles: Record<string, FileDiff[]> }
+// baseRef: 사람이 고른 기준 브랜치(null 이면 자동). bases: 기준 고르기 목록이 열려 있으면 그 후보, 닫혀 있으면 null.
+export type DiffView = {
+  scope: DiffScope
+  base: { ref: string; sha: string } | null
+  baseRef: string | null
+  bases: string[] | null
+  files: FileDiff[]
+  commits: CommitInfo[]
+  commitFiles: Record<string, FileDiff[]>
+}
+// diff 패널에서 편 안 바뀐 구간: 펼 때의 패치 글(바뀌면 버린다)과, 구간 첫 줄 새 번호마다 그 줄들.
+export type OpenedGaps = { patch: string; lines: Record<number, string[]> }
+// diff 패널 파일 이름 거르기: 거르기 줄이 보이는지와 걸러 낼 글.
+export type DiffFilter = { isOpen: boolean; query: string }
 
 // 백그라운드 작업 패널 한 줄. kind 가 없으면 에이전트: $.agent.list() 의 행에 이 세션이 이벤트로 모은 수치를 더한 것.
 // shell(백그라운드로 넘어간 Bash)·monitor(Monitor)는 엔진이 목록을 주지 않아 도구 결과와 끝남 알림으로만 안다.
@@ -273,6 +286,9 @@ declare module 'claude-code' {
       taskOutput: { id: string; text: string | null } | null
       // /desk-diff 패널 창 위치(ui.scroll 이 알려 준 첫 행과 보이는 행 수). 보이는 곳만 그리는 데 쓴다.
       diffWindow: { offset: number; bodyRows: number }
+      // diff 패널에서 편 안 바뀐 구간(패치 키마다)과 파일 이름 거르기.
+      diffGaps: Record<string, OpenedGaps>
+      diffFilter: DiffFilter
       // diff 줄 댓글: 쓰는 중인 것(고른 줄 범위, 없으면 null)과 다음 프롬프트에 context 로 붙일 것.
       commentDraft: CommentDraft | null
       lineComments: LineComment[]

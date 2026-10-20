@@ -9,7 +9,9 @@ import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainTe
 import { previewOf } from '../hooks/preview'
 import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls, mentionHtml, nextOffset, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackText, tsCompare, unreadCount } from '../hooks/slack'
-import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
+import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
+import { branchChoices, matchesPath } from '../hooks/gitview'
+import { headAt } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -3108,6 +3110,226 @@ test('/desk-fold: 열린 패널을 접고, 다시 치면 앞에 있던 패널을
 
   // 편 뒤에는 다시 접는다(접어 둔 기록은 비웠다).
   expect(await run()).toContain('패널 2개를 접었어요')
+})
+
+describe('diff 패널: 안 바뀐 줄 펴기·거르기·기준 고르기·파일 이동', () => {
+  test('순수 함수: 구간 위치와 펴기, 경로 거르기, 기준 후보, 지금 파일', () => {
+    // 첫 hunk 가 한 줄을 더해 두 번째 hunk 앞 구간은 옛 번호 3부터, 새 번호 4부터 7줄
+    const rows = diffRows(parseHunks('@@ -1,2 +1,3 @@\n a\n+n\n b\n@@ -10 +11 @@\n-x\n+y'))
+    const gaps = rows.flatMap(row => (row.kind === 'gap' ? [[row.count, row.oldStart, row.newStart]] : []))
+    expect(gaps).toEqual([[7, 3, 4]])
+    const opened = openGaps(rows, new Map([[4, Array.from({ length: 7 }, (_, i) => `l${i + 4}`)]]))
+    expect(opened.some(row => row.kind === 'gap')).toBe(false)
+    const context = opened.filter(row => row.kind === 'line' && row.line.text.startsWith('l'))
+    expect(context.map(row => (row.kind === 'line' ? `${row.line.kind}${row.line.oldNo}:${row.line.newNo}` : ''))).toEqual([' 3:4', ' 4:5', ' 5:6', ' 6:7', ' 7:8', ' 8:9', ' 9:10'])
+    // 고르지 않은 구간은 그대로
+    expect(openGaps(rows, new Map([[99, ['x']]]))).toEqual(rows)
+
+    expect(matchesPath('backend/src/GenAiStore.kt', 'genai store')).toBe(true)
+    expect(matchesPath('backend/src/GenAiStore.kt', 'GENAI kt')).toBe(true)
+    expect(matchesPath('backend/src/GenAiStore.kt', 'genai ts')).toBe(false)
+    expect(matchesPath('a.txt', '  ')).toBe(true)
+
+    const refs = ['refs/heads/main', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main', 'refs/heads/feat/x', 'refs/heads/main', ''].join('\n')
+    expect(branchChoices(refs, 'feat/x')).toEqual(['main', 'origin/main'])
+
+    const heads = [{ top: 3 }, { top: 10 }]
+    expect([0, 3, 9, 10, 50].map(offset => headAt(heads, offset))).toEqual([-1, 0, 0, 1, 1])
+  })
+
+  // 밝은 테마(truecolor)와 저장소 파일 읽기. 파일은 /repo/ 아래 경로로 준다.
+  const themed = (on: On, files: Record<string, string>) => {
+    on('env.get', ($, e) => {
+      const name = String((e as { name?: string }).name ?? e)
+      return { value: (name === 'HOME' ? '/home/t' : name === 'COLORTERM' ? 'truecolor' : undefined) as never }
+    })
+    on('fs.read', ($, e) => {
+      const path = String((e as { path?: string }).path ?? e)
+      if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
+      if (files[path] !== undefined) return { value: files[path] } as never
+      throw new Error('ENOENT')
+    })
+    on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.now', () => ({ value: 0 }))
+  }
+  const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  const lines = (count: number, changed: Record<number, string> = {}) => Array.from({ length: count }, (_, i) => changed[i + 1] ?? `l${i + 1}`).join('\n') + '\n'
+  // 2번 줄과 21번 줄을 바꾼 30줄 파일: 두 hunk 사이에 16줄(4~19)
+  const CART = 'diff --git a/src/cart.ts b/src/cart.ts\n--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -1,3 +1,3 @@\n l1\n-l2\n+L2\n l3\n@@ -20,3 +20,3 @@\n l20\n-l21\n+L21\n l22\n'
+  const mountDiff = ($: Parameters<TestBody>[0]) =>
+    $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true, bodyRows: 30 } as never })
+  const gapButton = async (pane: Awaited<ReturnType<typeof mountDiff>>) =>
+    ((await pane.findAll({ type: 'Button' })) as { key?: string }[]).map(button => String(button.key)).find(key => key.endsWith('.g'))
+
+  test('안 바뀐 줄을 누르면 작업 트리 파일에서 그 줄을 읽어 그 자리에 편다, 파일이 달라졌으면 diff 를 다시 읽는다', KO, async ($, on) => {
+    const files: Record<string, string> = { '/repo/src/cart.ts': lines(30, { 2: 'L2', 21: 'L21' }) }
+    themed(on, files)
+    let diffs = 0
+    on('process.run', (($: unknown, e: { argv: string[] }) => {
+      if (e.argv[1] === 'diff' && e.argv[2] === 'HEAD') {
+        diffs++
+        return out(CART)
+      }
+      return out(e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv.includes('--abbrev-ref') ? 'main\n' : '')
+    }) as never)
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    const pane = await mountDiff($)
+    await pane.press({ key: 'fold-src/cart.ts' })
+    for (let tries = 0; tries < 50 && !(await gapButton(pane)); tries++) await wait(10)
+    expect(await pane.find({ type: 'Text', text: '안 바뀐 줄 16개' })).toBeDefined()
+    expect(JSON.stringify(await pane.drawn())).not.toContain('l12')
+    // 파일이 diff 를 읽은 뒤 짧아졌으면 펴지 않고 diff 를 다시 읽는다
+    files['/repo/src/cart.ts'] = 'l1\n'
+    const before = diffs
+    await pane.press({ key: (await gapButton(pane)) ?? '' })
+    expect(diffs).toBeGreaterThan(before)
+    expect(await gapButton(pane)).toBeDefined()
+    files['/repo/src/cart.ts'] = lines(30, { 2: 'L2', 21: 'L21' })
+    await pane.press({ key: (await gapButton(pane)) ?? '' })
+    for (let tries = 0; tries < 50 && (await pane.find({ type: 'Text', text: '안 바뀐 줄 16개' })); tries++) await wait(10)
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(await pane.find({ type: 'Text', text: '안 바뀐 줄 16개' })).toBeUndefined()
+    expect(drawn).toContain('l4\\nl5')
+    expect(drawn).toContain('l19')
+    // 번호는 이어진다(4~19)
+    expect(drawn).toContain('19   ')
+
+    // ↻ 로 다시 읽어도 패치가 같으면 편 구간은 그대로다
+    await pane.press({ key: 'refresh' })
+    expect(await gapButton(pane)).toBeUndefined()
+    expect(JSON.stringify(await pane.drawn())).toContain('l19')
+    await pane.unmount()
+  })
+
+  test('커밋별 탭의 안 바뀐 줄은 그 커밋의 파일(git cat-file)에서 읽는다', KO, async ($, on) => {
+    themed(on, {})
+    const asked: string[] = []
+    on('process.run', (($: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+      const argv = e.argv
+      if (argv.includes('--show-toplevel')) return out('/repo\n')
+      if (argv.includes('--abbrev-ref')) return out('feat/x\n')
+      if (argv[1] === 'symbolic-ref') return out('origin/main\n')
+      if (argv[1] === 'rev-parse' && argv.includes('--verify')) return out('base\n')
+      if (argv[1] === 'merge-base') return out('base000\n')
+      if (argv[1] === 'log') return out('c1sha\x1fc1\x1fFix cart\x1falice\x1f1 hour ago\n')
+      if (argv[1] === 'show') return out(`\x1ec1sha\n\n${CART}`)
+      if (argv[1] === 'cat-file') {
+        asked.push(e.init?.stdin ?? '')
+        const body = lines(30, { 2: 'L2', 21: 'L21' })
+        return out(`blobsha blob ${body.length}\n${body}\n`)
+      }
+      return out('')
+    }) as never)
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await $.command.run({ command: 'desk-diff', args: 'commits' } as never)
+    const pane = await mountDiff($)
+    await pane.press({ key: 'commit-c1sha' })
+    await pane.press({ key: 'fold-c:c1:src/cart.ts' })
+    for (let tries = 0; tries < 50 && !(await gapButton(pane)); tries++) await wait(10)
+    await pane.press({ key: (await gapButton(pane)) ?? '' })
+    for (let tries = 0; tries < 50 && !JSON.stringify(await pane.drawn()).includes('l19'); tries++) await wait(10)
+    expect(asked).toEqual(['c1sha:src/cart.ts\n'])
+    expect(JSON.stringify(await pane.drawn())).toContain('l19')
+    await pane.unmount()
+  })
+
+  test('파일 이름 거르기: f 로 열고, 걸러진 파일만 목록에, Enter 는 첫 파일, ✕ 는 지우고 닫는다', KO, async ($, on) => {
+    on('process.run', (($: unknown, e: { argv: string[] }) =>
+      e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? out(DIFF_PATCH + BRANCH_PATCH) : gitStub($, e)) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    const pane = await mountDiff($)
+    expect(await pane.find({ type: 'Input' })).toBeUndefined()
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'filter' }))).toContain('"hotkey":"f"')
+    await pane.press({ key: 'filter' })
+    expect(await pane.find({ type: 'Input' })).toBeDefined()
+    // 입력칸은 도구 줄(걸러진 수에 따라 버튼이 나고 드는 줄)보다 앞에 그린다: 뒤에 두면 치는 동안 키를 잃었다(실화면)
+    const order = JSON.stringify(await pane.drawn())
+    expect(order.indexOf('"diff-filter"')).toBeLessThan(order.indexOf('"refresh"'))
+    await pane.input({ key: 'diff-filter', text: 'B.T', kind: 'change' })
+    expect(await pane.find({ type: 'Button', key: 'fold-a.txt' })).toBeUndefined()
+    expect(await pane.find({ type: 'Button', key: 'fold-b.txt' })).toBeDefined()
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('1/2')
+    // 제목의 파일 수는 전체
+    expect(drawn).toContain('Edited 2 files')
+    await pane.input({ key: 'diff-filter', text: 'B.T' })
+    expect((await pane.findAll({ type: 'Code' })).map(code => (code as { props?: { path?: string } }).props?.path)).toEqual(['b.txt'])
+    await pane.input({ key: 'diff-filter', text: 'zzz', kind: 'change' })
+    expect(JSON.stringify(await pane.drawn())).toContain('맞는 파일이 없어요')
+    await pane.press({ key: 'filter-close' })
+    expect(await pane.find({ type: 'Input' })).toBeUndefined()
+    expect(await pane.find({ type: 'Button', key: 'fold-a.txt' })).toBeDefined()
+    // 커밋별에서 펼친 커밋이 없으면 "맞는 파일이 없어요" 를 띄우지 않는다
+    await pane.press({ key: 'filter' })
+    await pane.input({ key: 'diff-filter', text: 'zzz', kind: 'change' })
+    await pane.press({ key: 'scope-commits' })
+    expect(JSON.stringify(await pane.drawn())).not.toContain('맞는 파일이 없어요')
+    await pane.unmount()
+  })
+
+  test('기준 고르기: 최근 브랜치 목록에서 고르면 그 브랜치를 먼저 보고, 자동으로 돌아올 수 있다', KO, async ($, on) => {
+    const verified: string[] = []
+    on('process.run', (($: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+      const argv = e.argv
+      if (argv[1] === 'for-each-ref') return out('refs/heads/feat/done\nrefs/heads/develop\nrefs/remotes/origin/HEAD\nrefs/remotes/origin/main\n')
+      if (argv[1] === 'rev-parse' && argv.includes('--verify')) {
+        verified.push(String(argv.at(-1)))
+        return out('x\n', argv.at(-1) === 'origin/main^{commit}' || argv.at(-1) === 'develop^{commit}' ? 0 : 1)
+      }
+      if (argv[1] === 'merge-base') return out(argv.at(-1) === 'develop' ? 'dev000\n' : 'base000\n')
+      if (argv[1] === 'diff' && argv[2] === 'dev000') return out(DIFF_PATCH)
+      return scopeStub($, e)
+    }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    await $.command.run({ command: 'desk-diff', args: 'branch' } as never)
+    const pane = await mountDiff($)
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'base-pick' }))).toContain('vs origin/main')
+    await pane.press({ key: 'base-pick' })
+    // 자동(지금 기준), 그리고 최근 커밋 순 브랜치. 지금 브랜치(feat/done)와 origin/HEAD 는 없다
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'base-auto' }))).toContain('● 자동 (origin/main)')
+    expect(await pane.find({ type: 'Button', key: 'base-develop' })).toBeDefined()
+    expect(await pane.find({ type: 'Button', key: 'base-origin/main' })).toBeDefined()
+    expect(await pane.find({ type: 'Button', key: 'base-feat/done' })).toBeUndefined()
+    verified.length = 0
+    await pane.press({ key: 'base-develop' })
+    expect(verified[0]).toBe('develop^{commit}')
+    expect(await pane.find({ type: 'Button', key: 'base-auto' })).toBeUndefined()
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('vs develop')
+    expect(drawn).toContain('Edited 1 file')
+    // 다시 열어 자동으로
+    await pane.press({ key: 'base-pick' })
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'base-develop' }))).toContain('● develop')
+    await pane.press({ key: 'base-auto' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('vs origin/main')
+    expect(drawn).toContain('Edited 2 files')
+    await pane.unmount()
+  })
+
+  test('이전·다음 파일(p·n): 모두 접힌 목록에서 n 은 첫 파일을 편다, 파일 머리 띠끼리는 빈 줄 없이', KO, async ($, on) => {
+    themed(on, {})
+    on('process.run', (($: unknown, e: { argv: string[] }) =>
+      e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? out(DIFF_PATCH + BRANCH_PATCH) : gitStub($, e)) as never)
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    const pane = await mountDiff($)
+    for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Button', key: 'file-next' })); tries++) await wait(10)
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'file-next' }))).toContain('"hotkey":"n"')
+    expect(JSON.stringify(await pane.find({ type: 'Button', key: 'file-prev' }))).toContain('"hotkey":"p"')
+    // 머리 띠 둘이 바로 이어 그려진다(사이에 높이 1 빈 칸이 없다)
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn.indexOf('"file-a.txt"')).toBeGreaterThan(-1)
+    expect(drawn.slice(drawn.indexOf('"file-a.txt"'), drawn.indexOf('"file-b.txt"'))).not.toContain('"gap-')
+    // 창이 맨 위(첫 머리 띠 위)면 다음은 첫 파일. 그 머리 띠로 스크롤하는 것은 실화면에서 확인(테스트 도구는 key 스크롤을 풀지 못한다)
+    await pane.press({ key: 'file-next' })
+    expect((await pane.findAll({ type: 'Code' })).length).toBeGreaterThan(0)
+    expect(JSON.stringify(await pane.drawn())).toContain('"d-a.txt.0"')
+    await pane.unmount()
+  })
 })
 
 describe('Asana 패널', () => {

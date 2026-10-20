@@ -14,7 +14,9 @@ export type DiffLine = { kind: ' ' | '+' | '-'; text: string; oldNo: number; new
 export type Hunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLine[] }
 
 // 그릴 행: 줄 하나(1행), 또는 안 바뀐 구간 표시(위아래 빈 줄을 포함해 GAP_ROWS 행).
-export type DiffRow = { kind: 'line'; line: DiffLine; span?: [number, number] } | { kind: 'gap'; count: number }
+// 구간은 숨은 첫 줄의 옛·새 번호를 갖는다(누르면 그 자리에 문맥 줄로 편다).
+export type Gap = { kind: 'gap'; count: number; oldStart: number; newStart: number }
+export type DiffRow = { kind: 'line'; line: DiffLine; span?: [number, number] } | Gap
 export const GAP_ROWS = 3
 export const rowHeight = (row: DiffRow) => (row.kind === 'gap' ? GAP_ROWS : 1)
 
@@ -53,7 +55,7 @@ const HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
 // 탭은 네 칸으로 펴 둔다: 조각 폭을 칸 수로 재기 때문. Code 는 탭·줄바꿈 밖의 제어 문자(CRLF 파일의 \r 등)와
 // 10000자 넘는 글을 거절해서 지우고 자른다(한 행으로 잘려 보이므로 뒤는 어차피 안 보인다).
 const LINE_ROOM = 4000
-const untab = (text: string) => text.replace(/\t/g, '    ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, LINE_ROOM)
+export const untab = (text: string) => text.replace(/\t/g, '    ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, LINE_ROOM)
 
 export function parseHunks(patch: string): Hunk[] {
   const hunks: Hunk[] = []
@@ -106,7 +108,7 @@ export function diffRows(hunks: Hunk[], gaps = true): DiffRow[] {
   let oldEnd = 1
   for (const hunk of hunks) {
     const skipped = hunk.oldStart - oldEnd
-    if (gaps && hunk.oldStart > 0 && skipped > 0) rows.push({ kind: 'gap', count: skipped })
+    if (gaps && hunk.oldStart > 0 && skipped > 0) rows.push({ kind: 'gap', count: skipped, oldStart: oldEnd, newStart: hunk.newStart - skipped })
     oldEnd = hunk.oldStart + hunk.oldLines
     const lines = hunk.lines
     for (let i = 0; i < lines.length; ) {
@@ -132,10 +134,20 @@ export function diffRows(hunks: Hunk[], gaps = true): DiffRow[] {
   return rows
 }
 
+// 편 구간: 새 번호로 고른 구간 행을 문맥 줄로 바꾼다. lines 는 그 구간의 줄들(새 파일에서 읽은 것).
+export function openGaps(rows: DiffRow[], opened: ReadonlyMap<number, ReadonlyArray<string>>): DiffRow[] {
+  if (opened.size === 0) return rows
+  return rows.flatMap((row): DiffRow[] => {
+    const lines = row.kind === 'gap' ? opened.get(row.newStart) : undefined
+    if (row.kind !== 'gap' || !lines) return [row]
+    return lines.map((text, index) => ({ kind: 'line', line: { kind: ' ', text, oldNo: row.oldStart + index, newNo: row.newStart + index } }))
+  })
+}
+
 // 그리는 단위: 안 바뀐 구간 표시, 또는 같은 종류(추가·삭제·문맥)로 이어진 줄 덩어리. 덩어리 하나를 배경 Box 하나와
 // 여러 줄 Code 하나로 그려 줄마다 그릴 때보다 요소가 몇 분의 일로 준다(실측: 다시 그리기 4~5배 빠름).
 // 단어 강조가 있는 줄만 홀로 둔다(조각 Code 가 필요하다). 덩어리는 RUN_LINES 줄까지: 창 밖까지 통째로 그리지 않게.
-export type DiffBlock = { kind: 'gap'; count: number } | { kind: 'lines'; lines: DiffLine[]; span?: [number, number] }
+export type DiffBlock = Gap | { kind: 'lines'; lines: DiffLine[]; span?: [number, number] }
 export const RUN_LINES = 16
 export const blockHeight = (block: DiffBlock) => (block.kind === 'gap' ? GAP_ROWS : block.lines.length)
 
@@ -143,7 +155,7 @@ export function diffBlocks(rows: DiffRow[], max = RUN_LINES): DiffBlock[] {
   const blocks: DiffBlock[] = []
   for (const row of rows) {
     if (row.kind === 'gap') {
-      blocks.push({ kind: 'gap', count: row.count })
+      blocks.push(row)
       continue
     }
     const last = blocks[blocks.length - 1]
@@ -199,7 +211,9 @@ export function gutterWidth(rows: DiffRow[]): number {
 // 줄 고르기(댓글): 번호 칸을 줄마다 누를 수 있게 하고, 고른 줄은 mark 색으로 뒤집어 그린다(줄 색으로 뒤집으면 번호가 틴트에 묻힌다).
 // row 는 패치 안 행 번호(first 가 덩어리 첫 줄). 포인터가 올라가면 버튼이 뒤집혀 누를 곳이 보인다.
 export type LinePick = { Button: Els['Button']; first: number; mark: string; isPicked: (row: number) => boolean; onPress: (row: number) => void }
-type RowOptions = { path?: string; gutter: number; columns: number; unmodified: (count: number) => string; pick?: LinePick }
+// 안 바뀐 구간 펴기: 구간 글을 버튼으로(누를 수 있는 파일만, 새 파일 내용을 읽을 수 있는 git 파일).
+export type GapOpen = { Button: Els['Button']; onPress: (gap: Gap) => void }
+type RowOptions = { path?: string; gutter: number; columns: number; unmodified: (count: number) => string; pick?: LinePick; gap?: GapOpen }
 
 const mark = (line: DiffLine) => (line.kind === '+' ? '+' : line.kind === '-' ? '-' : ' ')
 const lineNo = (line: DiffLine) => (line.kind === '-' ? line.oldNo : line.newNo)
@@ -230,11 +244,18 @@ function pickGutter(els: Pick<Els, 'Box' | 'Text'>, pick: LinePick, lines: DiffL
 export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: DiffPalette, block: DiffBlock, key: string, options: RowOptions) {
   const { Box, Text, Code } = els
   if (block.kind === 'gap') {
+    const { gap } = options
     return (
       <Box key={key} height={GAP_ROWS} flexDirection="column" justifyContent="center">
-        <Text color={palette.muted} wrap="truncate-end">
-          {options.unmodified(block.count)}
-        </Text>
+        {gap ? (
+          <gap.Button key={`${key}.g`} plain onPress={() => gap.onPress(block)}>
+            <Text color={palette.muted}>{options.unmodified(block.count)}</Text>
+          </gap.Button>
+        ) : (
+          <Text color={palette.muted} wrap="truncate-end">
+            {options.unmodified(block.count)}
+          </Text>
+        )}
       </Box>
     )
   }

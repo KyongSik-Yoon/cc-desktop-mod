@@ -15,7 +15,7 @@ desk-look makes no network requests itself and collects no data. Everything it r
 
 **Runs** (each one by name, with its whole command written at the call; no shell and no inline scripts, from `hooks/register.tsx`, `hooks/ask.tsx` and the files they import):
 
-- `git`: branch, diff stats and diffs for the current repository; `git restore` only when you press `Revert` twice
+- `git`: branch, diff stats and diffs for the current repository, the branch list when you pick a diff base, and the hidden lines of a file (from the working tree, or from a commit with `git cat-file`) when you click `N unmodified lines`; `git restore` only when you press `Revert` twice
 - `gh` (GitHub) and `glab` (GitLab): read the current branch's pull request or merge request, and merge it only when you press `Merge` twice. They use the login you already have in those tools; desk-look never reads or passes a token
 - `wl-copy`: copy a `claude --resume` command to the clipboard from `/desk-sessions`
 - `claude plugin marketplace update` and `claude plugin update`: only when you run `/desk-update`
