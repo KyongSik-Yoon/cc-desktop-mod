@@ -462,7 +462,7 @@ describe('v3: 테마 면과 도구 묶음', () => {
   })
 })
 
-import { CORNER_SIZE, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize } from '../hooks/images'
+import { CORNER_SIZE, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize } from '../hooks/images'
 import { renderDiagram } from '../hooks/diagram'
 
 test('붙여 넣은 이미지 목록과 썸네일 크기', KO, async () => {
@@ -487,16 +487,24 @@ test('말풍선 줄바꿈과 다이어그램 색 나누기', KO, async () => {
 })
 
 test('그래픽 지원 판정과 그림 못 그릴 때 [Image #N] 지우기', KO, async $ => {
-  expect(supportsGraphics({ TERM: 'xterm-ghostty' })).toBe(true)
-  expect(supportsGraphics({ TERM: 'xterm-256color', TERM_PROGRAM: 'ghostty' })).toBe(true)
+  expect(graphicsOf({ TERM: 'xterm-ghostty' })).toBe('kitty')
+  expect(graphicsOf({ TERM: 'xterm-256color', TERM_PROGRAM: 'ghostty' })).toBe('kitty')
   // herdr 는 kitty_graphics 설정과 엔진 강제(CLAUDE_CODE_FORCE_TERMINAL_IMAGES)가 모두 있어야 그린다
   const herdr = { TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1' }
-  expect(supportsGraphics({ ...herdr, TERM: 'xterm-ghostty' })).toBe(false)
-  expect(supportsGraphics(herdr, true)).toBe(false)
-  expect(supportsGraphics({ ...herdr, CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' })).toBe(false)
-  expect(supportsGraphics({ ...herdr, CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }, true)).toBe(true)
-  expect(supportsGraphics({ TERM: 'xterm-kitty', TMUX: '/tmp/tmux' })).toBe(false)
-  expect(supportsGraphics({ TERM: 'xterm-256color' })).toBe(false)
+  expect(graphicsOf({ ...herdr, TERM: 'xterm-ghostty' })).toBe(null)
+  expect(graphicsOf(herdr, true)).toBe(null)
+  expect(graphicsOf({ ...herdr, CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' })).toBe(null)
+  expect(graphicsOf({ ...herdr, CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }, true)).toBe('kitty')
+  expect(graphicsOf({ TERM: 'xterm-kitty', TMUX: '/tmp/tmux' })).toBe(null)
+  expect(graphicsOf({ TERM: 'xterm-256color' })).toBe(null)
+  // iTerm2 는 3.5 부터(2.1.305), tmux 안이나 매 화면 다시 그리기에서는 아니다
+  const iterm = { TERM: 'xterm-256color', TERM_PROGRAM: 'iTerm.app' }
+  expect(graphicsOf({ ...iterm, TERM_PROGRAM_VERSION: '3.5.10' })).toBe('iterm')
+  expect(graphicsOf({ ...iterm, TERM_PROGRAM_VERSION: '3.6.6' })).toBe('iterm')
+  expect(graphicsOf({ ...iterm, TERM_PROGRAM_VERSION: '3.4.23' })).toBe(null)
+  expect(graphicsOf(iterm)).toBe(null)
+  expect(graphicsOf({ ...iterm, TERM_PROGRAM_VERSION: '3.5.10', TMUX: '/tmp/tmux' })).toBe(null)
+  expect(graphicsOf({ ...iterm, TERM_PROGRAM_VERSION: '3.5.10', CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT: '1' })).toBe(null)
 
   const bubble = await $.ui.mount({
     plugin: 'desk-look',
@@ -509,6 +517,60 @@ test('그래픽 지원 판정과 그림 못 그릴 때 [Image #N] 지우기', KO
   expect(drawn).not.toContain('[Image #13]')
   expect(drawn).toContain('이건 여전히 어색')
   await bubble.unmount()
+})
+
+test('iTerm2 3.5 전체 화면: 모서리는 rgba, 썸네일은 PNG 바이트로 그리고 기본 화면에서는 글자로 둔다', KO, async ($, on) => {
+  const env: Record<string, string> = { HOME: '/home/t', COLORTERM: 'truecolor', TERM: 'xterm-256color', TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.5.10' }
+  const header = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 1, 234, 0, 0, 1, 42]
+  const dir = '/tmp/claude-501/-repo/s1/images'
+  // 1×1 PNG 한 장(엔진이 PNG 머리를 확인한다)
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    const path = String((e as { path?: string }).path ?? e)
+    if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
+    if (path === `${dir}/3.png`) return { value: { base64: png } } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.list', ($, e) => {
+    const path = (e as { path?: string }).path
+    if (path === '/tmp/claude-501') return { value: [{ name: '-repo', kind: 'dir', size: 0, mtimeMs: 1 }] } as never
+    if (path === dir) return { value: [{ name: '3.png', kind: 'file', size: 9, mtimeMs: 1 }] } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.exists', ($, e) => ({ value: (e as { path?: string }).path === dir }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('process.run', ($, e) => {
+    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'od' ? header.join(' ') : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const props = { text: '[Image #3] 첫 줄\n둘째 줄', origin: { kind: 'composer' }, isExpanded: false }
+  const mount = (isFullscreen: boolean) =>
+    $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: { ...VIEWPORT, isFullscreen }, props } as never)
+  const full = await mount(true)
+  let drawn = ''
+  for (let tries = 0; tries < 50 && !drawn.includes(png); tries++) {
+    await wait(10)
+    drawn = JSON.stringify(await full.drawn())
+  }
+  expect(drawn).toContain(`"png":"${png}"`)
+  expect(drawn).not.toContain('"file"')
+  expect(drawn).toContain('"rgba"')
+  // [Image #N] 은 말풍선 글에서 빠지고 썸네일의 alt 로만 남는다
+  expect(drawn.split('[Image #3]').length).toBe(2)
+  expect(drawn).toContain('"alt":"[Image #3]"')
+  await full.unmount()
+  // 기본(main screen) 화면에서는 엔진이 iTerm2 그림을 그리지 않는다: 글리프 모서리, 썸네일 없음
+  const main = await mount(false)
+  const plain = JSON.stringify(await main.drawn())
+  expect(plain).not.toContain('"rgba"')
+  expect(plain).not.toContain('"png"')
+  expect(plain).toContain('둘째 줄')
+  await main.unmount()
 })
 
 test('말풍선 모서리 그림: 바깥 모서리는 비우고 안쪽은 말풍선 색으로 채운다', KO, async () => {

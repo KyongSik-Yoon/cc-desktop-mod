@@ -33,16 +33,26 @@ export function herdrGraphicsOn(config: string): boolean {
   return /^[ \t]*kitty_graphics[ \t]*=[ \t]*true/m.test(config)
 }
 
-// kitty 그래픽 프로토콜을 그릴 수 있는 환경인지. tmux·zellij 는 통과시키지 않아 그림 대신 alt 글자가
-// 나오므로 그리지 않는다. herdr 는 kitty_graphics 를 켰을 때만(herdrGraphics) 넘기는데, 엔진은 터미널 이름을
-// 물어 kitty·ghostty 일 때만 그림을 그리고 herdr 안에서는 herdr 가 대답하므로
-// CLAUDE_CODE_FORCE_TERMINAL_IMAGES 까지 켜야 그린다.
-export function supportsGraphics(env: Record<string, string | undefined>, herdrGraphics = false): boolean {
-  if (env.TMUX || env.ZELLIJ) return false
-  if (env.HERDR_ENV === '1') return herdrGraphics && ['1', 'true'].includes((env.CLAUDE_CODE_FORCE_TERMINAL_IMAGES ?? '').toLowerCase())
+// 엔진이 그림을 그리는 길. kitty: kitty 그래픽 프로토콜(그림 파일 이름도 넘긴다). iterm: iTerm2 3.5 이상의
+// 인라인 그림(2.1.305): 전체 화면 그리기에서만, png·rgba 바이트만 그리고 파일 이름은 alt 글자로 둔다.
+export type Graphics = 'kitty' | 'iterm' | null
+
+// 그림을 그릴 수 있는 환경인지. tmux·zellij 는 통과시키지 않아 그림 대신 alt 글자가 나오므로 그리지 않는다.
+// herdr 는 kitty_graphics 를 켰을 때만(herdrGraphics) 넘기는데, 엔진은 터미널 이름을 물어 kitty·ghostty 일 때만
+// 그림을 그리고 herdr 안에서는 herdr 가 대답하므로 CLAUDE_CODE_FORCE_TERMINAL_IMAGES 까지 켜야 그린다.
+// iTerm2 는 엔진이 XTVERSION 대답의 버전을 보는데, iTerm2 가 TERM_PROGRAM_VERSION 에 같은 버전을 적는다.
+// CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT 면 엔진이 매 화면 그림을 다시 보내야 해서 그리지 않는다.
+export function graphicsOf(env: Record<string, string | undefined>, herdrGraphics = false): Graphics {
+  if (env.TMUX || env.ZELLIJ) return null
+  if (env.HERDR_ENV === '1') {
+    return herdrGraphics && ['1', 'true'].includes((env.CLAUDE_CODE_FORCE_TERMINAL_IMAGES ?? '').toLowerCase()) ? 'kitty' : null
+  }
   const term = (env.TERM ?? '').toLowerCase()
   const program = (env.TERM_PROGRAM ?? '').toLowerCase()
-  return term.includes('kitty') || term.includes('ghostty') || ['ghostty', 'kitty', 'wezterm'].includes(program)
+  if (term.includes('kitty') || term.includes('ghostty') || ['ghostty', 'kitty', 'wezterm'].includes(program)) return 'kitty'
+  if (program !== 'iterm.app' || env.CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT) return null
+  const [major = 0, minor = 0] = (env.TERM_PROGRAM_VERSION ?? '').split('.').map(Number)
+  return major > 3 || (major === 3 && minor >= 5) ? 'iterm' : null
 }
 
 export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'

@@ -237,7 +237,7 @@ claude plugin update desk-look
 
 - **색**: 엔진 테마 키(`text`, `inactive`, `claude` …)를 써서 밝은·어두운 테마를 모두 따라갑니다.
 - **말풍선 회색 면**: [omarchy](https://omarchy.org) 테마(`~/.local/state/omarchy/current/theme/colors.toml`)를 읽을 수 있을 때만 그립니다. 테마를 바꾸면 3초 안에 따라갑니다. 그 밖의 환경에서는 둥근 테두리 말풍선입니다. 둥근 끝은 Nerd Font 반원 글리프와 Symbols for Legacy Computing 블록을 씁니다. 그림을 그릴 수 있는 터미널(아래)에서는 여러 줄 말풍선의 모서리를 작은 그림으로 그려 제대로 둥글게 나옵니다. 입력창 아래턱 띠도 같아서, 테마를 못 읽으면 회색 띠 없이 칩만 그립니다.
-- **이미지 썸네일과 둥근 말풍선 모서리**: kitty·Ghostty 에서 그리고, tmux·zellij 안에서는 그리지 않습니다. herdr 안에서는 herdr `config.toml` 의 `[experimental]` 에 `kitty_graphics = true` 와 Claude Code 의 `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` 이 모두 있어야 합니다. 없으면 Claude Code 가 터미널 이름을 물었을 때 herdr 가 대답해 그림을 그리지 않습니다.
+- **이미지 썸네일과 둥근 말풍선 모서리**: kitty·Ghostty 와 전체 화면 그리기의 iTerm2 3.5 이상에서 그리고(iTerm2 에서는 2 MiB 가 넘는 붙여 넣은 그림은 `[Image #N]` 글자로 둡니다), tmux·zellij 안에서는 그리지 않습니다. herdr 안에서는 herdr `config.toml` 의 `[experimental]` 에 `kitty_graphics = true` 와 Claude Code 의 `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` 이 모두 있어야 합니다. 없으면 Claude Code 가 터미널 이름을 물었을 때 herdr 가 대답해 그림을 그리지 않습니다.
 - **질문 카드**: 터미널 하나만 붙은 세션에서만 씁니다. Remote Control 이 켜져 있으면 마지막 입력이 터미널에서 왔을 때만 카드를 띄우고, 1분 동안 아무도 건드리지 않으면 엔진의 기본 질문 창으로 넘겨 모바일·웹 앱에서도 답할 수 있게 합니다. 마지막 입력이 앱에서 왔으면 처음부터 기본 창이 뜹니다. Esc 는 턴을 멈추므로 질문도 취소됩니다.
 - **256색 터미널의 diff 색**: 섞어 만든 줄·단어 틴트는 `COLORTERM` 이 `truecolor`·`24bit` 이고 tmux 밖일 때만 씁니다. 그 밖에서는(tmux 안에서는 엔진이 색을 256색으로 줄입니다) xterm 256색 팔레트에 있는 색을 써서, 바뀐 단어가 줄 바탕과 구분되게 합니다.
 - **링크**: 백틱 안의 URL 도 링크가 됩니다. 글자가 주소 그대로인 링크가 40칸을 넘으면 `https://` 를 떼고, 그래도 길면 가운데를 `…` 로 줄여 한 줄에 그립니다. 그래야 링크 전체가 눌리고, 누르면 전체 주소로 갑니다. OSC 8 하이퍼링크를 통과시키지 않는 멀티플렉서 안에서는 이름 뒤에 URL 이 흐리게 붙습니다.

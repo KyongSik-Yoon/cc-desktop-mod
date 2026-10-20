@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
 import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
-import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
+import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner, type Graphics } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
@@ -122,7 +122,7 @@ const repo = atom({ plugin: 'desk-look', key: 'repo' } as const, null as RepoInf
 const surface = atom({ plugin: 'desk-look', key: 'surface' } as const, null as Surface | null)
 const runs = atom({ plugin: 'desk-look', key: 'runs' } as const, { firstOf: {}, calls: {} } as Runs)
 const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Record<string, ImageInfo>)
-const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, false)
+const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, null as Graphics)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
 // /desk-diff 패널 창 위치: ui.scroll 이 알려 준 첫 행과 보이는 행 수. 보이는 곳만 그리는 데 쓴다.
@@ -1724,17 +1724,20 @@ async function refreshSurface($: EngineInterface) {
 let diffColors: DiffPalette | null = null
 
 async function refreshGraphics($: EngineInterface) {
-  const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES] = await Promise.all([
-    $.env.get('TMUX'),
-    $.env.get('ZELLIJ'),
-    $.env.get('HERDR_ENV'),
-    $.env.get('TERM'),
-    $.env.get('TERM_PROGRAM'),
-    $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'),
-  ])
+  const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, CLAUDE_CODE_FORCE_TERMINAL_IMAGES, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT] =
+    await Promise.all([
+      $.env.get('TMUX'),
+      $.env.get('ZELLIJ'),
+      $.env.get('HERDR_ENV'),
+      $.env.get('TERM'),
+      $.env.get('TERM_PROGRAM'),
+      $.env.get('TERM_PROGRAM_VERSION'),
+      $.env.get('CLAUDE_CODE_FORCE_TERMINAL_IMAGES'),
+      $.env.get('CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT'),
+    ])
   const herdr = HERDR_ENV === '1' && herdrGraphicsOn(await readHerdrConfig($))
-  const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, CLAUDE_CODE_FORCE_TERMINAL_IMAGES }
-  await update($, graphics, () => supportsGraphics(env, herdr))
+  const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, CLAUDE_CODE_FORCE_TERMINAL_IMAGES, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT }
+  await update($, graphics, () => graphicsOf(env, herdr))
 }
 
 async function readHerdrConfig($: EngineInterface): Promise<string> {
@@ -1753,6 +1756,17 @@ let userId: string | null = null
 let imagesDir: string | null = null
 // 같은 그림(경로·수정 시각)은 PNG 머리를 다시 읽지 않는다.
 const imageSizes = new Map<string, { width: number; height: number } | null>()
+// iTerm2 는 파일 이름을 그리지 않아 PNG 바이트(base64)를 넘긴다. Image 가 받는 2 MiB 를 넘으면 null(글자로 둔다).
+const imageBytes = new Map<string, string | null>()
+const IMAGE_BYTES_MAX = 2 * 1024 * 1024
+
+async function imagePng($: EngineInterface, path: string): Promise<string | null> {
+  if (!imageBytes.has(path)) {
+    const read = await $.fs.read(path, { as: 'bytes' }).catch(() => null)
+    imageBytes.set(path, read && (read.base64.length * 3) / 4 <= IMAGE_BYTES_MAX ? read.base64 : null)
+  }
+  return imageBytes.get(path) ?? null
+}
 
 async function findImagesDir($: EngineInterface): Promise<string | null> {
   if (imagesDir !== null) return imagesDir
@@ -3084,7 +3098,7 @@ export const register: Register = (on, options) => {
   })
 
   // 사용자 프롬프트: 오른쪽 정렬 말풍선. omarchy 테마를 읽었으면 데스크톱처럼 회색 면, 아니면 둥근 테두리.
-  // [Image #N] 은 데스크톱처럼 말풍선 위 썸네일로 바꾼다(kitty 그래픽 프로토콜, 안 되는 터미널은 alt 글자).
+  // [Image #N] 은 데스크톱처럼 말풍선 위 썸네일로 바꾼다(kitty 그래픽·iTerm2 인라인 그림, 안 되는 터미널은 alt 글자).
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     // 백그라운드 작업 알림과 에이전트가 보낸 메시지: 데스크톱처럼 그 자리에서 펼치는 줄. ctrl+o 화면은 엔진 그대로.
     if (e.surface === 'terminal' && !e.props.isExpanded && (e.props.from || e.props.task)) {
@@ -3098,12 +3112,23 @@ export const register: Register = (on, options) => {
     }
     const els = $.ui.resolve(e)
     const { Box, Text, Image } = els
-    const [face, known, canDraw, openState] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open)])
+    const [face, known, kind, openState] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open)])
+    // iTerm2 는 전체 화면 그리기에서만 그린다(엔진 기본 화면은 줄마다 그림을 다시 보내야 해서 alt 글자).
+    const canDraw = kind === 'kitty' || (kind === 'iterm' && e.viewport?.isFullscreen === true)
     const columns = e.viewport?.columns ?? 80
     const { text: typed, pastes } = splitPastes(e.props.text)
-    const attached = [...typed.matchAll(IMAGE_TOKEN)]
+    const found = [...typed.matchAll(IMAGE_TOKEN)]
       .map(match => ({ number: match[1] ?? '', info: known[match[1] ?? ''] }))
       .filter((image): image is { number: string; info: ImageInfo } => canDraw && image.info !== undefined)
+    const attached = (
+      await Promise.all(
+        found.map(async image => {
+          if (kind === 'kitty') return { ...image, source: { file: image.info.path, format: 'png' as const } }
+          const png = await imagePng($, image.info.path)
+          return png === null ? null : { ...image, source: { png } }
+        }),
+      )
+    ).filter(image => image !== null)
     const shown = new Set(attached.map(image => image.number))
     // 그림을 못 그리는 터미널에서는 [Image #N] 을 지운다. 엔진이 말풍선 아래 └ [Image #N] 줄로 이미 알려 준다.
     const text = typed
@@ -3122,7 +3147,7 @@ export const register: Register = (on, options) => {
             {attached.map(image => (
               <Image
                 key={`image-${image.number}`}
-                source={{ file: image.info.path, format: 'png' }}
+                source={image.source}
                 alt={`[Image #${image.number}]`}
                 {...thumbnailSize(image.info, thumbColumns)}
               />
@@ -5330,7 +5355,7 @@ export function bubbleRows(lines: string[]): string[] {
   return lines.map(line => `  ${line}${' '.repeat(inner - cellWidth(line))}  `)
 }
 
-// 여러 줄 말풍선의 위·아래 줄 끝 칸을 그림으로 그릴 수 있으면(kitty 그래픽) 글리프 대신 둥근 모서리 그림을 쓴다.
+// 여러 줄 말풍선의 위·아래 줄 끝 칸을 그림으로 그릴 수 있으면(kitty 그래픽, iTerm2 3.5 이상) 글리프 대신 둥근 모서리 그림을 쓴다.
 // 사선 글리프는 모서리를 깎을 뿐이고, 한 칸 높이를 다 쓰는 반원은 줄 사이에 홈을 낸다.
 // 그림은 말풍선 색으로 칠하므로 테마 색마다 한 번 만들어 둔다.
 const cornerCache = new Map<string, string>()
