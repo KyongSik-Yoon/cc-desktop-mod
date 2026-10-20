@@ -1478,17 +1478,19 @@ async function sendSlack($: EngineInterface, server: SlackServer, channel: strin
   await openSlackRoom($, server, channel, thread)
 }
 
-// ✕ 는 두 번 눌러 닫는다(Asana 담당자 넘기기와 같은 무장).
-async function armSlackClose($: EngineInterface, channel: string, isArmed: boolean) {
-  const key = `slack:close:${channel}`
+// ✕ 는 두 번 눌러 닫는다(Asana 담당자 넘기기와 같은 무장). channel 이 null 이면 모든 방(모두 닫기).
+async function armSlackClose($: EngineInterface, channel: string | null, isArmed: boolean) {
+  const key = `slack:close:${channel ?? '*'}`
   if (!isArmed) {
     await update($, open, state => ({ ...state, [key]: true }))
     $.clock.after(CLOSE_ARM_MS, () => void update($, open, state => ({ ...state, [key]: false })))
     return
   }
   await update($, open, state => ({ ...state, [key]: false }))
-  await saveInbox($, closeRoom(await readInbox($), channel))
-  if ((await read($, slackView))?.channel === channel) await closeSlackView($)
+  const inbox = await readInbox($)
+  await saveInbox($, channel === null ? { ...inbox, rooms: {} } : closeRoom(inbox, channel))
+  const view = await read($, slackView)
+  if (view !== null && (channel === null || view.channel === channel)) await closeSlackView($)
 }
 
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
@@ -3908,6 +3910,15 @@ export const register: Register = (on, options) => {
           {T.slackInbox(rooms.length, unread)}
         </Text>
         <Button key="slack-refresh" plain dimColor label={isLoading ? '…' : '↻'} onPress={() => void pollSlack($, true).catch(() => undefined)} />
+        {rooms.length > 0 && (
+          <Button
+            key="slack-close-all"
+            plain
+            dimColor={!(armed['slack:close:*'] ?? false)}
+            label={(armed['slack:close:*'] ?? false) ? T.slackCloseAllConfirm : T.slackCloseAll}
+            onPress={() => void armSlackClose($, null, armed['slack:close:*'] ?? false)}
+          />
+        )}
       </Box>
     )
     const unruled = (state?.unruled.length ?? 0) > 0 && (

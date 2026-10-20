@@ -143,7 +143,7 @@ The DMs and group DMs other people sent you, kept as conversations like the Slac
 - The list shows one row per conversation, most recent first: `●` when it has messages you have not opened in desk-look, the people in it, the last message and how long ago. The first time, it fills in the last 3 days as already read
 - Click a conversation for its latest 30 messages, both sides. Write in the box at the bottom and press Enter to reply there. `↻` reloads, `← Conversations` (also under the reply box) goes back
 - Under a message with replies, `N replies` opens that thread (the message and its latest 30 replies), and a reply written there goes to the thread. `← name` goes back to the conversation. When a conversation's last message is a thread reply, clicking it in the list opens that thread directly
-- `✕` closes a conversation (a second press within 5 seconds). It comes back when a new message arrives in it
+- `✕` closes a conversation, and `Close all` at the top closes every conversation in the list (both need a second press within 5 seconds). A closed conversation comes back when a new message arrives in it
 - `Hand to Claude` fills the prompt with the conversation's recent messages; `Open in Slack` opens it in Slack
 - While any Claude Code session is running, desk-look checks for new messages once a minute and sends a notification per conversation through your notification channel (`slackNotify` turns that off). The `✉ N` chip in the band shows the unread count and opens the pane. With several sessions open, one of them checks and the others share what it finds
 - "Unread" is desk-look's own: opening a conversation here does not mark it read in Slack, and reading it in Slack does not clear it here
