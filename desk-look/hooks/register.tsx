@@ -10,7 +10,7 @@ import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rang
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
-import { ago, clip, filterSessions, groupSessions, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
+import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { computeTasks, visibleTasks } from './tasks'
@@ -1864,25 +1864,25 @@ async function listSessions($: EngineInterface, count: number) {
   return entries.filter(entry => entry !== null)
 }
 
-// 세션 줄을 눌렀을 때. 같은 폴더의 세션은 /resume <id> 를 실행해 지금 창에서 바로 넘어간다.
+// 세션 줄을 눌렀을 때. 지금 창에서 그 세션으로 넘어간다: 다른 폴더면 /cd 로 옮긴 뒤 /resume <id>.
 // $.command.run 은 턴이 기다리는 훅(/desk-sessions 의 command.run) 안에서는 거부되므로, 훅이 끝난 뒤
-// 타이머로 실행한다. 그래도 실패하면 입력창에 채워 Enter 한 번으로 넘어가게 한다.
-// 다른 폴더의 세션은 그 폴더에서 열어야 하므로 실행할 명령을 클립보드에 복사한다.
-// 떠 있는 세션은 엔진이 /resume 을 거부한다: 다른 창의 세션은 안내만, 백그라운드 세션은 claude stop 으로
-// 멈춘 뒤 가져온다(대화는 남는다). 작업 중이면 하던 턴이 끊기므로 5초 안에 한 번 더 눌러야 한다.
+// 타이머로 실행한다. 그래도 실패하면 같은 폴더는 입력창에 채워 Enter 한 번으로, 다른 폴더는 셸 명령을 복사한다.
+// 떠 있는 세션은 엔진이 /resume 을 거부한다: 다른 창의 세션은 herdr 안이면 그 탭으로 옮기고 아니면 안내만,
+// 백그라운드 세션은 claude stop 으로 멈춘 뒤 가져온다(대화는 남는다). 작업 중이면 하던 턴이 끊기므로
+// 5초 안에 한 번 더 눌러야 한다.
 async function openSession($: EngineInterface, entry: SessionEntry) {
   const cwd = await $.session.cwd()
   if (entry.id === (await $.session.id())) return
   const live = (await refreshLive($))[entry.id]
   if (live?.kind === 'interactive') {
-    $.ui.toast(T.openElsewhere(entry.title))
+    $.ui.toast((await focusHerdrSession($, entry.id)) ? T.movedToPane(entry.title) : T.openElsewhere(entry.title))
     return
   }
-  if (live && entry.cwd !== cwd && live.job) {
-    await copyCommand($, `claude attach ${live.job}`, T.attachCopied, T.attachOther)
+  if (entry.cwd !== cwd && !(await $.fs.list(entry.cwd).then(() => true, () => false))) {
+    $.ui.toast(T.folderGone(entry.cwd || T.unknownFolder))
     return
   }
-  if (live && entry.cwd === cwd && live.job) {
+  if (live?.job) {
     const key = `take:${entry.id}`
     if (live.status === 'busy' && !(await read($, open))[key]) {
       await update($, open, state => ({ ...state, [key]: true }))
@@ -1906,7 +1906,23 @@ async function openSession($: EngineInterface, entry: SessionEntry) {
     })
     return
   }
-  await copyCommand($, `cd '${entry.cwd.replace(/'/g, "'\\''")}' && claude --resume ${entry.id}`, T.otherFolderCopied, T.otherFolder)
+  $.clock.after(50, () => {
+    void (async () => {
+      await $.command.run({ command: 'cd', args: entry.cwd })
+      await $.command.run({ command: 'resume', args: entry.id })
+    })().catch(() => copyCommand($, `cd '${entry.cwd.replace(/'/g, "'\\''")}' && claude --resume ${entry.id}`, T.otherFolderCopied, T.otherFolder))
+  })
+}
+
+// herdr 안이면 그 세션이 열린 패널의 작업공간·탭으로 화면을 옮긴다. herdr 가 아니거나 못 찾으면 false.
+async function focusHerdrSession($: EngineInterface, sessionId: string): Promise<boolean> {
+  if ((await $.env.get('HERDR_ENV')) !== '1') return false
+  const listed = await $.process.run(['herdr', 'pane', 'list'], { timeoutMs: 3000 }).catch(() => null)
+  const pane = listed?.exitCode === 0 ? herdrPaneOf(listed.stdout, sessionId) : null
+  if (!pane) return false
+  const workspace = await $.process.run(['herdr', 'workspace', 'focus', pane.workspace], { timeoutMs: 3000 }).catch(() => null)
+  const tab = await $.process.run(['herdr', 'tab', 'focus', pane.tab], { timeoutMs: 3000 }).catch(() => null)
+  return workspace?.exitCode === 0 && tab?.exitCode === 0
 }
 
 async function copyCommand($: EngineInterface, shell: string, copiedText: (shell: string) => string, plainText: (shell: string) => string) {

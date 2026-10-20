@@ -192,9 +192,9 @@ Recent sessions grouped by project, with a search box at the top (title and fold
 Click a row or give its number:
 
 - **A session in the same folder**: the current window switches to that session right away (runs `/resume <id>`). If running it is blocked, the command is placed in the prompt; press Enter.
-- **A background session in the same folder**: stops it with `claude stop <id>` (its conversation is kept), then switches to it. If it is working, the first press asks you to press again, because stopping cuts its turn short.
-- **A session open in another terminal**: only a notice; continue it in that window.
-- **A session in another folder**: copies `cd <folder> && claude --resume <id>` to the clipboard (`wl-copy`), or `claude attach <id>` for a running background session.
+- **A session in another folder**: the current window moves to that folder (`/cd`) and switches to it. If running the commands is blocked, `cd <folder> && claude --resume <id>` is copied to the clipboard (`wl-copy`).
+- **A running background session**: stops it with `claude stop <id>` (its conversation is kept), then switches to it as above. If it is working, the first press asks you to press again, because stopping cuts its turn short.
+- **A session open in another terminal**: inside [herdr](https://herdr.dev), switches herdr to the tab where it is open; elsewhere only a notice, continue it in that window.
 
 ---
 

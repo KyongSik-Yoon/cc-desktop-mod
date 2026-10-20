@@ -601,7 +601,7 @@ test('턴 끝 줄은 기록이 없으면 엔진 그림 그대로', KO, async ($,
   await row.unmount()
 })
 
-import { ago, clip, filterSessions, groupSessions, isGroupFolded, liveSessionsOf, numbered, sessionOf } from '../hooks/sessions'
+import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from '../hooks/sessions'
 
 test('세션 목록 읽기·묶기·표시', KO, async () => {
   setLang('ko')
@@ -860,6 +860,10 @@ test('떠 있는 세션 읽기와 묶음 기본 접힘', KO, () => {
     'bg-2': { kind: 'background', job: 'aa', status: 'waiting' },
   })
   expect(liveSessionsOf('')).toEqual({})
+  const panes = JSON.stringify({ result: { panes: [{ pane_id: 'w1:p1', tab_id: 'w1:t1', workspace_id: 'w1', agent_session: { value: 'win-1' } }, { pane_id: 'w2:p1', tab_id: 'w2:t1', workspace_id: 'w2' }] } })
+  expect(herdrPaneOf(panes, 'win-1')).toEqual({ workspace: 'w1', tab: 'w1:t1' })
+  expect(herdrPaneOf(panes, 'none')).toBeNull()
+  expect(herdrPaneOf('not json', 'win-1')).toBeNull()
   expect(isGroupFolded({}, '/a', '/a')).toBe(false)
   expect(isGroupFolded({}, '/b', '/a')).toBe(true)
   expect(isGroupFolded({ 'sessions:fold:/b': false }, '/b', '/a')).toBe(false)
@@ -897,6 +901,10 @@ test('세션 패널: 다른 폴더는 접힘, z 로 모두 펴기, 칩, 떠 있�
   })
   on('command.run', { command: 'resume' }, ($, e) => {
     resumed.push(e.args)
+    return { text: '' }
+  })
+  on('command.run', { command: 'cd' }, ($, e) => {
+    resumed.push(`cd ${e.args}`)
     return { text: '' }
   })
   on('ui.toast', ($, e) => {
@@ -940,6 +948,11 @@ test('세션 패널: 다른 폴더는 접힘, z 로 모두 펴기, 칩, 떠 있�
   expect(JSON.stringify(await pane.drawn())).toContain('다시 누르면 멈추고 가져와요')
   await pane.press({ key: `open-${id(2)}` })
   expect(ran).toContainEqual(['claude', 'stop', 'job2'])
+  // 다른 폴더의 세션: /cd 로 옮긴 뒤 /resume
+  resumed.length = 0
+  await pane.press({ key: `open-${id(4)}` })
+  for (let tries = 0; tries < 50 && resumed.length < 2; tries++) await wait(10)
+  expect(resumed).toEqual(['cd /home/u/other', id(4)])
   await pane.unmount()
 })
 
@@ -975,6 +988,42 @@ test('창 안의 /resume 으로 넘어와도 열려 있던 세션 패널을 다�
   await $.session.end({ reason: 'resume', sessionId: 'old', resume: { id: 'old' } } as never)
   expect(await shows()).toBe(true)
   await pane.unmount()
+})
+
+test('다른 창에서 열린 세션: herdr 안이면 그 작업공간·탭으로 옮긴다', KO, async ($, on) => {
+  const id = '00000003-0000-0000-0000-000000000000'
+  const ran: string[][] = []
+  const toasts: string[] = []
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : e.name === 'HERDR_ENV' ? '1' : undefined }))
+  on('fs.list', ($, e) => {
+    if ((e as { path?: string }).path === '/home/u/.claude/projects') return { value: [{ name: 'p', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] } as never
+    return { value: [{ name: `${id}.jsonl`, kind: 'file', size: 10, mtimeMs: 1, isLink: false }] } as never
+  })
+  on('fs.read', () => ({ value: [JSON.stringify({ cwd: '/home/u/repo' }), JSON.stringify({ aiTitle: '옆 탭 세션' })].join('\n') }) as never)
+  on('process.run', ($, e) => {
+    ran.push([...e.argv])
+    const stdout =
+      e.argv[1] === 'agents'
+        ? JSON.stringify([{ pid: 3, kind: 'interactive', sessionId: id, status: 'idle' }])
+        : e.argv.join(' ') === 'herdr pane list'
+          ? JSON.stringify({ result: { panes: [{ pane_id: 'w9:p1', tab_id: 'w9:t1', workspace_id: 'w9', agent_session: { value: id } }] } })
+          : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push((e as { text: string }).text)
+    return { value: undefined } as never
+  })
+  on('session.cwd', () => ({ value: '/home/u/repo' }))
+  on('session.id', () => ({ value: 'current' }))
+  on('clock.now', () => ({ value: 10_000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.command.run({ command: 'desk-sessions', args: '' } as never)
+  await $.command.run({ command: 'desk-sessions', args: '1' } as never)
+  expect(ran).toContainEqual(['herdr', 'workspace', 'focus', 'w9'])
+  expect(ran).toContainEqual(['herdr', 'tab', 'focus', 'w9:t1'])
+  expect(ran.some(argv => argv[1] === 'stop')).toBe(false)
+  expect(toasts.at(-1)).toContain('herdr 탭으로 옮겼어요')
 })
 
 test('세션 검색', KO, () => {

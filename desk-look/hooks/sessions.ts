@@ -84,3 +84,16 @@ export function liveSessionsOf(json: string): Record<string, LiveSession> {
 
 // 묶음을 접었는지: 사람이 고른 값이 없으면 지금 폴더만 펴 둔다.
 export const isGroupFolded = (folds: Record<string, boolean>, cwd: string, currentCwd: string) => folds[`sessions:fold:${cwd}`] ?? cwd !== currentCwd
+
+// `herdr pane list` 에서 그 세션이 열린 패널의 작업공간·탭. herdr 의 claude 연동이 세션을 시작할 때 알린 id 로 찾는다.
+export function herdrPaneOf(json: string, sessionId: string): { workspace: string; tab: string } | null {
+  let panes: unknown
+  try {
+    panes = (JSON.parse(json) as { result?: { panes?: unknown } }).result?.panes
+  } catch {
+    return null
+  }
+  if (!Array.isArray(panes)) return null
+  const pane = (panes as Array<Record<string, unknown>>).find(item => (item.agent_session as { value?: unknown } | undefined)?.value === sessionId)
+  return pane && typeof pane.workspace_id === 'string' && typeof pane.tab_id === 'string' ? { workspace: pane.workspace_id, tab: pane.tab_id } : null
+}
