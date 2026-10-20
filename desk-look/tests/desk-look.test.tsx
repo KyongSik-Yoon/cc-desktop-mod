@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { On, RenderSurface } from 'claude-code'
 import { describe, expect, mock, test, type TestBody } from 'claude-code/testing'
 
 import { setLang } from '../hooks/i18n'
@@ -8,7 +8,7 @@ import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgen
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls, mentionHtml, nextOffset, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
-import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, readRoom, resultText, roomList, slackText, tsCompare, unreadCount } from '../hooks/slack'
+import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackText, tsCompare, unreadCount } from '../hooks/slack'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -3641,7 +3641,7 @@ describe('Asana 패널', () => {
 describe('Slack 패널', () => {
   // claude.ai Slack 커넥터가 주는 글 모양 그대로(이름·주소는 가짜).
   const ME = 'U0ME'
-  const result = (i: number, n: number, m: { channel: string; kind: 'DM' | 'Group DM'; people: string; from: string; fromId: string; ts: string; text: string }) =>
+  const result = (i: number, n: number, m: { channel: string; kind: 'DM' | 'Group DM'; people: string; from: string; fromId: string; ts: string; text: string; thread?: string }) =>
     [
       `### Result ${i} of ${n}`,
       `Channel: ${m.kind} (ID: ${m.channel})`,
@@ -3649,7 +3649,7 @@ describe('Slack 패널', () => {
       `From: ${m.from} (ID: ${m.fromId}) `,
       'Time: 2026-10-16 15:24:20 KST',
       `Message_ts: ${m.ts}`,
-      `Permalink: [link](https://example.slack.com/archives/${m.channel}/p${m.ts.replace('.', '')})`,
+      `Permalink: [link](https://example.slack.com/archives/${m.channel}/p${m.ts.replace('.', '')}${m.thread ? `?thread_ts=${m.thread}&cid=${m.channel}` : ''})`,
       'Text: ',
       m.text,
       '',
@@ -3671,6 +3671,29 @@ describe('Slack 패널', () => {
     'Message TS: 1792131860.241069',
     '{"pid":12029}',
     'Files: a.jpg (ID: F01, image/jpeg, 1.0 KB)',
+    'Thread: 2 replies (latest: 2026-10-16 15:40:00 KST)',
+  ].join('\n')
+  const THREAD = [
+    '=== THREAD PARENT MESSAGE ===',
+    'From: kevin <kevin@example.com> (U0KV)',
+    'Time: 2026-10-16 15:24:20 KST',
+    'Message TS: 1792131860.241069',
+    '{"pid":12029}',
+    '',
+    '=== THREAD REPLIES (2 total) ===',
+    '',
+    '--- Reply 1 of 2 ---',
+    'From: me <me@example.com> (U0ME)',
+    'Time: 2026-10-16 15:30:00 KST',
+    'Message TS: 1792132200.000001',
+    '봤어요',
+    '',
+    '--- Reply 2 of 2 ---',
+    'From: kevin <kevin@example.com> (U0KV)',
+    'Time: 2026-10-16 15:40:00 KST',
+    'Message TS: 1792132800.000001',
+    '스레드 새 글',
+    '',
   ].join('\n')
 
   test('응답 읽기: 검색은 DM·그룹 DM 만, 기록은 오래된 것부터, 링크 글, ts 비교', async () => {
@@ -3687,7 +3710,10 @@ describe('Slack 패널', () => {
       ts: '1792131860.241069',
       text: '{"a":1}\n둘째 줄',
       permalink: 'https://example.slack.com/archives/D01/p1792131860241069',
+      thread: null,
     })
+    // 스레드 답글은 Permalink 의 thread_ts 로 부모를 안다
+    expect(parseSearch(search({ ...KEVIN, ts: '1792132800.000001', text: 'x', thread: '1792131860.241069' }))[0]?.thread).toBe('1792131860.241069')
     expect(got[1]?.kind).toBe('group')
     // 채널 메시지는 범위 밖이라 버린다
     expect(parseSearch(search({ ...KEVIN, kind: 'DM', ts: '1.1', text: 'x' }).replace('Channel: DM (ID: D01)', 'Channel: #general (ID: C9)'))).toEqual([])
@@ -3696,7 +3722,15 @@ describe('Slack 패널', () => {
       ['kevin', '1792131860.241069'],
       ['me', '1792132492.915909'],
     ])
+    // 답글 수 줄은 본문에서 빠져 replies 로
     expect(posts[0]?.text).toBe('{"pid":12029}\nFiles: a.jpg (ID: F01, image/jpeg, 1.0 KB)')
+    expect(posts.map(post => post.replies)).toEqual([2, 0])
+    expect(parseThread(THREAD).map(post => [post.from.name, post.ts, post.text, post.at])).toEqual([
+      ['kevin', '1792131860.241069', '{"pid":12029}', '2026-10-16 15:24:20 KST'],
+      ['me', '1792132200.000001', '봤어요', '2026-10-16 15:30:00 KST'],
+      ['kevin', '1792132800.000001', '스레드 새 글', '2026-10-16 15:40:00 KST'],
+    ])
+    expect(sendCall('D01', 'a', '1.2').args).toEqual({ channel_id: 'D01', message: 'a', thread_ts: '1.2' })
     expect(slackText(posts[1]!.text)).toBe('오오... 링크')
     expect(parseMe('User ID: U0ME\nUsername: me\n')).toBe('U0ME')
     expect(resultText({ content: [{ type: 'text', text: JSON.stringify({ messages: HISTORY }) }], isError: false }, 'messages')).toEqual({ ok: true, text: HISTORY })
@@ -3733,8 +3767,12 @@ describe('Slack 패널', () => {
     expect(reopened.inbox.rooms.D01).toMatchObject({ unread: 1, preview: '또' })
 
     // 방을 읽으면 안 읽음 0, 기록의 마지막 글이 내 답장이면 lastFrom null
-    const read = readRoom(reopened.inbox, 'D01', [{ ts: '1792132100.1', from: { id: ME, name: 'me' }, at: '', text: '답장' }], ME)
-    expect(read.rooms.D01).toMatchObject({ unread: 0, lastFrom: null, preview: '답장' })
+    const read = readRoom(reopened.inbox, 'D01', [{ ts: '1792132100.1', from: { id: ME, name: 'me' }, at: '', text: '답장', replies: 0 }], ME)
+    expect(read.rooms.D01).toMatchObject({ unread: 0, lastFrom: null, lastThread: null, preview: '답장' })
+
+    // 마지막 글이 스레드 답글이면 방이 그 스레드를 기억한다
+    const threaded = mergeInbox(read, parseSearch(search({ ...KEVIN, ts: '1792132800.000001', text: '스레드 새 글', thread: '1792131860.241069' })), ME, now)
+    expect(threaded.inbox.rooms.D01).toMatchObject({ unread: 1, lastThread: '1792131860.241069', preview: '스레드 새 글' })
   })
 
   test('받은 편지를 읽을 세션(임대)과 받은 편지 호출 모양', () => {
@@ -3747,7 +3785,7 @@ describe('Slack 패널', () => {
 
   // 엔진 흉내: 도구 목록·규칙·MCP 응답. rules 가 false 인 도구는 allow 규칙이 없다.
   // isClockMocked: 시계는 테스트가 mock.clock 으로 따로 돌린다.
-  function slackEngine(on: On, inbox: () => string, options: { rules?: (tool: string) => boolean; surfaces?: () => string[]; isClockMocked?: boolean; store?: Record<string, unknown> } = {}) {
+  function slackEngine(on: On, inbox: () => string, options: { rules?: (tool: string) => boolean; surfaces?: () => RenderSurface[]; isClockMocked?: boolean; store?: Record<string, unknown> } = {}) {
     const { rules = () => true, surfaces = () => ['terminal'] } = options
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
     const notified: Array<{ text: string; title?: string }> = []
@@ -3768,7 +3806,7 @@ describe('Slack 패널', () => {
     })
     on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
     on('tool.list', () => ({
-      value: ['slack_search_public_and_private', 'slack_read_channel', 'slack_send_message', 'slack_read_user_profile'].map(name => ({ name: `mcp__claude_ai_Slack__${name}`, description: '', mcp: true })),
+      value: ['slack_search_public_and_private', 'slack_read_channel', 'slack_read_thread', 'slack_send_message', 'slack_read_user_profile'].map(name => ({ name: `mcp__claude_ai_Slack__${name}`, description: '', mcp: true })),
     }))
     on('tool.check', ($, e) => ({ decision: rules(e.tool) ? 'allow' : 'ask' }) as never)
     on('mcp.call', ($, e) => {
@@ -3780,6 +3818,8 @@ describe('Slack 패널', () => {
           return text({ results: inbox() })
         case 'slack_read_channel':
           return text({ messages: HISTORY })
+        case 'slack_read_thread':
+          return text({ messages: THREAD })
         default:
           return text({ ok: true })
       }
@@ -3799,8 +3839,27 @@ describe('Slack 패널', () => {
     await pane.unmount()
   })
 
+  test('스레드 도구만 규칙이 없으면 확인·방 상세는 돌고 스레드는 열지 않고 넣을 규칙을 보인다', KO, async ($, on) => {
+    const inbox = search({ ...KEVIN, ts: '1792131860.241069', text: 'a' })
+    const { calls } = slackEngine(on, () => inbox, { rules: tool => !tool.endsWith('slack_read_thread') })
+    await $.command.run({ command: 'desk-slack', args: '' } as never)
+    expect(calls.map(call => call.tool)).toEqual(['slack_read_user_profile', 'slack_search_public_and_private'])
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-slack', viewport: VIEWPORT, props: { title: 'Slack', isFocused: true, bodyColumns: 96 } as never })
+    expect(JSON.stringify(await pane.drawn())).not.toContain('허용 규칙이 없어')
+    await pane.press({ key: 'slack-room-D01' })
+    await wait(50)
+    expect(calls.at(-1)?.tool).toBe('slack_read_channel')
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('답글 2개')
+    expect(drawn).toContain('스레드 답글은 열지 않아요')
+    expect(drawn).toContain('\\"mcp__claude_ai_Slack__slack_read_thread\\",')
+    await expect(pane.press({ key: 'slack-thread-1792131860.241069' })).rejects.toThrow()
+    expect(calls.some(call => call.tool === 'slack_read_thread')).toBe(false)
+    await pane.unmount()
+  })
+
   test('1분 확인: 맡은 세션이 3분 넘게 소식이 없으면 넘겨받되, 터미널이 없는 세션은 맡지 않는다', KO, async ($, on) => {
-    let surfaces: string[] = []
+    let surfaces: RenderSurface[] = []
     const clock = mock.clock(on, { now: 1792200000 * 1000 })
     const { calls } = slackEngine(on, () => search(), { surfaces: () => surfaces, isClockMocked: true, store: { slackPoller: { session: 'other', at: 0 } } })
     on('command.register', () => ({ value: undefined as never }))
@@ -3841,16 +3900,44 @@ describe('Slack 패널', () => {
     expect(drawn).toContain('{\\"pid\\":12029}')
     expect(drawn).toContain('오오... 링크')
 
-    await pane.input({ key: 'slack-write-D01-0', text: '확인해 볼게요\n잠시만요' })
+    // 답글이 달린 글은 "답글 N개" 버튼, 누르면 스레드, ← 는 방으로
+    expect(drawn).toContain('답글 2개')
+    await pane.press({ key: 'slack-thread-1792131860.241069' })
     await wait(50)
-    expect(calls.find(call => call.tool === 'slack_send_message')?.args).toEqual({ channel_id: 'D01', message: '확인해 볼게요\n잠시만요' })
+    expect(calls.at(-1)).toEqual({ tool: 'slack_read_thread', args: { channel_id: 'D01', message_ts: '1792131860.241069', limit: 30, response_format: 'detailed' } })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('스레드 새 글')
+    expect(drawn).toContain('← kevin')
+    await pane.input({ key: 'slack-write-D01-1792131860.241069-0', text: '스레드 답장' })
+    await wait(50)
+    expect(calls.findLast(call => call.tool === 'slack_send_message')?.args).toEqual({ channel_id: 'D01', message: '스레드 답장', thread_ts: '1792131860.241069' })
+    expect(calls.at(-1)?.tool).toBe('slack_read_thread')
+    await pane.press({ key: 'slack-back' })
+    await wait(50)
+    expect(calls.at(-1)?.tool).toBe('slack_read_channel')
+
+    await pane.input({ key: 'slack-write-D01-room-1', text: '확인해 볼게요\n잠시만요' })
+    await wait(50)
+    expect(calls.findLast(call => call.tool === 'slack_send_message')?.args).toEqual({ channel_id: 'D01', message: '확인해 볼게요\n잠시만요' })
+
+    // 새 글이 스레드 답글이면 목록에서 방을 눌러도 그 스레드로 바로 연다(채널 기록에는 답글이 없다)
+    inbox = search({ ...KEVIN, ts: '1792198500.000001', text: '스레드 새 글', thread: '1792131860.241069' })
+    await pane.press({ key: 'slack-back' })
+    await pane.press({ key: 'slack-refresh' })
+    await wait(50)
+    expect(notified).toEqual([{ text: '스레드 새 글', title: 'kevin' }])
+    await pane.press({ key: 'slack-room-D01' })
+    await wait(50)
+    expect(calls.at(-1)?.tool).toBe('slack_read_thread')
+    await pane.press({ key: 'slack-back' })
+    await wait(50)
 
     // 새 메시지: 방마다 알림 하나
     inbox = search({ ...GROUP, ts: '1792199000.000001', text: '이거봐요' }, { ...GROUP, ts: '1792199100.000001', text: '<https://example.com|여기>' })
     await pane.press({ key: 'slack-back' })
     await pane.press({ key: 'slack-refresh' })
     await wait(50)
-    expect(notified).toEqual([{ text: 'alvin: 여기 (외 1개)', title: 'alvin, bot-x' }])
+    expect(notified.slice(1)).toEqual([{ text: 'alvin: 여기 (외 1개)', title: 'alvin, bot-x' }])
     drawn = JSON.stringify(await pane.drawn())
     expect(drawn).toContain('대화방 2 · 안 읽음 2')
     expect(drawn).toContain('● alvin, bot-x')
@@ -3859,7 +3946,7 @@ describe('Slack 패널', () => {
     // 같은 결과를 다시 받아도 또 알리지 않는다
     await pane.press({ key: 'slack-refresh' })
     await wait(50)
-    expect(notified).toHaveLength(1)
+    expect(notified).toHaveLength(2)
 
     // 닫기: 한 번 누르면 확인 문구, 다시 눌러야 닫힌다
     await pane.press({ key: 'slack-close-C02' })

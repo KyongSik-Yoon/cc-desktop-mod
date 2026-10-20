@@ -138,10 +138,11 @@ Your open Asana tasks, read through the Asana MCP server Claude Code already has
 
 ### `/desk-slack`: Slack DMs
 
-The DMs and group DMs other people sent you, kept as conversations like the Slack client, read through the Slack MCP server Claude Code already has connected (the claude.ai Slack connector; no token or setting of its own). Messages in channels, @mentions and thread replies are not included. With no Slack server, the pane says to connect Slack in `/mcp`.
+The DMs and group DMs other people sent you, kept as conversations like the Slack client, read through the Slack MCP server Claude Code already has connected (the claude.ai Slack connector; no token or setting of its own). Messages, @mentions and thread replies in channels are not included (thread replies in a DM are). With no Slack server, the pane says to connect Slack in `/mcp`.
 
 - The list shows one row per conversation, most recent first: `●` when it has messages you have not opened in desk-look, the people in it, the last message and how long ago. The first time, it fills in the last 3 days as already read
 - Click a conversation for its latest 30 messages, both sides. Write in the box at the bottom and press Enter to reply there. `↻` reloads, `← Conversations` goes back
+- Under a message with replies, `N replies` opens that thread (the message and its latest 30 replies), and a reply written there goes to the thread. `← name` goes back to the conversation. When a conversation's last message is a thread reply, clicking it in the list opens that thread directly
 - `✕` closes a conversation (a second press within 5 seconds). It comes back when a new message arrives in it
 - `Hand to Claude` fills the prompt with the conversation's recent messages; `Open in Slack` opens it in Slack
 - While any Claude Code session is running, desk-look checks for new messages once a minute and sends a notification per conversation through your notification channel (`slackNotify` turns that off). The `✉ N` chip in the band shows the unread count and opens the pane. With several sessions open, one of them checks and the others share what it finds
@@ -153,6 +154,8 @@ The DMs and group DMs other people sent you, kept as conversations like the Slac
   "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_channel",
   "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_read_user_profile"
   ```
+
+  To open threads, add `"mcp__claude_ai_Slack__slack_read_thread"` too. Without just that rule, checking, notifications and conversations keep working; threads do not open, and the conversation shows the rule to add
 
   The rule allows the same tools for Claude too: Claude can then send Slack messages without asking
 

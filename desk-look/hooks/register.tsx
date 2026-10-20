@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
+import type { Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
 import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffScope, DiffView, FileDiff, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, herdrGraphicsOn, imageNumber, pngSize, supportsGraphics, thumbnailSize, type Corner } from './images'
@@ -64,6 +64,7 @@ import {
   mergeInbox,
   notices,
   parseHistory,
+  parseThread,
   parseMe,
   parseSearch,
   profileCall,
@@ -73,7 +74,9 @@ import {
   sendCall,
   sendProblem,
   slackPrompt,
+  threadCall,
   slackText,
+  slackThreadTool,
   slackTools,
   tsCompare,
   unreadCount,
@@ -1358,11 +1361,14 @@ async function findSlack($: EngineInterface): Promise<SlackServer | null> {
   return findSlackServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
 }
 
-// allow 규칙이 없는 Slack 도구. 하나라도 있으면 Slack 을 부르지 않는다(받은 편지 확인은 타이머라 물어볼 사람이 없다).
-async function slackUnruled($: EngineInterface, server: SlackServer) {
-  const tools = slackTools(server)
+// allow 규칙이 없는 Slack 도구. unruled 에 하나라도 있으면 Slack 을 부르지 않는다(받은 편지 확인은 타이머라 물어볼 사람이 없다).
+// 스레드 도구는 따로: 없으면 threadUnruled 에 이름이 들고 스레드만 열지 않는다.
+async function slackUnruled($: EngineInterface, server: SlackServer): Promise<{ unruled: string[]; threadUnruled?: string }> {
+  const tools = [...slackTools(server), slackThreadTool(server)]
   const verdicts = await Promise.all(tools.map(tool => $.tool.check({ tool, input: {} }).catch(() => null)))
-  return tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
+  const missing = tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
+  const thread = slackThreadTool(server)
+  return { unruled: missing.filter(tool => tool !== thread), ...(missing.includes(thread) ? { threadUnruled: thread } : {}) }
 }
 
 // $.store 는 떠 있는 세션끼리 같이 본다(2.1.302 실측). 모양이 다르면 빈 받은 편지.
@@ -1373,7 +1379,7 @@ async function readInbox($: EngineInterface): Promise<SlackInbox> {
 
 async function saveInbox($: EngineInterface, inbox: SlackInbox) {
   await $.store.set('slackInbox', inbox)
-  await update($, slack, (state): SlackState => ({ status: state?.status ?? 'ok', server: state?.server ?? null, unruled: state?.unruled ?? [], inbox, error: state?.error }))
+  await update($, slack, (state): SlackState => ({ status: state?.status ?? 'ok', server: state?.server ?? null, unruled: state?.unruled ?? [], threadUnruled: state?.threadUnruled, inbox, error: state?.error }))
 }
 
 // 내 Slack UID. 서버마다 한 번 읽어 둔다.
@@ -1398,28 +1404,28 @@ async function pollSlack($: EngineInterface, force: boolean) {
     const kept = await readInbox($)
     const put = (state: Omit<SlackState, 'inbox'>, inbox = kept) => update($, slack, (): SlackState => ({ ...state, inbox }))
     if (server === null) return void (await put({ status: 'none', server: null, unruled: [] }))
-    const unruled = await slackUnruled($, server)
-    if (unruled.length > 0) return void (await put({ status: 'ok', server, unruled }))
-    const [session, now, surfaces] = await Promise.all([$.session.id().catch(() => ''), $.clock.now(), $.session.surfaces().catch(() => [])])
+    const rules = await slackUnruled($, server)
+    if (rules.unruled.length > 0) return void (await put({ status: 'ok', server, ...rules }))
+    const [session, now, surfaces] = await Promise.all([$.session.id().catch(() => ''), $.clock.now(), $.session.surfaces().catch((): readonly RenderSurface[] => [])])
     const poller = (await $.store.get('slackPoller').catch(() => undefined)) as SlackPoller | undefined
     // 터미널이 없는 세션(SDK 등)은 알림을 띄울 곳이 없어 맡지 않는다: 맡으면 아무도 알리지 않게 된다
     const canWatch = surfaces.includes('terminal')
-    if (!force && (!canWatch || !holdsLease(poller ?? null, session, now))) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, unruled }))
+    if (!force && (!canWatch || !holdsLease(poller ?? null, session, now))) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, ...rules }))
     await $.store.set('slackPoller', { session, at: now })
-    if (force) await put({ status: 'loading', server, unruled })
+    if (force) await put({ status: 'loading', server, ...rules })
     const me = await slackMe($, server)
-    if (me === null) return void (await put({ status: 'failed', server, unruled, error: T.slackNoUser }))
+    if (me === null) return void (await put({ status: 'failed', server, ...rules, error: T.slackNoUser }))
     const nowS = Math.floor(now / 1000)
     const afterS = kept.watermark === null ? nowS - FIRST_FILL_S : Number(kept.watermark.split('.')[0])
     const got = await callSlack($, server, inboxCall(me, afterS), 'results')
-    if (!got.ok) return void (await put({ status: 'failed', server, unruled, error: got.error }))
+    if (!got.ok) return void (await put({ status: 'failed', server, ...rules, error: got.error }))
     // 그사이 다른 세션·패널이 방을 닫았을 수 있어 넣기 바로 앞에서 다시 읽는다
     const latest = await readInbox($)
     const merged = mergeInbox(latest, parseSearch(got.text), me, nowS)
     const fresh = merged.fresh.filter(message => latest.notified === null || tsCompare(message.ts, latest.notified) > 0)
     const inbox: SlackInbox = { ...merged.inbox, notified: fresh.length > 0 ? fresh[fresh.length - 1]!.ts : (latest.notified ?? merged.inbox.watermark) }
     await $.store.set('slackInbox', inbox)
-    await put({ status: 'ok', server, unruled }, inbox)
+    await put({ status: 'ok', server, ...rules }, inbox)
     if (!slackNotify) return
     for (const notice of notices(fresh, inbox, T.slackMore)) {
       void $.ui.notify(notice.text, { title: notice.title }).catch(() => undefined)
@@ -1436,17 +1442,20 @@ async function openSlack($: EngineInterface) {
   await shown
 }
 
-// 방을 열면(다시 읽어도) 기록을 읽고 그 방 안 읽음을 지운다.
-async function openSlackRoom($: EngineInterface, server: SlackServer, channel: string) {
-  await update($, slackView, (view): SlackView => ({ channel, status: 'loading', posts: view?.channel === channel ? view.posts : [] }))
-  const got = await callSlack($, server, historyCall(channel), 'messages')
-  const posts = got.ok ? parseHistory(got.text) : []
+// 방을 열면(다시 읽어도) 기록을 읽고 그 방 안 읽음을 지운다. thread 가 있으면 채널 기록 대신 그 스레드(부모와 답글).
+async function openSlackRoom($: EngineInterface, server: SlackServer, channel: string, thread: string | null = null) {
+  const isSame = (view: SlackView | null) => view?.channel === channel && view.thread === thread
+  // 방과 스레드를 오가면 쓰던 답장이 다른 곳으로 가지 않게 비운다
+  if (!isSame(await read($, slackView))) slackDraft = ''
+  await update($, slackView, (view): SlackView => ({ channel, thread, status: 'loading', posts: isSame(view) ? view!.posts : [] }))
+  const got = await callSlack($, server, thread === null ? historyCall(channel) : threadCall(channel, thread), 'messages')
+  const posts = got.ok ? (thread === null ? parseHistory(got.text) : parseThread(got.text)) : []
   await update($, slackView, (view): SlackView | null =>
-    view?.channel !== channel ? view : got.ok ? { channel, status: 'ok', posts } : { channel, status: 'failed', posts: view.posts, error: got.error },
+    !isSame(view) ? view : got.ok ? { channel, thread, status: 'ok', posts } : { channel, thread, status: 'failed', posts: view!.posts, error: got.error },
   )
   if (!got.ok) return
   const me = (await $.store.get('slackMe').catch(() => undefined)) as { id?: string } | undefined
-  await saveInbox($, readRoom(await readInbox($), channel, posts, me?.id ?? ''))
+  await saveInbox($, readRoom(await readInbox($), channel, posts, me?.id ?? '', thread))
 }
 
 async function closeSlackView($: EngineInterface) {
@@ -1454,10 +1463,10 @@ async function closeSlackView($: EngineInterface) {
   await update($, slackView, () => null)
 }
 
-async function sendSlack($: EngineInterface, server: SlackServer, channel: string, value: string) {
+async function sendSlack($: EngineInterface, server: SlackServer, channel: string, thread: string | null, value: string) {
   const text = value.trim()
   if (text === '') return
-  const call = sendCall(channel, text)
+  const call = sendCall(channel, text, thread)
   const problem = await $.mcp.call(server.name, call.tool, call.args).then(sendProblem, (error: unknown) => (error instanceof Error ? error.message : String(error)).split('\n')[0] || 'error')
   if (problem !== null) {
     $.ui.toast(T.slackSendFailed(problem))
@@ -1466,7 +1475,7 @@ async function sendSlack($: EngineInterface, server: SlackServer, channel: strin
   slackDraft = ''
   slackSent++
   $.ui.toast(T.slackSent)
-  await openSlackRoom($, server, channel)
+  await openSlackRoom($, server, channel, thread)
 }
 
 // ✕ 는 두 번 눌러 닫는다(Asana 담당자 넘기기와 같은 무장).
@@ -3799,6 +3808,7 @@ export const register: Register = (on, options) => {
   })
 
   // Slack 패널: 나에게 온 DM·그룹 DM 을 대화방으로(최근 방부터), 하나를 누르면 그 방의 최근 대화와 답장.
+  // 마지막 글이 스레드 답글인 방은 그 스레드로 열린다. 방 안의 "답글 N개" 를 누르면 그 스레드, ← 는 방으로.
   on('ui.render', { component: 'Pane', requestId: SLACK_PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
@@ -3808,6 +3818,8 @@ export const register: Register = (on, options) => {
     const server = state?.server ?? null
     const myId = (me as { id?: string } | undefined)?.id ?? ''
     const when = (ts: string) => ago(Number(ts.split('.')[0]) * 1000, now)
+    // 스레드 도구에 규칙이 없으면 "답글 N개" 는 글자만, 방 위에 넣을 규칙
+    const canThread = state?.threadUnruled === undefined
     const closer = (room: SlackRoom) => {
       const isArmed = armed[`slack:close:${room.id}`] ?? false
       return <Button key={`slack-close-${room.id}`} plain dimColor={!isArmed} label={isArmed ? T.slackCloseConfirm : '✕'} onPress={() => void armSlackClose($, room.id, isArmed)} />
@@ -3819,8 +3831,14 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
-            <Button key="slack-back" plain dimColor label={T.slackBack} onPress={() => void closeSlackView($)} />
-            <Button key="slack-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openSlackRoom($, server, view.channel)} />
+            <Button
+              key="slack-back"
+              plain
+              dimColor
+              label={view.thread === null ? T.slackBack : `← ${title}`}
+              onPress={() => void (view.thread === null ? closeSlackView($) : openSlackRoom($, server, view.channel))}
+            />
+            <Button key="slack-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openSlackRoom($, server, view.channel, view.thread)} />
           </Box>
           <Box flexDirection="column">
             <Text color={COLORS.text} weight="semibold">
@@ -3833,6 +3851,12 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
           {view.status === 'failed' && <Text color={COLORS.danger}>{T.slackFailed(view.error ?? '')}</Text>}
+          {!canThread && view.posts.some(post => post.replies > 0) && (
+            <Box flexDirection="column">
+              <Text color={COLORS.warning}>{T.slackThreadUnruled}</Text>
+              <Text color={COLORS.muted}>{`"${state?.threadUnruled}",`}</Text>
+            </Box>
+          )}
           {view.posts.length === 0 && view.status === 'loading' && <Text color={COLORS.muted}>{T.slackLoading}</Text>}
           {view.posts.map(post => (
             <Box key={`slack-post-${post.ts}`} flexDirection="column">
@@ -3841,18 +3865,27 @@ export const register: Register = (on, options) => {
                 <Text color={COLORS.muted}>{when(post.ts)}</Text>
               </Box>
               <Text color={COLORS.text}>{slackText(post.text)}</Text>
+              {view.thread === null && post.replies > 0 && (
+                <Box>
+                  {canThread ? (
+                    <Button key={`slack-thread-${post.ts}`} plain label={T.slackReplies(post.replies)} onPress={() => void openSlackRoom($, server, view.channel, post.ts)} />
+                  ) : (
+                    <Text color={COLORS.muted}>{T.slackReplies(post.replies)}</Text>
+                  )}
+                </Box>
+              )}
             </Box>
           ))}
           <Input
-            key={`slack-write-${view.channel}-${slackSent}`}
+            key={`slack-write-${view.channel}-${view.thread ?? 'room'}-${slackSent}`}
             label={T.slackReplyLabel}
-            placeholder={T.slackReplyPlaceholder(title)}
+            placeholder={view.thread === null ? T.slackReplyPlaceholder(title) : T.slackThreadPlaceholder}
             rows={COMMENT_ROWS}
             value={slackDraft}
             submitLabel={T.slackSend}
             autoFocus
             onInput={value => (slackDraft = value)}
-            onSubmit={value => void sendSlack($, server, view.channel, value)}
+            onSubmit={value => void sendSlack($, server, view.channel, view.thread, value)}
           />
         </Box>
       )
@@ -3895,7 +3928,7 @@ export const register: Register = (on, options) => {
         <Box key={`slack-row-${item.id}`} columnGap={1}>
           {rowButton(
             els,
-            { key: `slack-room-${item.id}`, dimColor: item.unread === 0, onPress: () => void (server && openSlackRoom($, server, item.id)) },
+            { key: `slack-room-${item.id}`, dimColor: item.unread === 0, onPress: () => void (server && openSlackRoom($, server, item.id, canThread ? (item.lastThread ?? null) : null)) },
             `${item.unread > 0 ? '●' : ' '} ${clip(item.title, nameRoom)}`,
             <Text color={COLORS.muted}>{`  ${clip(`${lead}${item.preview}`, room)}`}</Text>,
             <Text color={COLORS.muted}>{` ${age}`}</Text>,
