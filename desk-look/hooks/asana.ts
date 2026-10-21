@@ -40,7 +40,7 @@ const LIST_FIELDS = 'name,due_on,completed,custom_type_status_option.name,member
 // 검색 결과는 남의 태스크도 섞이니 담당자 이름까지.
 const SEARCH_FIELDS = `${LIST_FIELDS},assignee.name`
 const TASK_FIELDS = [
-  'name,notes,completed,due_on,permalink_url,assignee.name',
+  'name,notes,html_notes,completed,due_on,permalink_url,assignee.name',
   'memberships.project.name,memberships.section.name',
   'custom_type_status_option.name,custom_type.status_options.gid,custom_type.status_options.name,custom_type.status_options.enabled',
   'custom_fields.name,custom_fields.type,custom_fields.display_value,custom_fields.is_formula_field',
@@ -228,6 +228,164 @@ export function storyView(html: string): { text: string; cells: Cell[]; groups: 
     }
   }
   return { text, cells, groups, toks }
+}
+
+// 태스크 본문(html_notes)을 패널 마크다운으로 옮겨 웹처럼 제목·굵게·목록·코드를 살린다. Asana 서식 태그는 몇 개뿐이다
+// (h1·h2·strong·em·u·s·code·a·ul·ol·li·blockquote·pre·hr·img·table). 글은 마크다운 표시로 읽히지 않게 \ 로 막고(parseInline 이 푼다),
+// 블록 밖 줄바꿈 하나가 문단 하나다. 밑줄은 마크다운에 없어 글만 남긴다.
+type HtmlNode = string | { name: string; raw: string; children: HtmlNode[] }
+type HtmlElement = Exclude<HtmlNode, string>
+
+function htmlTree(html: string): HtmlNode[] {
+  const root: HtmlElement = { name: '', raw: '', children: [] }
+  const stack = [root]
+  for (const tok of tokenize(html)) {
+    const top = stack[stack.length - 1] as HtmlElement
+    if (tok.kind === 'text') top.children.push(tok.text)
+    else if (tok.kind === 'self') top.children.push({ name: tok.name, raw: tok.raw, children: [] })
+    else if (tok.kind === 'open') {
+      const node: HtmlElement = { name: tok.name, raw: tok.raw, children: [] }
+      top.children.push(node)
+      stack.push(node)
+    } else {
+      // 짝이 안 맞는 닫는 태그는 버린다.
+      let at = stack.length - 1
+      while (at > 0 && stack[at]?.name !== tok.name) at--
+      if (at > 0) stack.length = at
+    }
+  }
+  return root.children
+}
+
+const textOf = (node: HtmlNode): string => (typeof node === 'string' ? node : node.children.map(textOf).join(''))
+const attrOf = (node: HtmlElement, name: string) => {
+  const value = new RegExp(`\\s${name}="([^"]*)"`).exec(node.raw)?.[1]
+  return value === undefined ? null : unescapeHtml(value)
+}
+// 주소는 그대로 둬야 맨 주소 링크가 깨지지 않는다.
+const escapeText = (text: string) =>
+  text
+    .split(/(https?:\/\/[^\s<>()]+)/)
+    .map((part, index) => (index % 2 === 1 ? part : part.replace(/[\\`*_~[\]|]/g, '\\$&')))
+    .join('')
+// 줄 머리의 #·>·-·+·"1." 은 제목·인용·목록으로 읽힌다.
+const escapeLineStart = (line: string) => line.replace(/^(\s*)([#>+-])/, '$1\\$2').replace(/^(\s*\d+)([.)])/, '$1\\$2')
+const wrapInline = (mark: string, inner: string) => (inner.trim() === '' ? inner : `${mark}${inner}${mark}`)
+
+function inlineMarkdown(nodes: readonly HtmlNode[]): string {
+  return nodes
+    .map(node => {
+      if (typeof node === 'string') return escapeText(node)
+      const inner = inlineMarkdown(node.children)
+      switch (node.name) {
+        case 'strong':
+        case 'b':
+          return wrapInline('**', inner)
+        case 'em':
+        case 'i':
+          return wrapInline('*', inner)
+        case 's':
+        case 'strike':
+        case 'del':
+          return wrapInline('~~', inner)
+        case 'code': {
+          const raw = textOf(node)
+          return raw.trim() !== '' && !/[`\n]/.test(raw) ? `\`${raw}\`` : inner
+        }
+        case 'a': {
+          const href = attrOf(node, 'href')?.replace(/[\s()]/g, ch => encodeURIComponent(ch))
+          return href ? `[${inner.trim() === '' ? escapeText(href) : inner}](${href})` : inner
+        }
+        case 'img':
+          return escapeText(T.asanaImage)
+        default:
+          return inner
+      }
+    })
+    .join('')
+}
+
+const INLINE_TAGS = new Set(['strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del', 'code', 'a', 'img', 'span'])
+
+function listMarkdown(list: HtmlElement, level: number): string[] {
+  const lines: string[] = []
+  let n = 0
+  for (const item of list.children) {
+    if (typeof item === 'string' || item.name !== 'li') continue
+    n++
+    const text = inlineMarkdown(item.children.filter(child => typeof child === 'string' || (child.name !== 'ul' && child.name !== 'ol')))
+    lines.push(`${'  '.repeat(Math.min(4, level))}${list.name === 'ol' ? `${n}.` : '-'} ${text.replace(/\s*\n\s*/g, ' ').trim()}`)
+    for (const child of item.children) if (typeof child !== 'string' && (child.name === 'ul' || child.name === 'ol')) lines.push(...listMarkdown(child, level + 1))
+  }
+  return lines
+}
+
+function blockMarkdown(nodes: readonly HtmlNode[]): string[] {
+  const out: string[] = []
+  let run: HtmlNode[] = []
+  const flush = () => {
+    for (const line of inlineMarkdown(run).split('\n')) if (line.trim() !== '') out.push(escapeLineStart(line.trim()))
+    run = []
+  }
+  for (const node of nodes) {
+    if (typeof node === 'string' || INLINE_TAGS.has(node.name)) {
+      run.push(node)
+      continue
+    }
+    flush()
+    switch (node.name) {
+      case 'h1':
+      case 'h2':
+      case 'h3':
+        out.push(`${'#'.repeat(Number(node.name[1]))} ${inlineMarkdown(node.children).replace(/\s*\n\s*/g, ' ').trim()}`)
+        break
+      case 'ul':
+      case 'ol':
+        out.push(listMarkdown(node, 0).join('\n'))
+        break
+      case 'blockquote':
+        out.push(
+          blockMarkdown(node.children)
+            .join('\n\n')
+            .split('\n')
+            .map(line => (line === '' ? '>' : `> ${line}`))
+            .join('\n'),
+        )
+        break
+      case 'pre': {
+        const source = textOf(node).replace(/\n+$/, '')
+        const fence = '`'.repeat(Math.max(3, ...[...source.matchAll(/`+/g)].map(match => match[0].length + 1)))
+        out.push(`${fence}\n${source}\n${fence}`)
+        break
+      }
+      case 'hr':
+        // --- 는 맨 앞이면 front matter 로 읽힌다.
+        out.push('***')
+        break
+      case 'table': {
+        const rows: string[][] = []
+        const collect = (parent: HtmlElement) => {
+          for (const child of parent.children) {
+            if (typeof child === 'string') continue
+            if (child.name === 'tr') rows.push(child.children.filter((cell): cell is HtmlElement => typeof cell !== 'string' && (cell.name === 'td' || cell.name === 'th')).map(cell => inlineMarkdown(cell.children).replace(/\s*\n\s*/g, ' ').trim()))
+            else collect(child)
+          }
+        }
+        collect(node)
+        const [header, ...body] = rows
+        if (header) out.push([header, header.map(() => '---'), ...body].map(row => `| ${row.join(' | ')} |`).join('\n'))
+        break
+      }
+      default:
+        out.push(...blockMarkdown(node.children))
+    }
+  }
+  flush()
+  return out.filter(block => block.trim() !== '')
+}
+
+export function notesMarkdown(html: string): string {
+  return blockMarkdown(htmlTree(html)).join('\n\n')
 }
 
 // 글자 단위 diff(Myers). 앞뒤 같은 글은 먼저 걷어 낸다. 돌려주는 것은 옛 글의 [start, end) 를 text 로 바꾸는 덩어리들.
@@ -437,6 +595,7 @@ type RawTask = {
   gid?: string
   name?: string
   notes?: string
+  html_notes?: string
   completed?: boolean
   due_on?: string | null
   permalink_url?: string
@@ -540,6 +699,7 @@ export function toDetail(json: unknown, stories?: unknown): AsanaDetail | null {
     gid: raw.gid,
     name: str(raw.name) ?? '',
     notes: str(raw.notes) ?? '',
+    richNotes: typeof raw.html_notes === 'string' ? notesMarkdown(raw.html_notes) : null,
     assignee: typeof raw.assignee?.gid === 'string' ? { gid: raw.assignee.gid, name: str(raw.assignee.name) ?? '?' } : null,
     dueOn: str(raw.due_on),
     completed: raw.completed === true,

@@ -130,6 +130,8 @@ export type AsanaDetail = {
   gid: string
   name: string
   notes: string
+  // html_notes 를 옮긴 마크다운(notesMarkdown). 서버가 html_notes 를 주지 않으면 null 이고 notes 평문을 그린다.
+  richNotes: string | null
   assignee: { gid: string; name: string } | null
   dueOn: string | null
   completed: boolean

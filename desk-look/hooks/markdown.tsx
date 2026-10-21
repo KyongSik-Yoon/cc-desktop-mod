@@ -208,7 +208,8 @@ export function parseBlocks(markdown: string): Block[] {
   return blocks
 }
 
-const INLINE = /`([^`]+)`|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*\s][^*]*?)\*|\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/
+// \ 뒤 문장부호는 글자 그대로(CommonMark). 링크 글자에도 \] 가 들어갈 수 있다.
+const INLINE = /\\([!-/:-@[-`{-~])|`([^`]+)`|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*\s][^*]*?)\*|\[((?:\\.|[^\]\\])+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/
 
 export function parseInline(text: string): Inline[] {
   const out: Inline[] = []
@@ -222,8 +223,9 @@ export function parseInline(text: string): Inline[] {
     if (match.index > 0) {
       out.push({ kind: 'text', text: rest.slice(0, match.index) })
     }
-    const [whole, code, bold1, bold2, strike, italic, linkText, linkHref, angleUrl, bareUrl] = match
-    if (code !== undefined) out.push({ kind: 'code', text: code })
+    const [whole, escaped, code, bold1, bold2, strike, italic, linkText, linkHref, angleUrl, bareUrl] = match
+    if (escaped !== undefined) out.push({ kind: 'text', text: escaped })
+    else if (code !== undefined) out.push({ kind: 'code', text: code })
     else if (bold1 !== undefined || bold2 !== undefined) out.push({ kind: 'bold', children: parseInline(bold1 ?? bold2 ?? '') })
     else if (strike !== undefined) out.push({ kind: 'strike', children: parseInline(strike) })
     else if (italic !== undefined) out.push({ kind: 'italic', children: parseInline(italic) })

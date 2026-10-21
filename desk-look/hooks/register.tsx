@@ -4572,7 +4572,9 @@ export const register: Register = (on, options) => {
               )
             })}
           </Box>
-          {task.notes.trim() !== '' && <Text color={COLORS.text}>{task.notes.trim()}</Text>}
+          {task.richNotes !== null
+            ? task.richNotes !== '' && renderMarkdown(task.richNotes, els, COLORS, columns, { document: true })
+            : task.notes.trim() !== '' && <Text color={COLORS.text}>{task.notes.trim()}</Text>}
           <Box flexDirection="column" rowGap={1}>
             <Text color={COLORS.text} weight="semibold">
               {T.asanaComments(task.comments.length)}

@@ -8,7 +8,7 @@ import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgen
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
-import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls, mentionHtml, nextOffset, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
+import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls, mentionHtml, nextOffset, notesMarkdown, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackText, tsCompare, unreadCount } from '../hooks/slack'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
@@ -3696,6 +3696,43 @@ describe('Asana 패널', () => {
       ],
     }
     expect(toDetail(task, stories)?.comments.map(c => c.text)).toEqual(['첫 댓글'])
+  })
+
+  test('Asana 본문 html_notes 를 마크다운으로 옮겨 서식을 살린다', () => {
+    const html =
+      '<body><h2>목적</h2>CH 저장량을 줄이려고 <strong>프로파일 샘플링</strong>을 씁니다.\n두 번째 문단 *별* a_b\n' +
+      '<ul><li>버퍼(<code>profile_buffer_size</code>)마다 <a href="https://app.asana.com/0/0/1/f/" data-asana-gid="1" data-asana-type="task">[의견] 정리</a> 참고' +
+      '<ul><li>안쪽</li></ul></li></ul><ol><li>에러 → 저장</li><li>나머지</li></ol>' +
+      '<pre>map&lt;int64, int64&gt; a = 2;  // 기존</pre>- 줄 머리 대시\n1. 번호 같은 글<hr/><blockquote>인용</blockquote></body>'
+    const md = notesMarkdown(html)
+    expect(md).toBe(
+      [
+        '## 목적',
+        'CH 저장량을 줄이려고 **프로파일 샘플링**을 씁니다.',
+        '두 번째 문단 \\*별\\* a\\_b',
+        '- 버퍼(`profile_buffer_size`)마다 [\\[의견\\] 정리](https://app.asana.com/0/0/1/f/) 참고\n  - 안쪽',
+        '1. 에러 → 저장\n2. 나머지',
+        '```\nmap<int64, int64> a = 2;  // 기존\n```',
+        '\\- 줄 머리 대시',
+        '1\\. 번호 같은 글',
+        '***',
+        '> 인용',
+      ].join('\n\n'),
+    )
+    const blocks = parseBlocks(md)
+    expect(blocks.map(block => block.kind)).toEqual(['heading', 'paragraph', 'paragraph', 'list', 'list', 'code', 'paragraph', 'paragraph', 'rule', 'quote'])
+    const text = (index: number) => {
+      const block = blocks[index]
+      return block?.kind === 'paragraph' ? plainText(parseInline(block.text)) : null
+    }
+    expect(text(2)).toBe('두 번째 문단 *별* a_b')
+    expect(text(6)).toBe('- 줄 머리 대시')
+    expect(text(7)).toBe('1. 번호 같은 글')
+    const list = blocks[3]
+    const link = list?.kind === 'list' ? parseInline(list.items[0]?.text ?? '').find(node => node.kind === 'link') : undefined
+    expect(link?.kind === 'link' ? [link.href, plainText(link.children)] : null).toEqual(['https://app.asana.com/0/0/1/f/', '[의견] 정리'])
+    expect(toDetail({ data: { gid: '1', html_notes: '<body>a</body>' } })?.richNotes).toBe('a')
+    expect(toDetail({ data: { gid: '1', notes: 'a' } })?.richNotes).toBeNull()
   })
 
   test('바꾸기 호출 모양과, v2 가 키를 버려 0건이면 실패로 본다', () => {
