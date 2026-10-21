@@ -4572,7 +4572,8 @@ export const register: Register = (on, options) => {
               )
             })}
           </Box>
-          {task.richNotes !== null
+          {/* 0.48 이 열어 둔 상세(asanaView atom)는 /reload-plugins 뒤에도 남고 richNotes 가 없다. */}
+          {typeof task.richNotes === 'string'
             ? task.richNotes !== '' && renderMarkdown(task.richNotes, els, COLORS, columns, { document: true })
             : task.notes.trim() !== '' && <Text color={COLORS.text}>{task.notes.trim()}</Text>}
           <Box flexDirection="column" rowGap={1}>
