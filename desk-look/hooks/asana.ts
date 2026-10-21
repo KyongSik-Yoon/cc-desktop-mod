@@ -275,7 +275,8 @@ const escapeText = (text: string) =>
     .join('')
 // 줄 머리의 #·>·-·+·"1." 은 제목·인용·목록으로 읽힌다.
 const escapeLineStart = (line: string) => line.replace(/^(\s*)([#>+-])/, '$1\\$2').replace(/^(\s*\d+)([.)])/, '$1\\$2')
-const wrapInline = (mark: string, inner: string) => (inner.trim() === '' ? inner : `${mark}${inner}${mark}`)
+// 감쌀 글을 첫 인자로 둔다: 표시 글자 '*' 가 첫 인자면 디렉터리 검사가 모든 도구에 거는 훅 등록으로 읽고 막는다.
+const wrapInline = (inner: string, mark: string) => (inner.trim() === '' ? inner : `${mark}${inner}${mark}`)
 
 function inlineMarkdown(nodes: readonly HtmlNode[]): string {
   return nodes
@@ -285,14 +286,14 @@ function inlineMarkdown(nodes: readonly HtmlNode[]): string {
       switch (node.name) {
         case 'strong':
         case 'b':
-          return wrapInline('**', inner)
+          return wrapInline(inner, '**')
         case 'em':
         case 'i':
-          return wrapInline('*', inner)
+          return wrapInline(inner, '*')
         case 's':
         case 'strike':
         case 'del':
-          return wrapInline('~~', inner)
+          return wrapInline(inner, '~~')
         case 'code': {
           const raw = textOf(node)
           return raw.trim() !== '' && !/[`\n]/.test(raw) ? `\`${raw}\`` : inner
