@@ -23,6 +23,10 @@ export type Runs = { firstOf: Record<string, string>; calls: Record<string, RunC
 // 붙여 넣은 이미지 파일과 PNG 헤더의 크기. 키는 [Image #N] 의 N.
 export type ImageInfo = { path: string; width: number; height: number }
 
+// 엔진이 그림을 그리는 길. kitty: kitty 그래픽 프로토콜(그림 파일 이름도 넘긴다). iterm: iTerm2 3.5 이상의
+// 인라인 그림(2.1.305): 전체 화면 그리기에서만, png·rgba 바이트만 그리고 파일 이름은 alt 글자로 둔다.
+export type Graphics = 'kitty' | 'iterm' | null
+
 // diff 줄 댓글(hooks/comments.ts). 줄은 종류·옛 번호·새 번호로 기억한다(diffview 의 DiffLine 과 같은 모양).
 export type CommentLine = { kind: ' ' | '+' | '-'; text: string; oldNo: number; newNo: number }
 export type LineRef = Omit<CommentLine, 'text'>
@@ -253,8 +257,8 @@ declare module 'claude-code' {
       surface: Surface | null
       runs: Runs
       images: Record<string, ImageInfo>
-      // 터미널이 kitty 그래픽을 그리는지(멀티플렉서 밖의 kitty·Ghostty).
-      graphics: boolean
+      // 터미널이 그림을 그리는 길(멀티플렉서 밖의 kitty·Ghostty, 전체 화면의 iTerm2). 못 그리면 null.
+      graphics: Graphics
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
       sessions: SessionEntry[]
@@ -266,6 +270,8 @@ declare module 'claude-code' {
       turnStartedAt: number | null
       // 스피너를 다시 그리게 하는 시계(ms).
       tick: number
+      // 답 글 블록째 보여주기: 블록 일부를 먼저 내보내고 나머지를 붙잡는 동안 true(띠에 "모으는 중").
+      gathering: boolean
       // 지금의 할 일 목록.
       tasks: TaskItem[]
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.

@@ -1,4 +1,4 @@
-import type { ImageInfo } from '../types'
+import type { Graphics, ImageInfo } from '../types'
 
 // 붙여 넣은 이미지는 세션 임시 폴더(/tmp/claude-<uid>/<프로젝트>/<세션>/images)의 N.png 에 [Image #N] 번호 그대로 저장된다.
 // 파일 이름의 번호. N.png 가 아니면 null.
@@ -32,10 +32,6 @@ export const IMAGE_TOKEN = /\[Image #(\d+)\]/g
 export function herdrGraphicsOn(config: string): boolean {
   return /^[ \t]*kitty_graphics[ \t]*=[ \t]*true/m.test(config)
 }
-
-// 엔진이 그림을 그리는 길. kitty: kitty 그래픽 프로토콜(그림 파일 이름도 넘긴다). iterm: iTerm2 3.5 이상의
-// 인라인 그림(2.1.305): 전체 화면 그리기에서만, png·rgba 바이트만 그리고 파일 이름은 alt 글자로 둔다.
-export type Graphics = 'kitty' | 'iterm' | null
 
 // 그림을 그릴 수 있는 환경인지. tmux·zellij 는 통과시키지 않아 그림 대신 alt 글자가 나오므로 그리지 않는다.
 // herdr 는 kitty_graphics 를 켰을 때만(herdrGraphics) 넘기는데, 엔진은 터미널 이름을 물어 kitty·ghostty 일 때만

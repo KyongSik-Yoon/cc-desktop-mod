@@ -4698,3 +4698,170 @@ test('붙여넣은 글은 칩 한 줄, 누르면 펼침', KO, async $ => {
   expect(JSON.stringify(await row.drawn())).toContain('SECOND-LINE')
   await row.unmount()
 })
+
+import { earlyCut, gather, splitHeld, textRows } from '../hooks/gather'
+
+describe('답 글 블록째 보여주기(replyInBlocks)', () => {
+  const SCREEN = { rows: 40, columns: 100 }
+  const paragraphs = (count: number) => Array.from({ length: count }, (_, index) => `문단 ${index}`).join('\n\n')
+  const head = (text: string) => text.slice(0, earlyCut(text, SCREEN))
+
+  test('화면 몫(60%)을 넘기 전에는 먼저 내보내지 않는다', () => {
+    expect(textRows(paragraphs(12), SCREEN.columns)).toBe(23)
+    expect(earlyCut(paragraphs(12), SCREEN)).toBe(0)
+  })
+
+  test('넘으면 몫 안의 마지막 문단 경계까지 내보낸다', () => {
+    expect(head(`${paragraphs(13)}\n\n끝나지 않은`)).toBe(`${paragraphs(12)}\n\n`)
+  })
+
+  test('빈 줄이 없으면 줄 경계에서, 표 행 사이는 피해서 자른다', () => {
+    const items = Array.from({ length: 30 }, (_, index) => `${index + 1}. 항목`)
+    expect(head(`${items.join('\n')}\n`)).toBe(`${items.slice(0, 24).join('\n')}\n`)
+    const lines = Array.from({ length: 20 }, (_, index) => `줄 ${index}`)
+    const table = Array.from({ length: 10 }, () => '| a | b |')
+    expect(head([...lines, ...table, '꼬리', ''].join('\n'))).toBe(`${lines.join('\n')}\n`)
+  })
+
+  test('한 줄이 몫보다 길면 그 줄 끝에서 자른다', () => {
+    const long = 'x'.repeat(5000)
+    expect(head(`${long}\ny\nz`)).toBe(`${long}\n`)
+  })
+
+  test('경계에 걸친 글 청크는 둘로 쪼갠다', () => {
+    const held = [
+      { kind: 'text', index: 0, text: 'ab', ref: 1 },
+      { kind: 'engine', ref: 2 },
+      { kind: 'text', index: 0, text: 'cd', ref: 3 },
+    ] as const
+    expect(splitHeld(held as never, 3)).toEqual([
+      [held[0], held[1], { kind: 'text', index: 0, text: 'c', ref: 3 }],
+      [{ kind: 'text', index: 0, text: 'd' }],
+    ] as never)
+  })
+
+  test('블록 일부를 먼저 내보내면 나머지를 내보낼 때까지 "모으는 중"을 켜 둔다', async () => {
+    async function* source() {
+      yield { kind: 'text', index: 0, text: `${paragraphs(13)}\n\n` }
+      yield { kind: 'text', index: 0, text: '남은\n글' }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return {}
+    }
+    const marks: boolean[] = []
+    const settled: number[] = []
+    const stream = gather(source() as never, async () => void settled.push(marks.length), async isOn => marks.push(isOn))
+    // 먼저 내보낸 글이 나간 뒤에 켠다
+    expect((await stream.next()).value).toEqual({ kind: 'text', index: 0, text: `${paragraphs(12)}\n\n` })
+    expect(marks).toEqual([])
+    let step = await stream.next()
+    while (step.done !== true) step = await stream.next()
+    // 끝: 표시를 끄고, 마지막 글을 내보낸 뒤 멈춤 전에 한 번 기다린다
+    expect(marks).toEqual([true, false])
+    expect(settled).toEqual([2])
+  })
+
+  // 아래(엔진)가 단계마다 내놓는 청크: 글 블록 하나, 도구 호출 하나, 멈춤.
+  // 테스트 사슬은 engine 청크를 만들 수 없어(엔진이 준 ref 만 받는다) 그 순서는 실제 세션에서 본다.
+  const CHUNKS = [
+    { kind: 'text', index: 0, text: '파일을 ' },
+    { kind: 'text', index: 0, text: '볼게요.' },
+    { kind: 'tool', index: 1, id: 't1', name: 'Read' },
+    { kind: 'input', index: 1, json: '{}' },
+    { kind: 'stop', stopReason: 'tool_use', usage: null },
+  ]
+  const RESULT = { turnId: 't', index: 0, answer: '파일을 볼게요.', toolUses: [], stopReason: 'tool_use', usage: null }
+
+  // 위에서 받은 청크마다 그때 아래가 몇 개째까지 내놓았는지 적는다
+  async function readStep($: Parameters<TestBody>[0], on: On, agentId?: string) {
+    let given = 0
+    on('turn.step', async function* () {
+      for (const chunk of CHUNKS) {
+        given++
+        yield chunk as never
+      }
+      return RESULT as never
+    })
+    const stream = $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-5-5', messageCount: 1, ...(agentId ? { agentId } : {}) } as never)
+    const got: Array<{ chunk: unknown; given: number }> = []
+    let step = await stream.next()
+    while (step.done !== true) {
+      got.push({ chunk: step.value, given })
+      step = await stream.next()
+    }
+    return { got, result: step.value }
+  }
+
+  test('기본(켜짐)은 글 블록을 도구 청크가 올 때까지 붙잡았다가 순서 그대로 내보낸다', KO, async ($, on) => {
+    const { got, result } = await readStep($, on)
+    expect(got.map(item => item.chunk)).toEqual(CHUNKS)
+    expect(result).toEqual(RESULT as never)
+    // 첫 글은 도구 청크(3번째)가 나온 뒤에야 위로 올라간다
+    expect(got[0]?.given).toBe(3)
+  })
+
+  test('끄면 글을 받는 대로 흘린다', { options: { language: 'ko', replyInBlocks: 'off' } }, async ($, on) => {
+    const { got } = await readStep($, on)
+    expect(got.map(item => item.chunk)).toEqual(CHUNKS)
+    expect(got[0]?.given).toBe(1)
+  })
+
+  test('서브에이전트 단계는 붙잡지 않는다', { options: { language: 'ko', replyInBlocks: 'on' } }, async ($, on) => {
+    const { got } = await readStep($, on, 'a1')
+    expect(got[0]?.given).toBe(1)
+  })
+
+  test('마지막 사람 입력이 앱(Remote Control)에서 왔으면 흘리고, 터미널에서 오면 다시 모은다', { options: { language: 'ko', replyInBlocks: 'on' } }, async ($, on) => {
+    on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+    let given = 0
+    on('turn.step', async function* () {
+      for (const chunk of CHUNKS) {
+        given++
+        yield chunk as never
+      }
+      return RESULT as never
+    })
+    // 첫 청크가 위로 올라갈 때 아래가 몇 개째까지 내놓았는지
+    const firstSeenAt = async () => {
+      given = 0
+      const stream = $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-5-5', messageCount: 1 } as never)
+      await stream.next()
+      const at = given
+      while ((await stream.next()).done !== true);
+      return at
+    }
+    await $.prompt.submit({ text: '터미널에서', origin: { kind: 'composer' }, wait: false } as never)
+    expect(await firstSeenAt()).toBe(3)
+    await $.prompt.submit({ text: '폰에서', origin: { kind: 'bridge' }, wait: false } as never)
+    expect(await firstSeenAt()).toBe(1)
+    // 사람이 아닌 입력(작업 알림)은 출처를 바꾸지 않는다
+    await $.prompt.submit({ text: '<task-notification></task-notification>', origin: { kind: 'task-notification' }, wait: false } as never)
+    expect(await firstSeenAt()).toBe(1)
+    await $.prompt.submit({ text: '다시 터미널', origin: { kind: 'composer' }, wait: false } as never)
+    expect(await firstSeenAt()).toBe(3)
+  })
+
+  // 붙잡은 줄 수를 보이는 스피너는 실제 세션에서 본다: 테스트 사슬은 단계 스트림이 끝날 때까지 그리기를 미룬다.
+  test('긴 블록은 몫만큼 먼저 내보내고 나머지는 블록 끝까지 붙잡는다', { options: { language: 'ko', replyInBlocks: 'on' } }, async ($, on) => {
+    let open = () => {}
+    const gate = new Promise<void>(resolve => (open = resolve))
+    on('clock.sleep', () => ({ value: undefined }))
+    on('turn.step', async function* () {
+      yield { kind: 'text', index: 0, text: `${paragraphs(13)}\n\n` } as never
+      yield { kind: 'text', index: 0, text: '이어지는\n글' } as never
+      await gate
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null } as never
+      return { ...RESULT, answer: `${paragraphs(13)}\n\n이어지는\n글`, stopReason: 'end_turn' } as never
+    })
+    const stream = $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-5-5', messageCount: 1 } as never)
+    expect((await stream.next()).value).toEqual({ kind: 'text', index: 0, text: `${paragraphs(12)}\n\n` })
+    let released = false
+    const pending = stream.next().then(step => ((released = true), step))
+    await wait(20)
+    expect(released).toBe(false)
+    open()
+    expect((await pending).value).toEqual({ kind: 'text', index: 0, text: '문단 12\n\n' })
+    expect((await stream.next()).value).toEqual({ kind: 'text', index: 0, text: '이어지는\n글' })
+    expect((await stream.next()).value).toEqual({ kind: 'stop', stopReason: 'end_turn', usage: null })
+    expect((await stream.next()).done).toBe(true)
+  })
+})

@@ -220,6 +220,7 @@ Claude Code 터미널 세션의 프롬프트에서:
 - `prBar`: `on` (기본), `off`. 입력창 띠 옆 PR 칩. 세션을 시작할 때와 턴이 끝날 때 지금 브랜치의 PR 을 `gh`(GitHub)·`glab`(GitLab)으로 읽음(30초에 한 번까지). 열린 PR 의 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴과 상관없이 15초마다 다시 읽고, 체크 상태가 그대로면 간격을 두 배씩 늘려 2분마다까지(runner 를 기다리는 job 처럼 끝나지 않는 체크가 계속 묻지 않게). 둘 다 없거나 어느 쪽 저장소도 아니면 숨기고 그 브랜치에서는 다시 묻지 않음(네트워크 오류는 다음 턴에 다시 읽음). `/desk-pr` 패널은 설정과 상관없이 열 수 있음
 - `previewAutoOpen`: `on` (기본), `off`. Claude 가 쓴 마크다운 문서를 턴이 끝날 때 미리보기 패널에 엶. `off` 면 `◫` 칩과 `/desk-preview` 로만
 - `slackNotify`: `on` (기본), `off`. 새 Slack DM 이 오면 알림(`/desk-slack` 참고). `off` 여도 패널과 `✉` 칩을 위한 확인은 계속
+- `replyInBlocks`: `on` (기본), `off`. Claude 의 답을 0.1초마다 몇 줄씩 흘리지 않고 블록째 보여 줌: 도구 호출 앞 글은 그 호출과 함께, 턴 끝 답은 통째로 나옴. 기다리는 동안 스피너에 모은 줄 수. 화면의 60% 쯤보다 긴 블록은 시작이 화면에 남도록 문단·줄 경계에서 한 화면씩 먼저 내보내고, 마지막 조각이 나올 때까지 띠에 `⋯ 나머지를 모으는 중`. Esc 로 끊어도 모은 글은 보임. 모으기는 답 스트림 자체를 늦춰 Remote Control(Claude 앱, claude.ai/code)도 덩어리로 받으므로, 마지막 프롬프트를 앱에서 보냈으면 앱의 부드러운 흐름을 지키려고 평소처럼 흘림
 - `asanaToken`: 비어 있음(기본). 선택. Asana 개인 토큰. 내 Asana 댓글의 `✎ 고치기` 와 작업 유형 상태 바꾸기만 쓴다(`/desk-asana` 참고). `/plugin configure desk-look@cc-desktop-mod` 에서 넣는다
 - `contextChip`: `auto` (기본), `always`, `off`. 입력창 띠 옆 컨텍스트 칩. `auto` 는 50% 이상일 때만(상태 줄이나 다른 플러그인이 이미 늘 보여 주는 경우가 많아서), `always` 는 늘, `off` 는 끔. `/desk-context` 패널은 설정과 상관없이 열 수 있음
 

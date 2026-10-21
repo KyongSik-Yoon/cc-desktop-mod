@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
-import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner, type Graphics } from './images'
+import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
@@ -13,6 +13,7 @@ import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgent
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
+import { gather, gatheredLines, noteScreen } from './gather'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
@@ -140,6 +141,8 @@ const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskSta
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
+// 답 글 블록째 보여주기: 블록 일부를 먼저 내보내고 나머지를 붙잡는 동안 true(띠에 "모으는 중").
+const gathering = atom({ plugin: 'desk-look', key: 'gathering' } as const, false)
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
@@ -215,6 +218,8 @@ const folded = atom({ plugin: 'desk-look', key: 'folded' } as const, null as Fol
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
 const SPINNER_TICK = 500
+// 답 글 블록째 보여주기: 마지막 블록을 내보낸 뒤 턴을 끝내기 전에 기다리는 시간(엔진의 글 묶음 100ms 보다 길게).
+const GATHER_SETTLE_MS = 150
 let ticker: Timer | null = null
 const THEME_POLL = 3000
 let themeWatch: Timer | null = null
@@ -2167,6 +2172,12 @@ function slackChip(els: Els, $: EngineInterface, state: SlackState | null) {
 }
 
 // 아래턱의 "✎ 2": 다음 프롬프트에 같이 갈 줄 댓글 수(데스크톱 입력창의 Comment 카드). 누르면 diff 패널.
+// 답 글을 블록째 보여주는 중 나머지를 붙잡고 있다는 표시. 엔진은 글이 보이는 동안 스피너를 걷는다.
+function gatherChip(els: Els, isOn: boolean) {
+  if (!isOn) return null
+  return { width: cellWidth(T.gatheringRest), node: <els.Text color={COLORS.muted}>{T.gatheringRest}</els.Text> }
+}
+
 function commentsChip(els: Els, $: EngineInterface, list: LineComment[]) {
   if (list.length === 0) return null
   const { Text, Button } = els
@@ -2806,6 +2817,7 @@ export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
   registerAsk(on, options.askNotify !== 'off')
+  const isGather = options.replyInBlocks !== 'off'
   slackNotify = options.slackNotify !== 'off'
   asanaToken = typeof options.asanaToken === 'string' ? options.asanaToken.trim() : ''
   asanaMe = null
@@ -3056,13 +3068,20 @@ export const register: Register = (on, options) => {
 
   // 에이전트 패널의 수치: 모델·컨텍스트 토큰(turn.step), 도구 수·하는 일(tool.call). 에이전트는 첫 턴(turn.start)에 엔진 목록으로 올린다.
   // agent.spawn 은 걸지 않는다: 디렉터리 검사가 그 훅을 권한 결정을 가져갈 수 있는 훅으로 보고 리뷰어에게 넘긴다.
+  // 메인 대화의 단계는 설정(replyInBlocks)이 켜져 있으면 글을 블록째 모아 내보낸다(gather.ts).
+  // 마지막 사람 입력이 앱(Remote Control)에서 왔으면 그대로 흘린다: 늦춘 스트림은 앱에도 덩어리로 가서,
+  // 받은 글을 고르게 풀어 그리는 앱의 흐름을 깬다(claude.ai/code 웹 실측). 단계(모델 요청)마다 다시 본다.
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
+    if (id === undefined) {
+      if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* next(e)
+      return yield* gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS), isOn => update($, gathering, () => isOn).catch(() => undefined))
+    }
     // 단계의 모델은 시작할 때 이미 정해져 있다. 단계를 붙잡지 않게 기다리지 않는다.
-    if (id !== undefined) void patchAgent($, id, () => ({ model: e.model })).catch(() => undefined)
+    void patchAgent($, id, () => ({ model: e.model })).catch(() => undefined)
     const response = yield* next(e)
     const used = response.usage
-    if (id !== undefined && used) {
+    if (used) {
       // 첫 단계의 모델 기록이 목록 다시 읽기와 엇갈려 빠졌으면 여기서 채운다
       await patchAgent($, id, agent => ({ tokens: stepTokens(used), model: agent.model ?? used.model }))
     }
@@ -3207,6 +3226,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') {
       return next(e)
     }
+    noteScreen(e.viewport)
     const els = $.ui.resolve(e)
     const face = await read($, surface)
     const columns = (e.viewport?.columns ?? 80) - 2
@@ -3267,6 +3287,7 @@ export const register: Register = (on, options) => {
   // 진행 표시: 데스크톱의 "··· Running… 2m 29s". 클레이색 점 셋이 돌고, 경과 시간은 흐리게.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
+    noteScreen(e.viewport)
     const { Text } = $.ui.resolve(e)
     const [now, startedAt] = await Promise.all([$.clock.now(), read($, turnStartedAt), read($, tick)])
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
@@ -3290,6 +3311,7 @@ export const register: Register = (on, options) => {
         <Text color={COLORS.clay}>{spinnerDots(now)}</Text>
         <Text color={COLORS.text}>{` ${spinnerWord(e.props.mode, e.props.message)}${e.props.suffix}`}</Text>
         <Text color={COLORS.muted}>{`  ${formatElapsed(elapsed)}`}</Text>
+        {gatheredLines() > 0 && <Text color={COLORS.muted}>{` · ${T.gathered(gatheredLines())}`}</Text>}
       </Text>
     )
   })
@@ -3348,7 +3370,8 @@ export const register: Register = (on, options) => {
     const agentState = agentsChip(els, $, await read($, agents))
     const notesState = commentsChip(els, $, await read($, lineComments))
     const slackState = slackChip(els, $, await read($, slack))
-    const extras = [notesState, agentState, slackState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
+    const gatherState = gatherChip(els, await read($, gathering))
+    const extras = [gatherState, notesState, agentState, slackState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
     const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
     const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
     // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).
