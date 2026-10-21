@@ -1196,9 +1196,16 @@ async function closeAsanaProject($: EngineInterface) {
 // 태스크 하나를 펼친다(같은 태스크를 다시 읽는 동안은 전 내용을 그대로 보인다).
 async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
   await update($, asanaView, (view): AsanaView => ({ gid, status: 'loading', task: view?.gid === gid ? view.task : null }))
-  const [got, me] = await Promise.all([callAsana($, server, taskCall(server, gid)), asanaMe === null ? callAsana($, server, meCall(server)) : null])
+  // 댓글 서식은 stories 에만 있다. v2 는 allow 규칙이 없으면 부르지 않고(기본 모드는 열 때마다 창) get_task 의 평문 댓글을 쓴다.
+  // v1 은 댓글이 stories 에만 있어 늘 부른다.
+  const storyCall = storiesCall(server, gid)
+  const canStory = server.dialect === 'v1' || !(await read($, asana))?.unruled.includes(`mcp__${server.name}__${storyCall.tool}`)
+  const [got, stories, me] = await Promise.all([
+    callAsana($, server, taskCall(server, gid)),
+    canStory ? callAsana($, server, storyCall) : null,
+    asanaMe === null ? callAsana($, server, meCall(server)) : null,
+  ])
   if (me?.ok) asanaMe = myGid(me.data)
-  const stories = got.ok && server.dialect === 'v1' ? await callAsana($, server, storiesCall(gid)) : null
   const task = got.ok ? toDetail(got.data, stories?.ok ? stories.data : undefined) : null
   const error = got.ok ? (task ? undefined : 'unexpected result') : got.error
   await update($, asanaView, (view): AsanaView | null => (view?.gid !== gid ? view : task ? { gid, status: 'ok', task } : { gid, status: 'failed', task: null, error }))
@@ -4605,6 +4612,9 @@ export const register: Register = (on, options) => {
                     onInput={value => (asanaEditDraft = value)}
                     onSubmit={value => void saveAsanaEdit($, server, task.gid, value)}
                   />
+                ) : typeof comment.richText === 'string' ? (
+                  // 0.49 가 열어 둔 상세(asanaView atom)의 댓글에는 richText 가 없다.
+                  comment.richText !== '' && renderMarkdown(comment.richText, els, COLORS, columns, { document: true })
                 ) : (
                   <Text color={COLORS.text}>{comment.text.trim()}</Text>
                 )}

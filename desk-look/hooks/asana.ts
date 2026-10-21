@@ -13,6 +13,7 @@ export const ASANA_TOOLS = {
     list: 'get_my_tasks',
     search: 'search_tasks',
     task: 'get_task',
+    stories: 'get_task_stories',
     comment: 'add_comment',
     update: 'update_tasks',
     users: 'search_objects',
@@ -96,9 +97,13 @@ export function taskCall(server: AsanaServer, gid: string): AsanaCall {
     : { tool: ASANA_TOOLS.v1.task, args: { task_id: gid, opt_fields: TASK_FIELDS } }
 }
 
-// v1 만: 댓글은 활동(story)에서 따로 읽는다. 정렬을 고를 수 없어 오래된 것부터 100개다.
-export function storiesCall(gid: string): AsanaCall {
-  return { tool: ASANA_TOOLS.v1.stories, args: { task_id: gid, limit: 100, opt_fields: 'text,created_at,created_by.name,created_by.gid,resource_subtype' } }
+// 댓글은 활동(story)에서 따로 읽는다. v2 get_task 의 댓글은 html_text 를 주지 않아(opt_fields 도 안 먹는다) 서식·멘션 이름이 없다.
+// v2 는 최근 것부터 COMMENT_LIMIT 개, v1 은 정렬을 고를 수 없어 오래된 것부터 100개다.
+const STORY_FIELDS = 'text,html_text,created_at,created_by.name,created_by.gid,resource_subtype'
+export function storiesCall(server: AsanaServer, gid: string): AsanaCall {
+  return server.dialect === 'v2'
+    ? { tool: ASANA_TOOLS.v2.stories, args: { task_id: gid, resource_subtype: 'comment_added', sort_ascending: false, limit: COMMENT_LIMIT, opt_fields: STORY_FIELDS } }
+    : { tool: ASANA_TOOLS.v1.stories, args: { task_id: gid, limit: 100, opt_fields: STORY_FIELDS } }
 }
 
 // 고른 사람이 글에 "@이름" 으로 남아 있으면 html_text 로 보낸다(<a data-asana-gid/> 가 멘션이 된다). 지웠으면 그냥 글.
@@ -613,7 +618,7 @@ type RawTask = {
   }>
   comments?: RawStory[]
 }
-type RawStory = { gid?: string; text?: string; created_at?: string; created_by?: Named; resource_subtype?: string }
+type RawStory = { gid?: string; text?: string; html_text?: string; created_at?: string; created_by?: Named; resource_subtype?: string }
 
 const str = (value: unknown) => (typeof value === 'string' ? value : null)
 const dataOf = (json: unknown) => (json as { data?: unknown } | null)?.data
@@ -674,15 +679,26 @@ export function toProjects(json: unknown, me: string | null): AsanaProject[] {
 function toComment(raw: RawStory): AsanaComment | null {
   if (typeof raw?.gid !== 'string' || typeof raw.text !== 'string') return null
   if (raw.resource_subtype !== undefined && raw.resource_subtype !== 'comment_added') return null
-  return { gid: raw.gid, author: str(raw.created_by?.name) ?? '?', authorGid: str(raw.created_by?.gid), at: str(raw.created_at) ?? '', text: raw.text }
+  return {
+    gid: raw.gid,
+    author: str(raw.created_by?.name) ?? '?',
+    authorGid: str(raw.created_by?.gid),
+    at: str(raw.created_at) ?? '',
+    text: raw.text,
+    richText: typeof raw.html_text === 'string' ? notesMarkdown(raw.html_text) : null,
+  }
 }
 
-// 상세: v2 는 get_task 에 댓글이 들어 있고, v1 은 활동 목록(stories)을 따로 받아 댓글만 고른다.
+// 상세: 댓글은 활동 목록(stories)에서 고른다. stories 를 못 읽으면 v2 get_task 에 든 평문 댓글을 쓴다.
 export function toDetail(json: unknown, stories?: unknown): AsanaDetail | null {
   const raw = dataOf(json) as RawTask | undefined
   if (!raw || typeof raw.gid !== 'string') return null
-  const storyList = stories === undefined ? raw.comments : dataOf(stories)
-  const comments = (Array.isArray(storyList) ? (storyList as RawStory[]) : []).map(toComment).filter((item): item is AsanaComment => item !== null)
+  const storyList = Array.isArray(dataOf(stories)) ? dataOf(stories) : raw.comments
+  // v2 stories 는 최근 것부터 온다. 오래된 것부터 읽히게.
+  const comments = (Array.isArray(storyList) ? (storyList as RawStory[]) : [])
+    .map(toComment)
+    .filter((item): item is AsanaComment => item !== null)
+    .sort((a, b) => a.at.localeCompare(b.at))
   const fields: AsanaField[] = (raw.custom_fields ?? [])
     .filter(field => typeof field?.gid === 'string' && typeof field.name === 'string')
     .map(field => {

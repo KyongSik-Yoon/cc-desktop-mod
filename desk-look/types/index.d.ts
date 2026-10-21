@@ -123,7 +123,15 @@ export type AsanaServer = { name: string; dialect: 'v2' | 'v1' }
 // assignee 는 검색 결과에만 있다(내 태스크 목록은 모두 나).
 // isDone: Asana 에서 완료(작업 유형의 보류·배포 대기 같은 상태도 완료일 수 있다). status 는 작업 유형의 상태 이름.
 export type AsanaTask = { gid: string; name: string; dueOn: string | null; project: string | null; section: string | null; url: string | null; assignee: string | null; isDone: boolean; status: string | null }
-export type AsanaComment = { gid: string; author: string; authorGid: string | null; at: string; text: string }
+export type AsanaComment = {
+  gid: string
+  author: string
+  authorGid: string | null
+  at: string
+  text: string
+  // html_text 를 옮긴 마크다운(notesMarkdown). stories 를 못 읽어 html_text 가 없으면 null 이고 text 평문을 그린다.
+  richText: string | null
+}
 // 드롭다운(enum) 필드만 options 가 있다(패널에서 바꿀 수 있는 것). 수식 필드는 바꾸지 않는다.
 export type AsanaField = { gid: string; name: string; value: string | null; options: Array<{ gid: string; name: string }> | null }
 export type AsanaDetail = {

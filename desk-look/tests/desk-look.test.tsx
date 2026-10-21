@@ -3639,7 +3639,7 @@ describe('diff 패널: 안 바뀐 줄 펴기·거르기·기준 고르기·파�
 })
 
 describe('Asana 패널', () => {
-  const V2 = ['get_my_tasks', 'search_tasks', 'get_task', 'add_comment', 'update_tasks', 'search_objects', 'get_me', 'get_projects', 'get_tasks'].map(tool => `mcp__asana-v2__${tool}`)
+  const V2 = ['get_my_tasks', 'search_tasks', 'get_task', 'get_task_stories', 'add_comment', 'update_tasks', 'search_objects', 'get_me', 'get_projects', 'get_tasks'].map(tool => `mcp__asana-v2__${tool}`)
   const V1 = [
     'asana_search_tasks',
     'asana_get_task',
@@ -3696,6 +3696,18 @@ describe('Asana 패널', () => {
       ],
     }
     expect(toDetail(task, stories)?.comments.map(c => c.text)).toEqual(['첫 댓글'])
+    // v2 stories 는 최근 것부터, html_text 를 서식으로. stories 가 목록이 아니면 get_task 의 평문 댓글
+    const latest = {
+      data: [
+        { gid: 'c3', text: 'https://app.asana.com/0/9/ 둘째', html_text: '<body><a href="https://app.asana.com/0/9/" data-asana-type="user">@Albert</a> 둘째<ul><li><strong>본문</strong>: <code>a=b</code></li></ul></body>', resource_subtype: 'comment_added', created_at: '2026-10-16T00:00:00Z' },
+        { gid: 'c2', text: '첫째', html_text: '<body>첫째</body>', resource_subtype: 'comment_added', created_at: '2026-10-15T00:00:00Z' },
+      ],
+    }
+    expect(toDetail(task, latest)?.comments.map(c => [c.gid, c.richText])).toEqual([
+      ['c2', '첫째'],
+      ['c3', '[@Albert](https://app.asana.com/0/9/) 둘째\n\n- **본문**: `a=b`'],
+    ])
+    expect(toDetail(task, { data: { gid: 'x' } })?.comments.map(c => [c.text, c.richText])).toEqual([['확인바랍니다', null]])
   })
 
   test('Asana 본문 html_notes 를 마크다운으로 옮겨 서식을 살린다', () => {
@@ -3797,6 +3809,8 @@ describe('Asana 패널', () => {
               comments: [{ gid: 'c1', text: '확인바랍니다', created_by: { name: 'Nomin' }, resource_subtype: 'comment_added' }],
             },
           })
+        case 'get_task_stories':
+          return text({ data: [{ gid: 'c1', text: '확인바랍니다', html_text: '<body>확인<strong>바랍니다</strong></body>', created_by: { name: 'Nomin' }, resource_subtype: 'comment_added' }] })
         case 'search_objects':
           return text({ data: [{ gid: 'u9', name: 'Nomin', email: 'nomin@example.com' }] })
         case 'update_tasks':
@@ -3823,7 +3837,9 @@ describe('Asana 패널', () => {
     drawn = JSON.stringify(await pane.drawn())
     expect(drawn).toContain('● Open')
     expect(drawn).toContain('운영 제약 확인')
-    expect(drawn).toContain('확인바랍니다')
+    // 댓글은 stories 의 html_text 를 서식으로
+    expect(calls.find(call => call.tool === 'get_task_stories')?.args).toMatchObject({ task_id: '1', resource_subtype: 'comment_added', sort_ascending: false })
+    expect(drawn).toContain('["확인",{"type":"Text","props":{"weight":"semibold"},"children":["바랍니다"]}]')
 
     await pane.press({ key: 'asana-claude' })
     expect(filled[0]).toContain('Asana 태스크 "JDK 25 문의"')
@@ -3937,7 +3953,7 @@ describe('Asana 패널', () => {
   const editMock = (
     on: On,
     fetched: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }>,
-    { tokenOwner = 'u1', toasts = [] as string[], storyHtml = (): string => '<body><a data-asana-gid="u9" data-asana-type="user">@Nomin</a> 확인</body>', putStatus = (): number => 200 } = {},
+    { tokenOwner = 'u1', toasts = [] as string[], storyHtml = (): string => '<body><a data-asana-gid="u9" data-asana-type="user">@Nomin</a> 확인</body>', putStatus = (): number => 200, tools = [] as string[] } = {},
   ) => {
     const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
     on('clock.now', () => ({ value: Date.parse('2026-10-16T03:00:00Z') }))
@@ -3948,6 +3964,7 @@ describe('Asana 패널', () => {
     })
     on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
     on('mcp.call', ($, e) => {
+      tools.push(e.tool)
       if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: 'JDK 25 문의', memberships: [] }] })
       if (e.tool === 'get_me') return text({ data: { gid: 'u1', name: 'Sam' } })
       return text({
@@ -3984,8 +4001,11 @@ describe('Asana 패널', () => {
 
   test('댓글 고치기: 토큰이 있으면 내 댓글만 ✎, REST 로 원문을 읽어 멘션을 지키며 고친다', { options: { language: 'ko', asanaToken: ' pat-1 ' } }, async ($, on) => {
     const fetched: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }> = []
-    editMock(on, fetched)
+    const tools: string[] = []
+    editMock(on, fetched, { tools })
     const pane = await openTask($)
+    // get_task_stories 에 allow 규칙이 없으면 부르지 않고 get_task 의 평문 댓글을 쓴다
+    expect(tools).not.toContain('get_task_stories')
     expect(await pane.find({ key: 'asana-edit-c1' })).toBeDefined()
     expect(await pane.find({ key: 'asana-edit-c2' })).toBeUndefined()
 
