@@ -590,11 +590,16 @@ export function parseDiff(text: string, isNew = false): FileDiff[] {
 // git 을 부르는 자리마다 명령 전체를 고정 글자로 쓴다(디렉터리 검사가 무엇을 실행하는지 끝까지 읽게). diff 는 늘
 // --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ 로 같은 모양을 받는다. 길이가 변하는 목록(경로·커밋)은 stdin 으로.
 
+// update 는 fn 이 같은 값을 돌려줘도 늘 써서 판을 올리고, 그 atom 을 읽는 그림을 모두 다시 그린다.
+// 다시 읽어 온 값은 먼저 read 로 견주고 바뀔 때만 쓴다(대기 중 테마를 3초마다 읽을 때 화면 전체를 다시 그리던 것).
+// 엔진 검사가 read·update 의 atom 을 호출 자리에서 찾아서 함수로 묶지 못한다.
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
 // 컨텍스트 칩의 숫자: 인자 없는 usage() 는 상태 줄의 값이라 공짜다. 턴이 끝날 때마다 다시 읽는다.
 async function refreshUsage($: EngineInterface) {
   const [raw, now] = await Promise.all([$.session.usage(), $.clock.now()])
   const next = toUsage(raw, now)
-  await update($, usage, previous => (JSON.stringify({ ...previous, at: 0 }) === JSON.stringify({ ...next, at: 0 }) ? previous : next))
+  if (!sameJson({ ...(await read($, usage)), at: 0 }, { ...next, at: 0 })) await update($, usage, () => next)
 }
 
 // 패널을 열 때만 항목별 내역을 계산한다. summary 는 로컬 추정이라 API 요청이 없다(full 은 도구마다 요청).
@@ -1755,7 +1760,7 @@ async function refreshSurface($: EngineInterface) {
   const next = toml === null ? null : parseSurface(toml)
   const [colorterm, tmux] = await Promise.all([$.env.get('COLORTERM').catch(() => undefined), $.env.get('TMUX').catch(() => undefined)])
   diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, isTruecolor({ COLORTERM: colorterm, TMUX: tmux })) : null
-  await update($, surface, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
+  if (!sameJson(await read($, surface), next)) await update($, surface, () => next)
 }
 
 // diff 색: 터미널 바탕(Omarchy 테마)을 알 때만. 모르면 엔진 diff 그대로(말풍선 등과 같은 규칙).
@@ -1787,7 +1792,7 @@ async function readHerdrConfig($: EngineInterface): Promise<string> {
 
 async function refreshImages($: EngineInterface) {
   const next = await listImages($).catch(() => ({}))
-  await update($, images, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
+  if (!sameJson(await read($, images), next)) await update($, images, () => next)
 }
 
 // 이 세션의 images 폴더(/tmp/claude-<uid>/<프로젝트>/<세션>/images). 찾으면 기억한다: 프롬프트마다 다시 훑지 않게.
@@ -1998,9 +2003,9 @@ async function copyText($: EngineInterface, text: string, press: UiPressArgument
 async function refreshRuns($: EngineInterface) {
   const messages = await $.session.messages()
   const next = computeRuns(messages)
-  await update($, runs, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
+  if (!sameJson(await read($, runs), next)) await update($, runs, () => next)
   const list = computeTasks(messages)
-  await update($, tasks, previous => (JSON.stringify(previous) === JSON.stringify(list) ? previous : list))
+  if (!sameJson(await read($, tasks), list)) await update($, tasks, () => list)
 }
 
 type Els = Elements['terminal']
@@ -2008,10 +2013,8 @@ type Els = Elements['terminal']
 // 에이전트 패널: 엔진 목록을 기록에 합친다. 끝난 에이전트는 목록에서 곧 빠지므로 기록이 남긴다.
 async function refreshAgents($: EngineInterface) {
   const [list, now] = await Promise.all([$.agent.list(), $.clock.now()])
-  await update($, agents, records => {
-    const next = mergeAgents(records, list, now)
-    return JSON.stringify(next) === JSON.stringify(records) ? records : next
-  })
+  const records = await read($, agents)
+  if (!sameJson(mergeAgents(records, list, now), records)) await update($, agents, records => mergeAgents(records, list, now))
   if (Object.values(await read($, agents)).some(agent => isLive(agent.status))) startAgentClock($)
 }
 
@@ -2069,7 +2072,7 @@ async function refreshAgentDetail($: EngineInterface) {
   }
   const found = await $.session.messages({ agentId: id })
   const next = Array.isArray(found) ? agentDetailOf(id, found) : null
-  await update($, agentDetail, previous => (JSON.stringify(previous) === JSON.stringify(next) ? previous : next))
+  if (!sameJson(await read($, agentDetail), next)) await update($, agentDetail, () => next)
 }
 
 async function openAgents($: EngineInterface, id: string | null = null) {
