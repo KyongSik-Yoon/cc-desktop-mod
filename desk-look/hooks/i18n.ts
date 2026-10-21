@@ -20,6 +20,8 @@ const ko = {
   commentPlaceholder: 'Claude 에게 바꿀 점 (다른 줄 번호를 누르면 범위)',
   commentSave: '담기',
   cancel: '취소',
+  // 여러 줄 입력칸 뒤 버튼: 쓴 글을 한 번에 비운다(엔진 칸의 ^U 는 한 줄씩만 지운다)
+  inputClear: '지우기',
   commentsSent: (count: number) => `줄 댓글 ${count}개를 같이 보냈어요`,
   // 에이전트 패널
   paneAgents: '백그라운드 작업',
@@ -382,6 +384,7 @@ const en: Strings = {
   commentPlaceholder: 'Tell Claude what to change (press another line number for a range)',
   commentSave: 'add',
   cancel: 'Cancel',
+  inputClear: 'Clear',
   commentsSent: (count: number) => `Sent ${count} line comment${count === 1 ? '' : 's'} with it`,
   paneAgents: 'Background tasks',
   cmdAgents: "Open this session's agents, background shells and monitors, like the desktop Background tasks (give a number for that task's details)",

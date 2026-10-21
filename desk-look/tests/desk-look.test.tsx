@@ -1128,7 +1128,8 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
     if (e.argv[0] === 'mktemp') return done('/tmp/ask-test\n')
     // 훅은 파이프를 cat 으로 읽으며 기다리고, 카드는 tee 로 답을 넣는다
     if (e.argv[0] === 'cat') return done(await waiting)
-    if (e.argv[0] === 'tee') {
+    // 카드를 건드리면(입력·지우기) touched 를 쓴다
+    if (e.argv[0] === 'tee' && e.argv[1] !== '/tmp/ask-test/touched') {
       expect(e.argv[1]).toBe('/tmp/ask-test/answer')
       answer(e.init?.stdin ?? '')
       return done('')
@@ -1152,6 +1153,14 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
   expect(await band.find({ type: 'Text', text: '어느 쪽?' })).toBeDefined()
   const key = /"key":"(ask-[^"]+-1)"/.exec(drawn)?.[1]
   expect(key).toBeDefined()
+  // 지우기: 직접 입력칸을 비운 칸을 새 키로 그린다
+  const text = /"key":"(ask-text-[^"]+)"/.exec(drawn)?.[1] ?? ''
+  await band.input({ key: text, text: '붙여 넣은\n긴 글', kind: 'change' })
+  const clear = /"key":"(ask-clear-[^"]+)"/.exec(drawn)?.[1] ?? ''
+  await band.press({ key: clear })
+  const cleared = JSON.stringify(await band.find({ type: 'Input' }))
+  expect(cleared).toContain('"value":""')
+  expect(cleared).not.toContain(`"key":"${text}"`)
   // 질문이 막 떠서 0.35초 동안은 숫자 키를 버리므로 기다렸다 누른다
   await wait(400)
   await band.press({ key: key ?? '' })
@@ -3281,7 +3290,14 @@ describe('데스크톱 모양 diff', () => {
     await pane.press({ key: line(4) })
     expect(await input()).toContain('11–12번 줄')
     expect(JSON.stringify(await pane.drawn())).toContain('"inverse":true')
+    // 지우기: 범위는 두고 쓴 글만 비운 칸을 새 키로 그린다(엔진 칸의 ^U 는 한 줄씩만 지운다)
+    const pasted = (await pane.find({ type: 'Input' })) as { key?: string } | undefined
+    await pane.input({ key: pasted?.key ?? '', text: '붙여 넣은\n긴 글', kind: 'change' })
+    await pane.press({ key: 'comment-clear' })
+    expect(await input()).toContain('11–12번 줄')
+    expect(await input()).toContain('"value":""')
     const typed = (await pane.find({ type: 'Input' })) as { key?: string } | undefined
+    expect(typed?.key).not.toBe(pasted?.key)
     await pane.input({ key: typed?.key ?? '', text: '  이름을 quantity 로 통일\n가격도  ' })
     expect(await pane.find({ type: 'Input' })).toBeUndefined()
     expect(JSON.stringify(await pane.drawn())).toContain('✎ 11–12')
@@ -3861,16 +3877,21 @@ describe('Asana 패널', () => {
     await wait(50)
     expect(calls.find(call => call.tool === 'add_comment')?.args).toEqual({ task_id: '1', text: '확인했습니다\n내일 답변' })
 
+    // 지우기: 쓴 글을 비운 칸을 새 키로 그린다
+    await pane.input({ key: 'asana-write-1-1', text: '붙여 넣은\n긴 글', kind: 'change' })
+    await pane.press({ key: 'asana-write-clear' })
+    expect(JSON.stringify(await pane.find({ key: 'asana-write-1-2' }))).toContain('"value":""')
+
     // 멘션: 찾은 사람을 누르면 댓글 칸에 "@이름 " 이 끼워지고, 보내면 html_text 의 <a data-asana-gid/> 가 된다
     await pane.press({ key: 'asana-mention' })
     await pane.input({ key: 'asana-mention-search', text: 'nom' })
     await wait(50)
     await pane.press({ key: 'asana-mention-u9' })
     drawn = JSON.stringify(await pane.drawn())
-    expect(drawn).toContain('asana-write-1-2')
+    expect(drawn).toContain('asana-write-1-3')
     expect(drawn).toContain('@Nomin ')
     expect(drawn).not.toContain('asana-mention-search')
-    await pane.input({ key: 'asana-write-1-2', text: '@Nomin 확인 <부탁>\n내일' })
+    await pane.input({ key: 'asana-write-1-3', text: '@Nomin 확인 <부탁>\n내일' })
     await wait(50)
     expect(calls.filter(call => call.tool === 'add_comment').at(-1)?.args).toEqual({ task_id: '1', html_text: '<body><a data-asana-gid="u9"/> 확인 &lt;부탁&gt;\n내일</body>' })
 
@@ -4030,7 +4051,11 @@ describe('Asana 패널', () => {
     expect(fetched[0]?.init?.headers?.Authorization).toBe('Bearer pat-1')
     expect(JSON.stringify(await pane.drawn())).toContain('asana-editing-c1')
 
-    await pane.input({ key: 'asana-editing-c1-0', text: '@Nomin 다시 확인' })
+    // 지우기: 원문을 비운 칸을 새 키로 그린다
+    await pane.press({ key: 'asana-edit-clear-c1' })
+    expect(JSON.stringify(await pane.find({ key: 'asana-editing-c1-1' }))).toContain('"value":""')
+
+    await pane.input({ key: 'asana-editing-c1-1', text: '@Nomin 다시 확인' })
     await wait(50)
     const put = fetched.find(call => call.init?.method === 'PUT')
     expect(put?.url).toBe('https://app.asana.com/api/1.0/stories/c1?opt_fields=text')
@@ -4628,6 +4653,10 @@ describe('Slack 패널', () => {
     await pane.input({ key: 'slack-write-D01-room-1', text: '확인해 볼게요\n잠시만요' })
     await wait(50)
     expect(calls.findLast(call => call.tool === 'slack_send_message')?.args).toEqual({ channel_id: 'D01', message: '확인해 볼게요\n잠시만요' })
+    // 지우기: 쓴 답장을 비운 칸을 새 키로 그린다
+    await pane.input({ key: 'slack-write-D01-room-2', text: '붙여 넣은\n긴 글', kind: 'change' })
+    await pane.press({ key: 'slack-clear' })
+    expect(JSON.stringify(await pane.find({ key: 'slack-write-D01-room-3' }))).toContain('"value":""')
 
     // 새 글이 스레드 답글이면 목록에서 방을 눌러도 그 스레드로 바로 연다(채널 기록에는 답글이 없다)
     inbox = search({ ...KEVIN, ts: '1792198500.000001', text: '스레드 새 글', thread: '1792131860.241069' })

@@ -149,6 +149,9 @@ const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | n
 const commentDraft = atom({ plugin: 'desk-look', key: 'commentDraft' } as const, null as CommentDraft | null)
 const lineComments = atom({ plugin: 'desk-look', key: 'lineComments' } as const, [] as LineComment[])
 let draftText = ''
+// 입력칸 키 차례: 지우기를 누르면 늘려 빈 칸을 새로 그린다.
+let draftRound = 0
+const draftInputKey = (draft: CommentDraft) => `${draftKey(draft)}-${draftRound}`
 // 패널마다 마지막 스크롤 위치(접을 때 적어 둔다)와, 다시 편 뒤 첫 스크롤에 되살릴 위치.
 const paneOffsets = new Map<string, number>()
 const restoreOffsets = new Map<string, number>()
@@ -203,7 +206,7 @@ let asanaMe: string | null = null
 let asanaTokenMe: string | null = null
 let asanaFindText = ''
 let asanaFindRound = 0
-// /desk-slack: 받은 편지(store 를 비춘 것)와 펼친 대화방. 답장 글은 Input 이 갖고, 보내면 키를 바꿔 비운다.
+// /desk-slack: 받은 편지(store 를 비춘 것)와 펼친 대화방. 답장 글은 Input 이 갖고, 보내거나 지우면 키를 바꿔 비운다.
 const slack = atom({ plugin: 'desk-look', key: 'slack' } as const, null as SlackState | null)
 const slackView = atom({ plugin: 'desk-look', key: 'slackView' } as const, null as SlackView | null)
 let slackDraft = ''
@@ -1042,7 +1045,18 @@ async function pickLine($: EngineInterface, at: LinePress) {
   await update($, commentDraft, () => next)
   if (!next) return
   await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
-  await $.ui.focus({ requestId: PANE, key: draftKey(next) }).catch(() => undefined)
+  await $.ui.focus({ requestId: PANE, key: draftInputKey(next) }).catch(() => undefined)
+}
+
+// 지우기: 범위는 두고 쓴 글만 비운 칸을 새로 그려 그리로 돌아간다.
+async function clearComment($: EngineInterface) {
+  draftText = ''
+  draftRound++
+  const draft = await read($, commentDraft)
+  await update($, commentDraft, current => (current ? { ...current } : current))
+  if (!draft) return
+  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await $.ui.focus({ requestId: PANE, key: draftInputKey(draft) }).catch(() => undefined)
 }
 
 async function cancelComment($: EngineInterface) {
@@ -1273,6 +1287,16 @@ async function postAsanaComment($: EngineInterface, server: AsanaServer, gid: st
   await openAsanaTask($, server, gid)
 }
 
+// 지우기: 쓴 글과 끼운 멘션을 비운 칸을 새로 그려 그리로 돌아간다.
+async function clearAsanaDraft($: EngineInterface, gid: string) {
+  asanaDraft = ''
+  asanaMentions = []
+  asanaWriteRound++
+  await update($, asanaView, view => (view ? { ...view } : view))
+  await $.ui.open({ id: ASANA_PANE, title: 'Asana', focus: true })
+  await $.ui.focus({ requestId: ASANA_PANE, key: `asana-write-${gid}-${asanaWriteRound}` }).catch(() => undefined)
+}
+
 // Asana REST(댓글 고치기·상태 바꾸기만). 토큰은 헤더로만 보내고 오류 글에도 싣지 않는다. 엔진이 거절해도 오류 글로.
 async function asanaRest($: EngineInterface, path: string, init: { method?: string; body?: unknown } = {}): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
   const headers = { Authorization: `Bearer ${asanaToken}`, Accept: 'application/json', ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }) }
@@ -1336,10 +1360,12 @@ async function saveAsanaEdit($: EngineInterface, server: AsanaServer, task: stri
   await openAsanaTask($, server, task)
 }
 
-async function keepAsanaEdit($: EngineInterface, comment: string, value: string) {
+// 거절·실패한 글을 다시 그리거나(Enter 뒤라 칸이 키를 갖고 있다) 지우기로 비운 칸을 그린다(버튼을 눌렀으니 패널을 다시 연다).
+async function keepAsanaEdit($: EngineInterface, comment: string, value: string, isPressed = false) {
   asanaEditDraft = value
   asanaEditRound++
   await update($, asanaEdit, (shown): AsanaEdit | null => (shown?.comment !== comment ? shown : { ...shown, status: 'ready' }))
+  if (isPressed) await $.ui.open({ id: ASANA_PANE, title: 'Asana', focus: true })
   await $.ui.focus({ requestId: ASANA_PANE, key: `asana-editing-${comment}-${asanaEditRound}` }).catch(() => undefined)
 }
 
@@ -1542,6 +1568,14 @@ async function openSlackRoom($: EngineInterface, server: SlackServer, channel: s
 async function closeSlackView($: EngineInterface) {
   slackDraft = ''
   await update($, slackView, () => null)
+}
+
+async function clearSlackDraft($: EngineInterface, channel: string, thread: string | null) {
+  slackDraft = ''
+  slackSent++
+  await update($, slackView, view => (view ? { ...view } : view))
+  await $.ui.open({ id: SLACK_PANE, title: 'Slack', focus: true })
+  await $.ui.focus({ requestId: SLACK_PANE, key: `slack-write-${channel}-${thread ?? 'room'}-${slackSent}` }).catch(() => undefined)
 }
 
 async function sendSlack($: EngineInterface, server: SlackServer, channel: string, thread: string | null, value: string) {
@@ -3369,6 +3403,7 @@ export const register: Register = (on, options) => {
     const [info, list] = await Promise.all([read($, repo), read($, tasks)])
     const els = $.ui.resolve(e)
     const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
+    askBand = e.requestId
     const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
     const meter = contextMeter(els, $, await read($, usage), chipMode)
     const prState = showPr ? prChip(els, $, await read($, pr)) : null
@@ -4220,7 +4255,7 @@ export const register: Register = (on, options) => {
             <Box key={key} height={COMMENT_ROWS} paddingLeft={pad} columnGap={1}>
               <Box flexGrow={1} flexShrink={1} overflow="hidden">
                 <Input
-                  key={draftKey(picked)}
+                  key={draftInputKey(picked)}
                   label={T.commentLabel(rangeLabel(lines))}
                   placeholder={T.commentPlaceholder}
                   rows={COMMENT_ROWS}
@@ -4230,6 +4265,7 @@ export const register: Register = (on, options) => {
                   onSubmit={value => void saveComment($, picked, lines, value).catch(() => undefined)}
                 />
               </Box>
+              <Button key="comment-clear" plain dimColor label={T.inputClear} onPress={() => void clearComment($)} />
               <Button key="comment-cancel" plain dimColor label={T.cancel} onPress={() => void cancelComment($)} />
             </Box>
           ),
@@ -4366,7 +4402,10 @@ export const register: Register = (on, options) => {
             onInput={value => (slackDraft = value)}
             onSubmit={value => void sendSlack($, server, view.channel, view.thread, value)}
           />
-          <Box>{back('slack-back-end')}</Box>
+          <Box columnGap={2}>
+            {back('slack-back-end')}
+            <Button key="slack-clear" plain dimColor label={T.inputClear} onPress={() => void clearSlackDraft($, view.channel, view.thread)} />
+          </Box>
         </Box>
       )
     }
@@ -4630,15 +4669,20 @@ export const register: Register = (on, options) => {
                   )}
                 </Box>
                 {editing?.comment === comment.gid && editing.story !== null ? (
-                  <Input
-                    key={`asana-editing-${comment.gid}-${asanaEditRound}`}
-                    label={T.asanaEditLabel}
-                    rows={Math.min(12, Math.max(COMMENT_ROWS, editing.story.text.split('\n').length + 1))}
-                    value={asanaEditDraft}
-                    submitLabel={editing.status === 'saving' ? '…' : T.asanaEditSave}
-                    onInput={value => (asanaEditDraft = value)}
-                    onSubmit={value => void saveAsanaEdit($, server, task.gid, value)}
-                  />
+                  <Box flexDirection="column">
+                    <Input
+                      key={`asana-editing-${comment.gid}-${asanaEditRound}`}
+                      label={T.asanaEditLabel}
+                      rows={Math.min(12, Math.max(COMMENT_ROWS, editing.story.text.split('\n').length + 1))}
+                      value={asanaEditDraft}
+                      submitLabel={editing.status === 'saving' ? '…' : T.asanaEditSave}
+                      onInput={value => (asanaEditDraft = value)}
+                      onSubmit={value => void saveAsanaEdit($, server, task.gid, value)}
+                    />
+                    <Box>
+                      <Button key={`asana-edit-clear-${comment.gid}`} plain dimColor label={T.inputClear} onPress={() => void keepAsanaEdit($, comment.gid, '', true)} />
+                    </Box>
+                  </Box>
                 ) : typeof comment.richText === 'string' ? (
                   // 0.49 가 열어 둔 상세(asanaView atom)의 댓글에는 richText 가 없다.
                   comment.richText !== '' && renderMarkdown(comment.richText, els, COLORS, columns, { document: true })
@@ -4658,8 +4702,9 @@ export const register: Register = (on, options) => {
               onInput={value => (asanaDraft = value)}
               onSubmit={value => void postAsanaComment($, server, task.gid, value)}
             />
-            <Box>
+            <Box columnGap={2}>
               <Button key="asana-mention" plain dimColor label={isMentioning ? T.cancel : T.asanaMention} onPress={() => void toggleAsanaFinder($, 'mention')} />
+              <Button key="asana-write-clear" plain dimColor label={T.inputClear} onPress={() => void clearAsanaDraft($, task.gid)} />
             </Box>
             {isMentioning && finder('asana-mention-search', found?.status === 'ok' ? found.users.map(mentionRow) : [])}
           </Box>
@@ -5120,6 +5165,19 @@ export function askMode(question: Parameters<typeof askRows>[0], room: number, t
   return { mode: 'inline', rows: 2 }
 }
 
+// 질문 카드 입력칸의 키 차례와 카드를 그린 띠의 id: 지우기를 누르면 빈 칸을 새로 그려 그리로 돌아간다.
+let askClearRound = 0
+let askBand: string | null = null
+
+async function clearAskText($: EngineInterface, state: AskState) {
+  touchAsk($, state.dir)
+  askClearRound++
+  await update($, asking, current =>
+    current && current.id === state.id ? { ...current, texts: current.texts.map((item, index) => (index === current.step ? '' : item)) } : current,
+  )
+  if (askBand) await $.ui.focus({ requestId: askBand, key: `ask-text-${state.id}-${state.step}-${askClearRound}` }).catch(() => undefined)
+}
+
 async function askCard($: EngineInterface, els: Elements['terminal'], columns: number, room: number) {
   const { Box, Text, Button, Input } = els
   const state = await read($, asking)
@@ -5287,7 +5345,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
       )}
       <Box marginTop={1}>
         <Input
-          key={`ask-text-${k}`}
+          key={`ask-text-${k}-${askClearRound}`}
           label={question.kind === 'choice' ? 'Other' : T.answerLabel(unit)}
           placeholder={question.placeholder ?? (question.kind === 'number' ? T.numberPlaceholder : T.otherPlaceholder)}
           rows={textRows}
@@ -5301,6 +5359,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
         {question.multiSelect && (
           <Button key={`ask-next-${k}`} hotkey="0" label={isLast ? T.submit : T.nextArrow} onPress={() => void advanceAsk($, state, picks, text)} />
         )}
+        {question.kind !== 'number' && <Button key={`ask-clear-${k}`} plain dimColor label={T.inputClear} onPress={() => void clearAskText($, state)} />}
         <Button key={`ask-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyAsk($, state.dir, { kind: 'engine' })} />
         <Button key={`ask-close-${k}`} plain dimColor label={T.close} onPress={() => void replyAsk($, state.dir, { kind: 'dismiss' })} />
       </Box>
