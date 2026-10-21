@@ -232,7 +232,7 @@ Run `/desk-update` at the prompt, or from a shell:
 claude plugin update desk-look
 ```
 
-Then run `/reload-plugins` in your session.
+`/desk-update` runs `/reload-plugins` for you when a new version came in; after the shell command, run it in your session.
 
 ## Behavior by environment
 

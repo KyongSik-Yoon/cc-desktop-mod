@@ -220,6 +220,8 @@ const folded = atom({ plugin: 'desk-look', key: 'folded' } as const, null as Fol
 const SPINNER_TICK = 500
 // 답 글 블록째 보여주기: 마지막 블록을 내보낸 뒤 턴을 끝내기 전에 기다리는 시간(엔진의 글 묶음 100ms 보다 길게).
 const GATHER_SETTLE_MS = 150
+// /desk-update 가 답한 뒤 /reload-plugins 를 부르기까지(답 줄이 먼저 찍히게).
+const RELOAD_AFTER_MS = 300
 let ticker: Timer | null = null
 const THEME_POLL = 3000
 let themeWatch: Timer | null = null
@@ -245,13 +247,22 @@ export function mergeEdit(list: TurnEdit[], edit: TurnEdit): TurnEdit[] {
 const lastLine = (text: string) => text.trim().split('\n').pop() ?? ''
 
 // `claude plugin update --json` 의 결과 한 줄을 사람에게 보일 문장으로.
-export function updateMessage(exitCode: number, stdout: string, stderr: string): string {
-  let result: { outcome?: string; updateOutcome?: string; oldVersion?: string; newVersion?: string; message?: string } | null = null
+function updateResult(stdout: string): { outcome?: string; updateOutcome?: string; oldVersion?: string; newVersion?: string; message?: string } | null {
   try {
-    result = JSON.parse(lastLine(stdout))
+    return JSON.parse(lastLine(stdout))
   } catch {
-    result = null
+    return null
   }
+}
+
+// 새 버전을 받았는지: 그때만 플러그인을 다시 불러온다.
+export function isUpdated(exitCode: number, stdout: string): boolean {
+  const result = updateResult(stdout)
+  return exitCode === 0 && result?.outcome === 'ok' && result.updateOutcome !== 'up_to_date'
+}
+
+export function updateMessage(exitCode: number, stdout: string, stderr: string): string {
+  const result = updateResult(stdout)
   if (exitCode !== 0 || result?.outcome !== 'ok') return T.updateFailed(result?.message ?? lastLine(stderr || stdout))
   if (result.updateOutcome === 'up_to_date') return T.updateLatest(result.newVersion ?? '')
   return T.updateDone(result.oldVersion ?? '', result.newVersion ?? '')
@@ -3001,12 +3012,16 @@ export const register: Register = (on, options) => {
     return { text: T.sessionsOpened }
   })
 
-  // 마켓 목록을 새로 받고 desk-look 을 올린다. 플러그인이 스스로 다시 불러올 길은 없어 /reload-plugins 는 사람이 한다.
+  // 마켓 목록을 새로 받고 desk-look 을 올린다. 올라갔으면 /reload-plugins 도 대신 실행한다: 명령 훅 안에서 부르면
+  // 이 훅이 잡은 턴을 기다리게 돼 엔진이 거절해서, 훅이 답한 뒤(clock.after)에 부른다.
   on('command.run', { command: 'desk-update' }, async $ => {
     // 이 플러그인(desk-look@cc-desktop-mod, 마켓플레이스 저장소 이름 그대로). 명령은 고정 글자로.
     const market = await $.process.run(['claude', 'plugin', 'marketplace', 'update', 'cc-desktop-mod'], { timeoutMs: 150_000 })
     if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
     const ran = await $.process.run(['claude', 'plugin', 'update', 'desk-look@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    if (isUpdated(ran.exitCode, ran.stdout)) {
+      $.clock.after(RELOAD_AFTER_MS, () => void $.command.run({ command: 'reload-plugins' }).catch(() => $.ui.toast(T.reloadFailed)))
+    }
     return { text: updateMessage(ran.exitCode, ran.stdout, ran.stderr) }
   })
 

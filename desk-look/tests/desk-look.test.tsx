@@ -1526,7 +1526,7 @@ test('에이전트 메시지는 줄 전체가 버튼', KO, async ($, on) => {
   await row.unmount()
 })
 
-import { clipStart, matchDiffFile, splitCommitDiffs, updateMessage } from '../hooks/register'
+import { clipStart, isUpdated, matchDiffFile, splitCommitDiffs, updateMessage } from '../hooks/register'
 
 test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', KO, () => {
   const files = [{ path: 'a.txt' }, { path: 'src/a.txt' }, { path: 'b.txt' }]
@@ -1846,13 +1846,25 @@ test('/desk-update: 마켓 목록을 새로 받고 desk-look 을 올린다', KO,
       ? ok('{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.15.4","newVersion":"0.15.5"}\n')
       : ok('✔ Successfully updated marketplace: cc-desktop-mod\n')) as never
   })
+  // 올라갔으면 답한 뒤 /reload-plugins 를 대신 실행한다
+  let fire = () => {}
+  on('clock.after', () => new Promise(resolve => (fire = () => resolve({ value: undefined }))) as never)
+  const commands: string[] = []
+  on('command.run', ($, e: { command: string }) => (commands.push(e.command), { text: '' }) as never)
   const done = await $.command.run({ command: 'desk-update', args: '' } as never)
   expect(ran).toEqual(['claude plugin marketplace update cc-desktop-mod', 'claude plugin update desk-look@cc-desktop-mod --json'])
-  expect((done as { text: string }).text).toBe('desk-look 을 0.15.4 → 0.15.5 로 올렸어요. /reload-plugins 로 적용하세요.')
+  expect((done as { text: string }).text).toBe('desk-look 을 0.15.4 → 0.15.5 로 올렸어요. 플러그인을 다시 불러와 적용해요.')
+  expect(commands).toEqual([])
+  fire()
+  await wait(20)
+  expect(commands).toEqual(['reload-plugins'])
 })
 
-test('/desk-update 결과 문장: 최신, 실패', KO, () => {
+test('/desk-update 결과 문장: 최신, 실패(이때는 다시 불러오지 않는다)', KO, () => {
   setLang('ko')
+  expect(isUpdated(0, '{"outcome":"ok","updateOutcome":"updated","oldVersion":"0.15.4","newVersion":"0.15.5"}')).toBe(true)
+  expect(isUpdated(0, '{"outcome":"ok","updateOutcome":"up_to_date","oldVersion":"0.15.5","newVersion":"0.15.5"}')).toBe(false)
+  expect(isUpdated(1, '{"outcome":"error","message":"Plugin not found"}')).toBe(false)
   expect(updateMessage(0, '{"outcome":"ok","updateOutcome":"up_to_date","oldVersion":"0.15.5","newVersion":"0.15.5"}', '')).toBe('desk-look 은 이미 최신(0.15.5)이에요.')
   expect(updateMessage(1, '{"outcome":"error","message":"Plugin not found"}', '')).toBe('desk-look 을 올리지 못했어요: Plugin not found')
   expect(updateMessage(1, '', 'network down\n')).toBe('desk-look 을 올리지 못했어요: network down')

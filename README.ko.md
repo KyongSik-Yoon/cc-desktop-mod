@@ -232,7 +232,7 @@ Claude Code 터미널 세션의 프롬프트에서:
 claude plugin update desk-look
 ```
 
-그다음 세션에서 `/reload-plugins` 를 실행합니다.
+`/desk-update` 는 새 버전을 받았으면 `/reload-plugins` 까지 대신 실행합니다. 셸 명령으로 올렸으면 세션에서 `/reload-plugins` 를 실행합니다.
 
 ## 환경별 동작
 
