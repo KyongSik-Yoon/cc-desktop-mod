@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, UiPressArgument } from 'claude-code'
+import type { Chunk, Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
 
 import type { AgentDetail, AgentRecord, AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
@@ -8,7 +8,8 @@ import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth,
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
 import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
 import type { LinePress } from './comments'
-import { agentOf, computeRuns, isAgentTool, isPlanTool, planOf } from './runs'
+import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withPredicted } from './runs'
+import type { PredictedCall, RunCursor } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
@@ -228,6 +229,12 @@ const THEME_POLL = 3000
 let themeWatch: Timer | null = null
 let spinnerSeen = 0
 let spinnerFallbackStart = 0
+
+// 스트림이 막 엔진에 넘긴 도구 호출: 기록(session.append)에 나오기 전까지 묶음에 미리 넣어 둔다.
+let runCursor: RunCursor = null
+let predicted: PredictedCall[] = []
+// 엔진이 백그라운드 안내("(ctrl+b to run in background)")를 띄운 호출과 그 글. 스피너 줄 끝에 단다.
+const backgroundHints = new Map<string, string>()
 
 const FILE_EDITING = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
 const CARD_ROWS = 3
@@ -1898,6 +1905,9 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
   void readInbox($)
     .then(inbox => update($, slack, (state): SlackState => state ?? { status: 'loading', server: null, unruled: [], inbox }))
     .catch(() => undefined)
+  // 다른 세션의 예측이 섞이지 않게 비우고 다시 읽는다.
+  runCursor = null
+  predicted = []
   void refreshRuns($).catch(() => undefined)
   void refreshImages($).catch(() => undefined)
   void refreshAgents($).catch(() => undefined)
@@ -2036,10 +2046,47 @@ async function copyText($: EngineInterface, text: string, press: UiPressArgument
 
 async function refreshRuns($: EngineInterface) {
   const messages = await $.session.messages()
-  const next = computeRuns(messages)
+  // 이 읽기보다 늦게 스트림에서 온 호출은 아직 기록에 없다: 지우지 않고 예측 자리에 둔다.
+  const computed = computeRuns(messages)
+  predicted = predicted.filter(item => computed.firstOf[item.call.tool_use_id] === undefined)
+  const next = withPredicted(computed, predicted)
   if (!sameJson(await read($, runs), next)) await update($, runs, () => next)
   const list = computeTasks(messages)
   if (!sameJson(await read($, tasks), list)) await update($, tasks, () => list)
+}
+
+type StepChunk = Chunk<'turn.step'>
+
+// 도구 청크를 엔진에 넘기기 전에 그 호출을 묶음에 넣는다. 엔진은 청크를 받자마자 행을 그리는데, 묶음은
+// session.append 뒤 기록을 다시 읽어야 채워져서, 그 사이 새 호출이 제 줄을 따로 그렸다가 윗줄 묶음으로
+// 합쳐지며 대화가 한 줄씩 오르내렸다.
+async function* placeCalls(
+  $: EngineInterface,
+  stream: { next(): Promise<IteratorResult<StepChunk, TurnStepResult>> },
+): AsyncGenerator<StepChunk, TurnStepResult> {
+  while (true) {
+    const step = await stream.next()
+    if (step.done === true) return step.value
+    const chunk = step.value
+    if (chunk.kind === 'text' && chunk.text.trim() !== '') runCursor = null
+    if (chunk.kind === 'tool') {
+      const placed = placeCall(runCursor, chunk.id, chunk.name)
+      runCursor = placed.cursor
+      const call: RunCall = { tool_use_id: chunk.id, tool: chunk.name, input: {}, isRunning: true, isErrored: false, isInterrupted: false }
+      predicted = [...predicted, { first: placed.first, call }]
+      await update($, runs, state => withPredicted(state, predicted)).catch(() => undefined)
+    }
+    yield chunk
+  }
+}
+
+// 백그라운드 안내를 띄운 호출 중 아직 도는 것의 안내 글. 없으면 null.
+function backgroundHintOf(state: Runs): string | null {
+  for (const [id, hint] of backgroundHints) {
+    const call = state.calls[state.firstOf[id] ?? '']?.find(item => item.tool_use_id === id)
+    if (call?.isRunning) return hint.replace(/^\((.*)\)$/, '$1')
+  }
+  return null
 }
 
 type Els = Elements['terminal']
@@ -2946,6 +2993,8 @@ export const register: Register = (on, options) => {
   // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다(타이머를 기다리지 않게).
   on('prompt.submit', async ($, e, next) => {
     void refreshSurface($).catch(() => undefined)
+    // 턴 도중에 끼어든 프롬프트도 열린 도구 묶음을 닫는다(computeRuns 가 프롬프트에서 끊듯이)
+    runCursor = null
     // 사람이 어디서 입력했는지: 질문 카드가 Remote Control 세션에서 카드를 띄울지 고른다(ask.tsx)
     const origin = e.origin.kind
     if (origin === 'composer' || origin === 'bridge') await update($, promptOrigin, () => origin).catch(() => undefined)
@@ -2998,6 +3047,10 @@ export const register: Register = (on, options) => {
     await update($, previewWritten, () => null)
     const now = await $.clock.now()
     await update($, turnStartedAt, () => now)
+    // 프롬프트가 열린 묶음을 닫는다. 끝내 기록에 오르지 못한 예측(중단된 스트림)도 여기서 버린다.
+    runCursor = null
+    predicted = []
+    backgroundHints.clear()
     return next(e)
   })
 
@@ -3118,8 +3171,8 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
     if (id === undefined) {
-      if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* next(e)
-      return yield* gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS))
+      if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* placeCalls($, next(e))
+      return yield* placeCalls($, gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS)))
     }
     // 단계의 모델은 시작할 때 이미 정해져 있다. 단계를 붙잡지 않게 기다리지 않는다.
     void patchAgent($, id, () => ({ model: e.model })).catch(() => undefined)
@@ -3348,14 +3401,26 @@ export const register: Register = (on, options) => {
       })
     }
     const elapsed = now - (startedAt ?? spinnerFallbackStart)
+    const hint = backgroundHintOf(await read($, runs))
+    // 한 줄을 넘지 않게 자른다: 줄이 접혀 늘면 그 위 대화가 밀려 오르내린다.
     return (
-      <Text>
+      <Text wrap="truncate-end">
         <Text color={COLORS.clay}>{spinnerDots(now)}</Text>
         <Text color={COLORS.text}>{` ${spinnerWord(e.props.mode, e.props.message)}${e.props.suffix}`}</Text>
         <Text color={COLORS.muted}>{`  ${formatElapsed(elapsed)}`}</Text>
         {gatheredLines() > 0 && <Text color={COLORS.muted}>{` · ${T.gathered(gatheredLines())}`}</Text>}
+        {hint !== null && <Text color={COLORS.muted}>{` · ${hint}`}</Text>}
       </Text>
     )
+  })
+
+  // 긴 명령 아래 잠깐 생기는 백그라운드 안내 줄은 생겼다 사라지며 대화를 한 줄씩 밀어 올렸다 내렸다.
+  // 그 줄은 비우고, 같은 안내를 늘 있는 스피너 줄 끝에 단다.
+  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || e.props.kind !== 'background_hint') return next(e)
+    backgroundHints.set(e.props.tool_use_id, e.props.hint)
+    const { Box } = $.ui.resolve(e)
+    return <Box display="none" />
   })
 
   // 모드 라벨(focus, memory paused …): 흐린 글자 대신 데스크톱 입력창의 알약 칩으로.

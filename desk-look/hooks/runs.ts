@@ -166,3 +166,29 @@ export function computeRuns(messages: ReadonlyArray<SessionMessage>): Runs {
   }
   return { firstOf, calls }
 }
+
+// 스트림에서 막 온 도구 호출이 들어갈 묶음. computeRuns 와 같은 규칙: 열린 묶음과 종류가 같으면 이어 붙고,
+// 아니면(계획은 늘) 새 묶음을 연다. 답 글이나 프롬프트가 끼면 부르는 쪽이 cursor 를 null 로 닫는다.
+export type RunCursor = { first: string; kind: RunKind } | null
+
+export function placeCall(cursor: RunCursor, id: string, tool: string): { first: string; cursor: RunCursor } {
+  const kind = kindOf(tool)
+  const first = cursor !== null && cursor.kind === kind && kind !== 'plan' ? cursor.first : id
+  return { first, cursor: { first, kind } }
+}
+
+export type PredictedCall = { first: string; call: RunCall }
+
+// 기록에 아직 없는 예측 호출을 묶음에 덧붙인다. 기록에 나온 호출은 기록이 정한 자리를 따른다.
+export function withPredicted(runs: Runs, predicted: ReadonlyArray<PredictedCall>): Runs {
+  const missing = predicted.filter(item => runs.firstOf[item.call.tool_use_id] === undefined)
+  if (missing.length === 0) return runs
+  const firstOf = { ...runs.firstOf }
+  const calls = { ...runs.calls }
+  for (const { first, call } of missing) {
+    const head = firstOf[first] ?? first
+    firstOf[call.tool_use_id] = head
+    calls[head] = [...(calls[head] ?? []), call]
+  }
+  return { firstOf, calls }
+}

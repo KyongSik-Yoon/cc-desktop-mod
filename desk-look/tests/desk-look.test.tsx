@@ -414,7 +414,8 @@ test('순수 함수', KO, async () => {
   expect(files[0]).toEqual({ path: 'src/x.ts', added: 2, removed: 1, patch: '@@ -1 +1,2 @@\n-old\n+new\n+more', isNew: false })
 })
 
-import { computeRuns } from '../hooks/runs'
+import { computeRuns, placeCall, withPredicted } from '../hooks/runs'
+import type { PredictedCall, RunCursor } from '../hooks/runs'
 import { mix, parseSurface } from '../hooks/theme'
 
 describe('v3: 테마 면과 도구 묶음', () => {
@@ -447,6 +448,37 @@ describe('v3: 테마 면과 도구 묶음', () => {
       ['b', true, false],
       ['c', false, true],
     ])
+  })
+
+  test('스트림에서 미리 넣은 호출은 기록으로 계산한 묶음과 같은 자리에 든다', KO, async () => {
+    const use = (id: string, tool: string) => ({ tool_use_id: id, tool, input: {} })
+    const messages = [
+      { role: 'user' as const, text: '해 줘', toolUses: [] },
+      { role: 'assistant' as const, text: '볼게요.', toolUses: [] },
+      { role: 'assistant' as const, text: '', toolUses: [use('a', 'Bash')] },
+      { role: 'assistant' as const, text: '', toolUses: [use('b', 'Read'), use('c', 'Agent'), use('e', 'Agent')] },
+      { role: 'assistant' as const, text: '', toolUses: [use('p', 'ExitPlanMode'), use('q', 'Bash')] },
+      { role: 'assistant' as const, text: '고쳤어요.', toolUses: [] },
+      { role: 'assistant' as const, text: '', toolUses: [use('d', 'Bash')] },
+    ]
+    // 스트림 순서대로: 글이 오면 열린 묶음을 닫고, 도구가 오면 자리를 정한다
+    let cursor: RunCursor = null
+    const predicted: PredictedCall[] = []
+    for (const message of messages.slice(1)) {
+      if (message.text.trim() !== '') cursor = null
+      for (const tool of message.toolUses) {
+        const placed = placeCall(cursor, tool.tool_use_id, tool.tool)
+        cursor = placed.cursor
+        predicted.push({ first: placed.first, call: { tool_use_id: tool.tool_use_id, tool: tool.tool, input: {}, isRunning: true, isErrored: false, isInterrupted: false } })
+      }
+    }
+    const recorded = computeRuns(messages)
+    expect(withPredicted(computeRuns(messages.slice(0, 1)), predicted).firstOf).toEqual(recorded.firstOf)
+    // 기록 읽기가 마지막 호출보다 늦으면 그 호출은 예측 자리로 남고, 기록에 나온 호출은 기록을 따른다
+    const partial = withPredicted(computeRuns(messages.slice(0, 3)), predicted)
+    expect(partial.firstOf).toEqual(recorded.firstOf)
+    expect(partial.calls.a?.map(call => call.tool_use_id)).toEqual(['a', 'b'])
+    expect(withPredicted(recorded, predicted)).toBe(recorded)
   })
 
   test('묶음의 첫 행은 묶음 한 줄, 나머지 행은 비운다', KO, async () => {
