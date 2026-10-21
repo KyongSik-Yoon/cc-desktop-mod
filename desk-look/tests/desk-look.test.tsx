@@ -7,6 +7,7 @@ import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElaps
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
+import { previewHtml } from '../hooks/preview-html'
 import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls, mentionHtml, nextOffset, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackText, tsCompare, unreadCount } from '../hooks/slack'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
@@ -2888,9 +2889,9 @@ test('agent.spawn 없이 시작한 에이전트(포크된 스킬)도 활동이 �
 })
 
 // 미리보기 패널: 파일은 /repo 아래에 두고, 쓰기·편집은 files 에 남긴다.
-const docWorld = (on: On, files: Record<string, string>) => {
+const docWorld = (on: On, files: Record<string, string>, run: typeof gitStub = gitStub) => {
   const opened: { id: string; title?: string }[] = []
-  on('process.run', gitStub as never)
+  on('process.run', run as never)
   on('clock.now', () => ({ value: 0 }))
   on('fs.read', ($, e) => {
     const text = files[(e as { path: string }).path]
@@ -2955,6 +2956,61 @@ describe('미리보기 패널', () => {
     await $.tool.call({ tool: 'Write', file_path: '/home/me/.claude/plans/p.md', content: '# plan' } as never)
     await $.turn.complete({ durationMs: 2000, reason: 'answer', answer: '썼어요', turnId: 't2' } as never)
     expect(opened).toHaveLength(2)
+    await pane.unmount()
+  })
+
+  test('브라우저용 HTML: 패널과 같은 구조, 글은 이스케이프, 위험한 링크는 글자만', KO, async () => {
+    const html = previewHtml(
+      [DOC, '', '> [!WARNING]', '> 조심', '', '```mermaid', 'graph TD; A-->B', '```', '', '[나쁜](javascript:void0) [좋은](docs/a.md) <b>태그</b>', '', '와! ![패널 사진](docs/p.png)', '', '|왼|오|', '|:-|-:|', '|1|2|'].join('\n'),
+      '/repo/my docs/NOTES.md',
+    )
+    expect(html).toContain('<base href="file:///repo/my%20docs/">')
+    expect(html).toContain('<title>NOTES.md</title>')
+    expect(html).toContain('<dt>status</dt><dd>draft</dd>')
+    expect(html).toContain('<h1>0.23.0</h1>')
+    expect(html).toContain('<div class="alert warning"><p class="alert-title">⚠ Warning</p><p>조심</p></div>')
+    expect(html).toContain('<pre class="mermaid">graph TD; A--&gt;B</pre>')
+    expect(html).toContain('mermaid@11.4.1')
+    expect(html).toContain('나쁜 <a href="docs/a.md">좋은</a> &lt;b&gt;태그&lt;/b&gt;')
+    expect(html).not.toContain('javascript:')
+    expect(html).toContain('<p>와! <img src="docs/p.png" alt="패널 사진"></p>')
+    expect(html).toContain('<td style="text-align:right">2</td>')
+    expect(previewHtml('# 그림 없음', '/r/a.md')).not.toContain('<script')
+  })
+
+  test('o: 문서를 엔진 임시 폴더에 HTML 로 쓰고 xdg-open 으로, 없으면 open 으로 연다', KO, async ($, on) => {
+    const runs: string[][] = []
+    const toasts: string[] = []
+    const files: Record<string, string> = { '/repo/NOTES.md': DOC }
+    const hasXdg = { value: true }
+    docWorld(on, files, ($, e) => {
+      const argv = (e as { argv: string[] }).argv
+      if (argv[0] === 'id') return { value: { exitCode: 0, stdout: '1000\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      if (argv[0] !== 'xdg-open' && argv[0] !== 'open') return gitStub($, e)
+      runs.push(argv)
+      if (argv[0] === 'xdg-open' && !hasXdg.value) throw new Error('ENOENT: xdg-open')
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    on('fs.write', ($, e) => {
+      const call = e as { path: string; text: string }
+      files[call.path] = call.text
+      return { value: undefined } as never
+    })
+    on('ui.toast', ($, e) => {
+      toasts.push((e as { text: string }).text)
+      return { value: undefined } as never
+    })
+    await $.tool.call({ tool: 'Write', file_path: '/repo/NOTES.md', content: DOC } as never)
+    await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '썼어요', turnId: 't1' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-preview', viewport: VIEWPORT, props: { title: 'NOTES.md', isFocused: false, bodyColumns: 70 } as never })
+    const page = '/tmp/claude-1000/desk-look/NOTES.html'
+    await pane.press({ key: 'preview-browser' })
+    expect(files[page]).toContain('<h1>0.23.0</h1>')
+    expect(runs).toEqual([['xdg-open', page]])
+    expect(toasts).toEqual([`브라우저로 열었어요: ${page}`])
+    hasXdg.value = false
+    await pane.press({ key: 'preview-browser' })
+    expect(runs.slice(1)).toEqual([['xdg-open', page], ['open', page]])
     await pane.unmount()
   })
 

@@ -82,6 +82,7 @@ import {
   unreadCount,
 } from './slack'
 import type { SlackCall } from './slack'
+import { previewHtml } from './preview-html'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
 
 export { cellWidth } from './markdown'
@@ -752,6 +753,23 @@ async function openPreview($: EngineInterface, path: string, focus = false) {
   const file = await loadPreview($, path)
   const opened = await $.ui.open({ id: PREVIEW_PANE, title: fileName(file.path), ...(focus ? { focus: true as const } : {}) })
   return { file, isPlaced: opened.isPlaced }
+}
+
+// o: 미리보기 문서를 브라우저 창으로. 패널은 터미널의 45%를 넘지 못해 창 전체로 보려면 바깥 창이 필요하다.
+// 엔진 임시 폴더에 HTML 을 쓰고 엔진이 브라우저를 여는 것처럼 xdg-open(없으면 macOS 의 open)으로 연다.
+async function openPreviewInBrowser($: EngineInterface, file: PreviewFile) {
+  const root = await findTempRoot($)
+  if (root === null) return $.ui.toast(T.browserFailed('id -u'))
+  const page = `${root}/desk-look/${fileName(file.path).replace(/\.[^.]+$/, '')}.html`
+  await $.fs.write(page, previewHtml(file.text, file.path))
+  const failed = (error: unknown) => ({ exitCode: 1, stderr: error instanceof Error ? error.message : String(error) })
+  let ran: { exitCode: number; stderr: string }
+  try {
+    ran = await $.process.run(['xdg-open', page], { timeoutMs: 10_000 })
+  } catch {
+    ran = await $.process.run(['open', page], { timeoutMs: 10_000 }).catch(failed)
+  }
+  $.ui.toast(ran.exitCode === 0 ? T.browserOpened(page) : T.browserFailed(ran.stderr.trim() || `exit ${ran.exitCode}`))
 }
 
 // 보고 있는 문서인지. 열 때 실제 경로로 바꿔 뒀으니 다른 모양의 경로도 실제 경로로 견준다.
@@ -1768,14 +1786,19 @@ async function imagePng($: EngineInterface, path: string): Promise<string | null
   return imageBytes.get(path) ?? null
 }
 
-async function findImagesDir($: EngineInterface): Promise<string | null> {
-  if (imagesDir !== null) return imagesDir
+// 엔진의 임시 폴더 /tmp/claude-<uid>. uid 를 모르면 null.
+async function findTempRoot($: EngineInterface): Promise<string | null> {
   if (userId === null) {
     const ran = await $.process.run(['id', '-u'], { timeoutMs: 3000 })
     userId = ran.exitCode === 0 ? ran.stdout.trim() : ''
   }
-  if (userId === '') return null
-  const root = `/tmp/claude-${userId}`
+  return userId === '' ? null : `/tmp/claude-${userId}`
+}
+
+async function findImagesDir($: EngineInterface): Promise<string | null> {
+  if (imagesDir !== null) return imagesDir
+  const root = await findTempRoot($)
+  if (root === null) return null
   const sessionId = await $.session.id()
   for (const project of await $.fs.list(root).catch(() => [])) {
     if (project.kind !== 'dir') continue
@@ -3718,6 +3741,7 @@ export const register: Register = (on, options) => {
           <Box columnGap={2} flexShrink={0}>
             <Button key="preview-reload" plain dimColor hotkey="r" label={T.previewReload} onPress={() => void loadPreview($, file.path).catch(() => undefined)} />
             <Button key="preview-changes" plain dimColor hotkey="d" label={T.previewChanges} onPress={() => void openDiffAt($, file.path).catch(() => undefined)} />
+            {file.error === undefined && <Button key="preview-browser" plain dimColor hotkey="o" label={T.previewBrowser} onPress={() => void openPreviewInBrowser($, file).catch(() => undefined)} />}
           </Box>
         </Box>
         <Text color={COLORS.border}>{'─'.repeat(Math.max(4, columns - 1))}</Text>

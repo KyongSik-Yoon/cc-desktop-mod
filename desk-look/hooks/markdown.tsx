@@ -17,7 +17,7 @@ export type Palette = {
   accent: string
 }
 
-type Inline =
+export type Inline =
   | { kind: 'text'; text: string }
   | { kind: 'code'; text: string }
   | { kind: 'bold' | 'italic' | 'strike'; children: Inline[] }
@@ -310,9 +310,9 @@ export function columnWidths(natural: number[], room: number, fill = false): num
 
 type Els = Elements['terminal']
 
-const ALERT = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*\n?/i
+export const ALERT = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*\n?/i
 
-const ALERTS: Record<string, { title: string; color: string }> = {
+export const ALERTS: Record<string, { title: string; color: string }> = {
   NOTE: { title: 'ⓘ Note', color: 'suggestion' },
   TIP: { title: '✓ Tip', color: 'success' },
   IMPORTANT: { title: '! Important', color: 'claude' },

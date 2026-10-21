@@ -168,7 +168,7 @@ The DMs and group DMs other people sent you, kept as conversations like the Slac
 - Draws a Markdown document with the transcript's own renderer: bordered tables, mermaid diagrams, alert boxes, code blocks with `⧉ copy`. Headings are set apart (`#` in the accent color, `#` and `##` underlined), and YAML front matter becomes a small key/value box at the top
 - Opens three ways: the `◫ preview` chip at the end of a tool line that wrote or edited a `.md` file (a folded group line names the file, `◫ NOTES.md`), the `◫` next to a `.md` row in the end-of-turn card, and `/desk-preview <file>` (no file reopens the last one)
 - A document Claude writes in a turn opens by itself when the turn ends, not while it is still being written. Files under a `.claude/` folder (memory, plans, skills) never open by themselves; `previewAutoOpen` turns this off
-- Follows the document: later writes and edits reload it. `r` reloads by hand, `d` opens the document in the diff pane
+- Follows the document: later writes and edits reload it. `r` reloads by hand, `d` opens the document in the diff pane, `o` opens it full-window in your default browser (the dock can't grow past 45% of the terminal). The page is written to a temporary folder (`/tmp/claude-<uid>/desk-look/`), relative images and links resolve against the document's folder, and mermaid diagrams render when online
 - Claude can open it too (the `preview` tool), for example when asked to show a README
 - Documents over 90,000 characters are drawn up to that point, with a note. The desktop app keeps its own Markdown
 
