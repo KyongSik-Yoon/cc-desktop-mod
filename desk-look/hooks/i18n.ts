@@ -363,7 +363,6 @@ const ko = {
   askTitle: 'Claude 질문',
   // 답 글 블록째 보여주기: 붙잡고 있는 글
   gathered: (lines: number) => `${lines}줄 모으는 중`,
-  gatheringRest: '⋯ 나머지를 모으는 중',
 }
 
 export type Strings = typeof ko
@@ -717,7 +716,6 @@ const en: Strings = {
   moreQuestions: (first, more) => `${first} (+${more} more)`,
   askTitle: 'Claude question',
   gathered: lines => `${lines} line${lines === 1 ? '' : 's'} gathered`,
-  gatheringRest: '⋯ gathering the rest',
 }
 
 export const T: Strings = { ...en }

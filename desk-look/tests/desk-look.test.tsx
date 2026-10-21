@@ -4711,65 +4711,33 @@ test('붙여넣은 글은 칩 한 줄, 누르면 펼침', KO, async $ => {
   await row.unmount()
 })
 
-import { earlyCut, gather, splitHeld, textRows } from '../hooks/gather'
+import { gather, gatheredLines } from '../hooks/gather'
 
 describe('답 글 블록째 보여주기(replyInBlocks)', () => {
-  const SCREEN = { rows: 40, columns: 100 }
   const paragraphs = (count: number) => Array.from({ length: count }, (_, index) => `문단 ${index}`).join('\n\n')
-  const head = (text: string) => text.slice(0, earlyCut(text, SCREEN))
 
-  test('화면 몫(60%)을 넘기 전에는 먼저 내보내지 않는다', () => {
-    expect(textRows(paragraphs(12), SCREEN.columns)).toBe(23)
-    expect(earlyCut(paragraphs(12), SCREEN)).toBe(0)
-  })
-
-  test('넘으면 몫 안의 마지막 문단 경계까지 내보낸다', () => {
-    expect(head(`${paragraphs(13)}\n\n끝나지 않은`)).toBe(`${paragraphs(12)}\n\n`)
-  })
-
-  test('빈 줄이 없으면 줄 경계에서, 표 행 사이는 피해서 자른다', () => {
-    const items = Array.from({ length: 30 }, (_, index) => `${index + 1}. 항목`)
-    expect(head(`${items.join('\n')}\n`)).toBe(`${items.slice(0, 24).join('\n')}\n`)
-    const lines = Array.from({ length: 20 }, (_, index) => `줄 ${index}`)
-    const table = Array.from({ length: 10 }, () => '| a | b |')
-    expect(head([...lines, ...table, '꼬리', ''].join('\n'))).toBe(`${lines.join('\n')}\n`)
-  })
-
-  test('한 줄이 몫보다 길면 그 줄 끝에서 자른다', () => {
-    const long = 'x'.repeat(5000)
-    expect(head(`${long}\ny\nz`)).toBe(`${long}\n`)
-  })
-
-  test('경계에 걸친 글 청크는 둘로 쪼갠다', () => {
-    const held = [
-      { kind: 'text', index: 0, text: 'ab', ref: 1 },
-      { kind: 'engine', ref: 2 },
-      { kind: 'text', index: 0, text: 'cd', ref: 3 },
-    ] as const
-    expect(splitHeld(held as never, 3)).toEqual([
-      [held[0], held[1], { kind: 'text', index: 0, text: 'c', ref: 3 }],
-      [{ kind: 'text', index: 0, text: 'd' }],
-    ] as never)
-  })
-
-  test('블록 일부를 먼저 내보내면 나머지를 내보낼 때까지 "모으는 중"을 켜 둔다', async () => {
+  test('붙잡는 동안 모은 줄 수를 세고, 내보내면 0', async () => {
+    let open = () => {}
+    const gate = new Promise<void>(resolve => (open = resolve))
     async function* source() {
-      yield { kind: 'text', index: 0, text: `${paragraphs(13)}\n\n` }
-      yield { kind: 'text', index: 0, text: '남은\n글' }
+      yield { kind: 'text', index: 0, text: '첫 줄\n둘째' }
+      yield { kind: 'text', index: 0, text: ' 줄\n셋째 줄' }
+      await gate
       yield { kind: 'stop', stopReason: 'end_turn', usage: null }
       return {}
     }
-    const marks: boolean[] = []
     const settled: number[] = []
-    const stream = gather(source() as never, async () => void settled.push(marks.length), async isOn => marks.push(isOn))
-    // 먼저 내보낸 글이 나간 뒤에 켠다
-    expect((await stream.next()).value).toEqual({ kind: 'text', index: 0, text: `${paragraphs(12)}\n\n` })
-    expect(marks).toEqual([])
+    const stream = gather(source() as never, async () => void settled.push(gatheredLines()))
+    const first = stream.next()
+    await wait(20)
+    expect(gatheredLines()).toBe(3)
+    open()
+    expect((await first).value).toEqual({ kind: 'text', index: 0, text: '첫 줄\n둘째' })
     let step = await stream.next()
     while (step.done !== true) step = await stream.next()
-    // 끝: 표시를 끄고, 마지막 글을 내보낸 뒤 멈춤 전에 한 번 기다린다
-    expect(marks).toEqual([true, false])
-    expect(settled).toEqual([2])
+    // 마지막 글을 내보낸 뒤(이미 0) 멈춤 전에 한 번 기다린다
+    expect(settled).toEqual([0])
+    expect(gatheredLines()).toBe(0)
   })
 
   // 아래(엔진)가 단계마다 내놓는 청크: 글 블록 하나, 도구 호출 하나, 멈춤.
@@ -4852,26 +4820,26 @@ describe('답 글 블록째 보여주기(replyInBlocks)', () => {
     expect(await firstSeenAt()).toBe(3)
   })
 
-  // 붙잡은 줄 수를 보이는 스피너는 실제 세션에서 본다: 테스트 사슬은 단계 스트림이 끝날 때까지 그리기를 미룬다.
-  test('긴 블록은 몫만큼 먼저 내보내고 나머지는 블록 끝까지 붙잡는다', { options: { language: 'ko', replyInBlocks: 'on' } }, async ($, on) => {
+  // 화면보다 긴 블록도 먼저 잘라 내보내지 않는다(0.51 의 화면 몫 선출력은 걷었다)
+  test('긴 블록도 끝까지 붙잡았다가 한 번에 내보낸다', { options: { language: 'ko', replyInBlocks: 'on' } }, async ($, on) => {
     let open = () => {}
     const gate = new Promise<void>(resolve => (open = resolve))
+    const long = `${paragraphs(40)}\n\n`
     on('clock.sleep', () => ({ value: undefined }))
     on('turn.step', async function* () {
-      yield { kind: 'text', index: 0, text: `${paragraphs(13)}\n\n` } as never
+      yield { kind: 'text', index: 0, text: long } as never
       yield { kind: 'text', index: 0, text: '이어지는\n글' } as never
       await gate
       yield { kind: 'stop', stopReason: 'end_turn', usage: null } as never
-      return { ...RESULT, answer: `${paragraphs(13)}\n\n이어지는\n글`, stopReason: 'end_turn' } as never
+      return { ...RESULT, answer: `${long}이어지는\n글`, stopReason: 'end_turn' } as never
     })
     const stream = $.turn.step({ turnId: 't', index: 0, model: 'claude-haiku-5-5', messageCount: 1 } as never)
-    expect((await stream.next()).value).toEqual({ kind: 'text', index: 0, text: `${paragraphs(12)}\n\n` })
     let released = false
-    const pending = stream.next().then(step => ((released = true), step))
+    const first = stream.next().then(step => ((released = true), step))
     await wait(20)
     expect(released).toBe(false)
     open()
-    expect((await pending).value).toEqual({ kind: 'text', index: 0, text: '문단 12\n\n' })
+    expect((await first).value).toEqual({ kind: 'text', index: 0, text: long })
     expect((await stream.next()).value).toEqual({ kind: 'text', index: 0, text: '이어지는\n글' })
     expect((await stream.next()).value).toEqual({ kind: 'stop', stopReason: 'end_turn', usage: null })
     expect((await stream.next()).done).toBe(true)

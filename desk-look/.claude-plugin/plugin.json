@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.52.0",
+  "version": "0.53.0",
   "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, Asana tasks, Slack DMs, diff, context, background tasks and Markdown preview panes",
   "keywords": [
     "claude-code",
@@ -104,7 +104,7 @@
     "replyInBlocks": {
       "type": "string",
       "title": "Replies by block",
-      "description": "Hold Claude's reply text until a block (the text between tool calls) is complete and show it at once, instead of streaming it a few lines at a time. A block taller than about 60% of the screen comes out a screenful at a time at a paragraph or line break, so its start stays on screen. When your last prompt came from the Claude app (Remote Control), the reply streams as usual, since the app receives the same stream. off streams as Claude Code does",
+      "description": "Hold Claude's reply text until a block (the text between tool calls) is complete and show it at once, instead of streaming it a few lines at a time. A block taller than the screen comes out whole too, so scroll up to read its start. When your last prompt came from the Claude app (Remote Control), the reply streams as usual, since the app receives the same stream. off streams as Claude Code does",
       "options": [
         "on",
         "off"

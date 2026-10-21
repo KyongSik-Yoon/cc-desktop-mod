@@ -13,7 +13,7 @@ import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgent
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
-import { gather, gatheredLines, noteScreen } from './gather'
+import { gather, gatheredLines } from './gather'
 import { computeTasks, visibleTasks } from './tasks'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
@@ -141,8 +141,6 @@ const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskSta
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
-// 답 글 블록째 보여주기: 블록 일부를 먼저 내보내고 나머지를 붙잡는 동안 true(띠에 "모으는 중").
-const gathering = atom({ plugin: 'desk-look', key: 'gathering' } as const, false)
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
@@ -2183,12 +2181,6 @@ function slackChip(els: Els, $: EngineInterface, state: SlackState | null) {
 }
 
 // 아래턱의 "✎ 2": 다음 프롬프트에 같이 갈 줄 댓글 수(데스크톱 입력창의 Comment 카드). 누르면 diff 패널.
-// 답 글을 블록째 보여주는 중 나머지를 붙잡고 있다는 표시. 엔진은 글이 보이는 동안 스피너를 걷는다.
-function gatherChip(els: Els, isOn: boolean) {
-  if (!isOn) return null
-  return { width: cellWidth(T.gatheringRest), node: <els.Text color={COLORS.muted}>{T.gatheringRest}</els.Text> }
-}
-
 function commentsChip(els: Els, $: EngineInterface, list: LineComment[]) {
   if (list.length === 0) return null
   const { Text, Button } = els
@@ -3090,7 +3082,7 @@ export const register: Register = (on, options) => {
     const id = e.agentId
     if (id === undefined) {
       if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* next(e)
-      return yield* gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS), isOn => update($, gathering, () => isOn).catch(() => undefined))
+      return yield* gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS))
     }
     // 단계의 모델은 시작할 때 이미 정해져 있다. 단계를 붙잡지 않게 기다리지 않는다.
     void patchAgent($, id, () => ({ model: e.model })).catch(() => undefined)
@@ -3241,7 +3233,6 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') {
       return next(e)
     }
-    noteScreen(e.viewport)
     const els = $.ui.resolve(e)
     const face = await read($, surface)
     const columns = (e.viewport?.columns ?? 80) - 2
@@ -3302,7 +3293,6 @@ export const register: Register = (on, options) => {
   // 진행 표시: 데스크톱의 "··· Running… 2m 29s". 클레이색 점 셋이 돌고, 경과 시간은 흐리게.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
-    noteScreen(e.viewport)
     const { Text } = $.ui.resolve(e)
     const [now, startedAt] = await Promise.all([$.clock.now(), read($, turnStartedAt), read($, tick)])
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
@@ -3385,8 +3375,7 @@ export const register: Register = (on, options) => {
     const agentState = agentsChip(els, $, await read($, agents))
     const notesState = commentsChip(els, $, await read($, lineComments))
     const slackState = slackChip(els, $, await read($, slack))
-    const gatherState = gatherChip(els, await read($, gathering))
-    const extras = [gatherState, notesState, agentState, slackState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
+    const extras = [notesState, agentState, slackState, prState, meter].filter((chip): chip is NonNullable<typeof chip> => chip !== null)
     const reserve = extras.reduce((sum, chip) => sum + chip.width + 1, 0)
     const repoChin = info === null ? null : await chinBand($, els, info, e.props.bodyColumns - reserve)
     // PR·컨텍스트 칩은 아래턱 알약 오른쪽 바깥에(버튼에는 색을 줄 수 없어 알약 안에 넣지 않는다).

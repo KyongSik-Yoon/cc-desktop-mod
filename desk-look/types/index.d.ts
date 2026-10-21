@@ -270,8 +270,6 @@ declare module 'claude-code' {
       turnStartedAt: number | null
       // 스피너를 다시 그리게 하는 시계(ms).
       tick: number
-      // 답 글 블록째 보여주기: 블록 일부를 먼저 내보내고 나머지를 붙잡는 동안 true(띠에 "모으는 중").
-      gathering: boolean
       // 지금의 할 일 목록.
       tasks: TaskItem[]
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
