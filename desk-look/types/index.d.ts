@@ -235,14 +235,16 @@ declare module 'claude-code' {
       previewWritten: string | null
     }
     // 같은 마켓의 desk-asana·desk-slack 이 쓰는 값 가운데 desk-look 이 읽는 것(그쪽 types 와 같은 모양).
-    // folded: /desk-fold 로 접어 둔 자기 패널, ready: 이 세션에 떠 있음, unread: 안 읽은 Slack 메시지 수.
+    // folded: /desk-fold 로 접어 둔 자기 패널, ready: 이 세션에 떠 있음, shown: 자기 패널이 열려 있음, unread: 안 읽은 Slack 메시지 수.
     'desk-asana': {
       folded: FoldedPane[] | null
       ready: boolean
+      shown: boolean
     }
     'desk-slack': {
       folded: FoldedPane[] | null
       ready: boolean
+      shown: boolean
       unread: number
     }
   }

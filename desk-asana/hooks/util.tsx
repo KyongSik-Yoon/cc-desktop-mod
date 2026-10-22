@@ -1,7 +1,8 @@
 import type { Elements, EngineInterface, TextHoverProps, UiPressArgument } from 'claude-code'
 import { T } from './i18n'
 
-// desk-look 에서 함께 쓰던 작은 도우미를 그대로 옮겨 온 것(desk-asana 에도 같은 파일이 있다).
+// desk-look 에서 함께 쓰던 작은 도우미를 그대로 옮겨 온 것. 원본은 desk-slack/hooks/util.tsx 이고
+// scripts/sync-shared.sh 가 desk-asana 로 복사한다(cellWidth 는 desk-look markdown.tsx 와 같아야 한다).
 // 플러그인은 자기 디렉터리만 설치되므로 desk-look 의 파일을 가져올 수 없다.
 
 // 데스크톱 앱 CDS 토큰의 역할을 엔진 테마 키에 대응시킨다(desk-look 과 같은 색).

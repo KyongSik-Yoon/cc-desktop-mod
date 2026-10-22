@@ -60,6 +60,8 @@ const open = atom({ plugin: 'desk-asana', key: 'open' } as const, {} as Record<s
 // desk-look 이 읽는 값: 이 세션에 떠 있음(옮김 안내), /desk-fold 로 접어 둔 패널.
 const ready = atom({ plugin: 'desk-asana', key: 'ready' } as const, false)
 const folded = atom({ plugin: 'desk-asana', key: 'folded' } as const, null as FoldedPane[] | null)
+// 이 플러그인의 패널이 지금 열려 있는지(ui.open·ui.close 훅이 맞춘다). desk-look 의 /desk-fold 가 접을지 펼지 고른다.
+const shown = atom({ plugin: 'desk-asana', key: 'shown' } as const, false)
 let asanaDraft = ''
 let asanaQuery = ''
 // 댓글 칸의 키 차례: 보낸 뒤나 멘션을 끼운 뒤 새 value 로 다시 그린다. 끼운 사람은 보낼 때 "@이름" 이 남은 것만 멘션.
@@ -444,7 +446,10 @@ async function followFold($: EngineInterface, isFolding: boolean) {
   if (isFolding) {
     const panes = (await $.ui.panes()).filter(pane => pane.isPlaced)
     if (panes.length === 0) return
-    await update($, folded, () => panes.map(pane => ({ id: pane.id, title: pane.title, isShown: pane.isShown, offset: 0 })))
+    // 이미 접어 둔 것이 있으면 새로 접는 것을 더한다(desk-look 의 toggleFold 와 같다).
+    const saved = await read($, folded)
+    const fresh = panes.map(pane => ({ id: pane.id, title: pane.title, isShown: pane.isShown, offset: 0 }))
+    await update($, folded, () => [...(saved ?? []).filter(pane => !fresh.some(item => item.id === pane.id)), ...fresh])
     for (const pane of panes) await $.ui.close({ id: pane.id }).catch(() => undefined)
     return
   }
@@ -494,6 +499,19 @@ export const register: Register = (on, options) => {
     await followFold($, e.value !== null).catch(() => undefined)
     return done
   }).catch(($, e, next) => next(e))
+
+  // 패널이 열려 있는지 desk-look 에 알린다. 사람이 ✕ 로 닫아도, 플러그인을 내려도 ui.close 가 온다.
+  on('ui.open', { id: ASANA_PANE }, async ($, e, next) => {
+    const opened = await next(e)
+    if (opened.value?.isPlaced) await update($, shown, () => true).catch(() => undefined)
+    return opened
+  })
+
+  on('ui.close', { id: ASANA_PANE }, async ($, e, next) => {
+    const done = await next(e)
+    await update($, shown, () => false).catch(() => undefined)
+    return done
+  })
 
   on('command.run', { command: 'desk-asana' }, async $ => {
     await openAsana($)

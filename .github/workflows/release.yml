@@ -11,9 +11,14 @@ on:
       - desk-look/.claude-plugin/plugin.json
       - desk-asana/.claude-plugin/plugin.json
       - desk-slack/.claude-plugin/plugin.json
+      # scripts/sync-shared.sh --check 가 맞추는 복사본과 그 원본
       - desk-look/hooks/markdown.tsx
       - desk-look/hooks/diagram.ts
+      - desk-look/hooks/vendor/**
       - desk-asana/hooks/shared/**
+      - desk-asana/hooks/util.tsx
+      - desk-slack/hooks/util.tsx
+      - scripts/sync-shared.sh
       - .github/release-notes/**
   workflow_dispatch:
 
