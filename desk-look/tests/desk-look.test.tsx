@@ -3728,7 +3728,7 @@ describe('Asana 패널', () => {
     const task = {
       data: {
         gid: '1',
-        name: 'JDK 25',
+        name: 'API 25',
         notes: '본문',
         completed: false,
         assignee: { gid: 'u1', name: 'Sam' },
@@ -3737,16 +3737,16 @@ describe('Asana 패널', () => {
         custom_type: { status_options: [{ gid: 's1', name: 'Open' }, { gid: 's2', name: 'Done' }, { gid: 's3', name: '옛 상태', enabled: false }] },
         custom_fields: [
           { gid: 'f1', name: 'Issue Type', type: 'enum', display_value: '질문', enum_options: [{ gid: 'o1', name: '질문' }, { gid: 'o2', name: '옛것', enabled: false }] },
-          { gid: 'f2', name: '고객사', type: 'text', display_value: 'NH' },
+          { gid: 'f2', name: '고객사', type: 'text', display_value: 'ACME' },
         ],
-        comments: [{ gid: 'c1', text: '확인바랍니다', created_at: '2026-10-14T07:33:47Z', created_by: { name: 'Nomin' }, resource_subtype: 'comment_added' }],
+        comments: [{ gid: 'c1', text: '확인바랍니다', created_at: '2026-10-14T07:33:47Z', created_by: { name: 'Alex' }, resource_subtype: 'comment_added' }],
       },
     }
     const v2 = toDetail(task)
     expect(v2?.status).toBe('Open')
     expect(v2?.statuses).toEqual([{ gid: 's1', name: 'Open' }, { gid: 's2', name: 'Done' }])
     expect(v2?.places).toEqual(['Support › 이슈'])
-    expect(v2?.comments.map(c => c.author)).toEqual(['Nomin'])
+    expect(v2?.comments.map(c => c.author)).toEqual(['Alex'])
     expect(v2?.fields[0]?.options).toEqual([{ gid: 'o1', name: '질문' }])
     expect(v2?.fields[1]?.options).toBeNull()
     const stories = {
@@ -3853,7 +3853,7 @@ describe('Asana 패널', () => {
         case 'get_my_tasks':
           return text({
             data: [
-              { gid: '1', name: 'JDK 25 문의', due_on: '2026-10-10', memberships: [{ project: { name: 'Support' } }] },
+              { gid: '1', name: 'API 25 문의', due_on: '2026-10-10', memberships: [{ project: { name: 'Support' } }] },
               { gid: '2', name: '혼자 하는 일', due_on: null, memberships: [] },
             ],
           })
@@ -3861,18 +3861,18 @@ describe('Asana 패널', () => {
           return text({
             data: {
               gid: '1',
-              name: 'JDK 25 문의',
+              name: 'API 25 문의',
               notes: '운영 제약 확인',
               assignee: { gid: 'u1', name: 'Sam' },
               custom_type_status_option: { name: 'Open' },
               permalink_url: 'https://app.asana.com/x/1',
-              comments: [{ gid: 'c1', text: '확인바랍니다', created_by: { name: 'Nomin' }, resource_subtype: 'comment_added' }],
+              comments: [{ gid: 'c1', text: '확인바랍니다', created_by: { name: 'Alex' }, resource_subtype: 'comment_added' }],
             },
           })
         case 'get_task_stories':
-          return text({ data: [{ gid: 'c1', text: '확인바랍니다', html_text: '<body>확인<strong>바랍니다</strong></body>', created_by: { name: 'Nomin' }, resource_subtype: 'comment_added' }] })
+          return text({ data: [{ gid: 'c1', text: '확인바랍니다', html_text: '<body>확인<strong>바랍니다</strong></body>', created_by: { name: 'Alex' }, resource_subtype: 'comment_added' }] })
         case 'search_objects':
-          return text({ data: [{ gid: 'u9', name: 'Nomin', email: 'nomin@example.com' }] })
+          return text({ data: [{ gid: 'u9', name: 'Alex', email: 'alex@example.com' }] })
         case 'update_tasks':
           return text({ data: [{ gid: '1' }], failed: [] })
         default:
@@ -3902,8 +3902,8 @@ describe('Asana 패널', () => {
     expect(drawn).toContain('["확인",{"type":"Text","props":{"weight":"semibold"},"children":["바랍니다"]}]')
 
     await pane.press({ key: 'asana-claude' })
-    expect(filled[0]).toContain('Asana 태스크 "JDK 25 문의"')
-    expect(filled[0]).toContain('- Nomin: 확인바랍니다')
+    expect(filled[0]).toContain('Asana 태스크 "API 25 문의"')
+    expect(filled[0]).toContain('- Alex: 확인바랍니다')
 
     await pane.input({ key: 'asana-write-1-0', text: '확인했습니다\n내일 답변' })
     await wait(50)
@@ -3921,9 +3921,9 @@ describe('Asana 패널', () => {
     await pane.press({ key: 'asana-mention-u9' })
     drawn = JSON.stringify(await pane.drawn())
     expect(drawn).toContain('asana-write-1-3')
-    expect(drawn).toContain('@Nomin ')
+    expect(drawn).toContain('@Alex ')
     expect(drawn).not.toContain('asana-mention-search')
-    await pane.input({ key: 'asana-write-1-3', text: '@Nomin 확인 <부탁>\n내일' })
+    await pane.input({ key: 'asana-write-1-3', text: '@Alex 확인 <부탁>\n내일' })
     await wait(50)
     expect(calls.filter(call => call.tool === 'add_comment').at(-1)?.args).toEqual({ task_id: '1', html_text: '<body><a data-asana-gid="u9"/> 확인 &lt;부탁&gt;\n내일</body>' })
 
@@ -3933,7 +3933,7 @@ describe('Asana 패널', () => {
     await wait(50)
     await pane.press({ key: 'asana-user-u9' })
     expect(calls.some(call => call.tool === 'update_tasks')).toBe(false)
-    expect(JSON.stringify(await pane.drawn())).toContain('Nomin 에게 넘길까요?')
+    expect(JSON.stringify(await pane.drawn())).toContain('Alex 에게 넘길까요?')
     await pane.press({ key: 'asana-user-u9' })
     await wait(50)
     expect(calls.find(call => call.tool === 'update_tasks')?.args).toEqual({ tasks: [{ task: '1', assignee: 'u9' }] })
@@ -4018,7 +4018,7 @@ describe('Asana 패널', () => {
   const editMock = (
     on: On,
     fetched: Array<{ url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }>,
-    { tokenOwner = 'u1', toasts = [] as string[], storyHtml = (): string => '<body><a data-asana-gid="u9" data-asana-type="user">@Nomin</a> 확인</body>', putStatus = (): number => 200, tools = [] as string[] } = {},
+    { tokenOwner = 'u1', toasts = [] as string[], storyHtml = (): string => '<body><a data-asana-gid="u9" data-asana-type="user">@Alex</a> 확인</body>', putStatus = (): number => 200, tools = [] as string[] } = {},
   ) => {
     const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
     on('clock.now', () => ({ value: Date.parse('2026-10-16T03:00:00Z') }))
@@ -4030,17 +4030,17 @@ describe('Asana 패널', () => {
     on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
     on('mcp.call', ($, e) => {
       tools.push(e.tool)
-      if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: 'JDK 25 문의', memberships: [] }] })
+      if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: 'API 25 문의', memberships: [] }] })
       if (e.tool === 'get_me') return text({ data: { gid: 'u1', name: 'Sam' } })
       return text({
         data: {
           gid: '1',
-          name: 'JDK 25 문의',
+          name: 'API 25 문의',
           custom_type_status_option: { name: '검토 중' },
           custom_type: { status_options: [{ gid: 'st1', name: '검토 중' }, { gid: 'st2', name: '진행 중' }] },
           comments: [
-            { gid: 'c1', text: '@Nomin 확인', created_by: { gid: 'u1', name: 'Sam' }, resource_subtype: 'comment_added' },
-            { gid: 'c2', text: '남의 댓글', created_by: { gid: 'u9', name: 'Nomin' }, resource_subtype: 'comment_added' },
+            { gid: 'c1', text: '@Alex 확인', created_by: { gid: 'u1', name: 'Sam' }, resource_subtype: 'comment_added' },
+            { gid: 'c2', text: '남의 댓글', created_by: { gid: 'u9', name: 'Alex' }, resource_subtype: 'comment_added' },
           ],
         },
       })
@@ -4087,11 +4087,11 @@ describe('Asana 패널', () => {
     await pane.press({ key: 'asana-edit-clear-c1' })
     expect(JSON.stringify(await pane.find({ key: 'asana-editing-c1-1' }))).toContain('"value":""')
 
-    await pane.input({ key: 'asana-editing-c1-1', text: '@Nomin 다시 확인' })
+    await pane.input({ key: 'asana-editing-c1-1', text: '@Alex 다시 확인' })
     await wait(50)
     const put = fetched.find(call => call.init?.method === 'PUT')
     expect(put?.url).toBe('https://app.asana.com/api/1.0/stories/c1?opt_fields=text')
-    expect(JSON.parse(put?.init?.body ?? '{}')).toEqual({ data: { html_text: '<body><a data-asana-gid="u9" data-asana-type="user">@Nomin</a> 다시 확인</body>' } })
+    expect(JSON.parse(put?.init?.body ?? '{}')).toEqual({ data: { html_text: '<body><a data-asana-gid="u9" data-asana-type="user">@Alex</a> 다시 확인</body>' } })
     expect(JSON.stringify(await pane.drawn())).not.toContain('asana-editing-c1')
     await pane.unmount()
   })
@@ -4231,28 +4231,28 @@ describe('Asana 패널', () => {
       calls.push({ tool: e.tool, args: e.args })
       if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: '내 일', memberships: [] }] })
       if (e.tool === 'search_tasks') {
-        return text({ data: [{ gid: '7', name: 'JDK 25 문의', assignee: { gid: 'u9', name: 'Nomin' }, memberships: [{ project: { name: 'JENNIFER5 Support' } }] }] })
+        return text({ data: [{ gid: '7', name: 'API 25 문의', assignee: { gid: 'u9', name: 'Alex' }, memberships: [{ project: { name: 'Product Support' } }] }] })
       }
-      return text({ data: { gid: '7', name: 'JDK 25 문의', assignee: { gid: 'u9', name: 'Nomin' } } })
+      return text({ data: { gid: '7', name: 'API 25 문의', assignee: { gid: 'u9', name: 'Alex' } } })
     })
 
     await $.command.run({ command: 'desk-asana', args: '' } as never)
     const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
-    await pane.input({ key: 'asana-search-0', text: ' JDK ' })
+    await pane.input({ key: 'asana-search-0', text: ' API ' })
     await wait(50)
-    expect(calls.find(call => call.tool === 'search_tasks')?.args).toMatchObject({ text: 'JDK', completed: false })
+    expect(calls.find(call => call.tool === 'search_tasks')?.args).toMatchObject({ text: 'API', completed: false })
     expect(String(calls.find(call => call.tool === 'search_tasks')?.args.opt_fields)).toContain('assignee.name')
     let drawn = JSON.stringify(await pane.drawn())
-    expect(drawn).toContain('검색 \\"JDK\\" 1')
-    expect(drawn).toContain('JENNIFER5 Support')
-    expect(drawn).toContain(' Nomin')
+    expect(drawn).toContain('검색 \\"API\\" 1')
+    expect(drawn).toContain('Product Support')
+    expect(drawn).toContain(' Alex')
     expect(drawn).not.toContain('내 일')
 
     await pane.press({ key: 'asana-task-7' })
     await wait(50)
     expect(calls.filter(call => call.tool === 'get_task').at(-1)).toMatchObject({ tool: 'get_task', args: { task_id: '7' } })
     await pane.press({ key: 'asana-back' })
-    expect(JSON.stringify(await pane.drawn())).toContain('JDK 25 문의')
+    expect(JSON.stringify(await pane.drawn())).toContain('API 25 문의')
 
     // ↻ 는 검색을 다시 한다
     await pane.press({ key: 'asana-refresh' })
@@ -4264,7 +4264,7 @@ describe('Asana 패널', () => {
     expect(drawn).toContain('내 태스크 1')
     expect(drawn).toContain('내 일')
 
-    await pane.input({ key: 'asana-search-1', text: 'JDK' })
+    await pane.input({ key: 'asana-search-1', text: 'API' })
     await wait(50)
     await pane.input({ key: 'asana-search-1', text: '  ' })
     await wait(50)
@@ -4277,7 +4277,7 @@ describe('Asana 패널', () => {
       {
         data: [
           { gid: 'p1', name: '옛 일', members: [{ gid: 'me' }], modified_at: '2026-01-01T00:00:00Z' },
-          { gid: 'p2', name: 'APM', members: [{ gid: 'u2' }, { gid: 'me' }], modified_at: '2026-10-16T00:00:00Z', task_counts: { num_incomplete_tasks: 77 } },
+          { gid: 'p2', name: 'Platform', members: [{ gid: 'u2' }, { gid: 'me' }], modified_at: '2026-10-16T00:00:00Z', task_counts: { num_incomplete_tasks: 77 } },
           { gid: 'p3', name: '남의 일', members: [{ gid: 'u2' }], modified_at: '2026-10-17T00:00:00Z' },
         ],
       },
@@ -4290,10 +4290,10 @@ describe('Asana 패널', () => {
     ])
     // 두 프로젝트에 걸친 태스크는 고른 프로젝트의 섹션을 쓴다
     const tasks = toTasks(
-      { data: [{ gid: 't1', name: 'x', memberships: [{ project: { gid: 'p9', name: 'Other' }, section: { name: '딴 섹션' } }, { project: { gid: 'p2', name: 'APM' }, section: { name: '백엔드' } }] }] },
+      { data: [{ gid: 't1', name: 'x', memberships: [{ project: { gid: 'p9', name: 'Other' }, section: { name: '딴 섹션' } }, { project: { gid: 'p2', name: 'Platform' }, section: { name: '백엔드' } }] }] },
       'p2',
     )
-    expect(tasks[0]).toMatchObject({ project: 'APM', section: '백엔드' })
+    expect(tasks[0]).toMatchObject({ project: 'Platform', section: '백엔드' })
     expect(nextOffset({ data: [], next_page: { offset: 'abc' } })).toBe('abc')
     expect(nextOffset({ data: [], next_page: null })).toBeNull()
     const v2 = { name: 'asana-v2', dialect: 'v2' } as const
@@ -4313,7 +4313,7 @@ describe('Asana 패널', () => {
         gid,
         name,
         assignee: { gid: assignee, name: assignee },
-        memberships: [{ project: { gid: 'p2', name: 'APM' }, section: { name: section } }],
+        memberships: [{ project: { gid: 'p2', name: 'Platform' }, section: { name: section } }],
       })
       switch (e.tool) {
         case 'get_my_tasks':
@@ -4322,14 +4322,14 @@ describe('Asana 패널', () => {
           return text({ data: { gid: 'me', name: 'Sam' } })
         case 'get_projects':
           return e.args.offset === undefined
-            ? text({ data: [{ gid: 'p2', name: 'APM', members: [{ gid: 'me' }], modified_at: '2026-10-16T00:00:00Z', task_counts: { num_incomplete_tasks: 3 } }], next_page: { offset: 'pg2' } })
+            ? text({ data: [{ gid: 'p2', name: 'Platform', members: [{ gid: 'me' }], modified_at: '2026-10-16T00:00:00Z', task_counts: { num_incomplete_tasks: 3 } }], next_page: { offset: 'pg2' } })
             : text({ data: [{ gid: 'p3', name: '남의 프로젝트', members: [{ gid: 'u2' }], modified_at: '2026-10-17T00:00:00Z' }], next_page: null })
         case 'get_tasks':
           return e.args.offset === undefined
             ? text({ data: [apm('t1', '정리', 'Untitled section', 'Aiden'), apm('t2', '통계 api', '백엔드', 'Sam')], next_page: { offset: 'tp2' } })
-            : text({ data: [apm('t3', '세션 관리', '백엔드', 'Chalse'), { ...apm('t4', '멈춘 일', '백엔드', 'Sam'), completed: true, custom_type_status_option: { name: '보류' } }], next_page: null })
+            : text({ data: [apm('t3', '세션 관리', '백엔드', 'Jordan'), { ...apm('t4', '멈춘 일', '백엔드', 'Sam'), completed: true, custom_type_status_option: { name: '보류' } }], next_page: null })
         default:
-          return text({ data: { gid: 't3', name: '세션 관리', assignee: { gid: 'Chalse', name: 'Chalse' } } })
+          return text({ data: { gid: 't3', name: '세션 관리', assignee: { gid: 'Jordan', name: 'Jordan' } } })
       }
     })
 
@@ -4355,7 +4355,7 @@ describe('Asana 패널', () => {
     expect(drawn).toContain('열린 태스크 3')
     expect(drawn).toContain('섹션 없음')
     expect(drawn).toContain('백엔드')
-    expect(drawn).toContain(' Chalse')
+    expect(drawn).toContain(' Jordan')
     expect(drawn.indexOf('섹션 없음')).toBeLessThan(drawn.indexOf('백엔드'))
     // 완료된 태스크는 섹션이 아니라 끝의 최근 완료 묶음에 상태와 함께
     expect(drawn).toContain('최근 14일 완료 · 1')
