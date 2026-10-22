@@ -5,6 +5,9 @@ import type { AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectV
 import {
   ASANA_API,
   asanaPrompt,
+  keyFieldGids,
+  keyFieldNames,
+  keySearchCalls,
   commentCall,
   dueChip,
   findAsanaServer,
@@ -70,6 +73,9 @@ let asanaMentions: AsanaUser[] = []
 // 댓글 고치기: 사람이 넣은 Asana 개인 토큰(userConfig asanaToken, 없으면 ''), 패널에서 고치는 중인 글,
 // 내 gid(MCP 로 읽어 ✎ 를 내 댓글에만 붙인다)와 토큰 주인 gid(고치기 전에 원문 작성자와 견준다).
 let asanaToken = ''
+// 태스크 키: 설정 asanaKeyField 의 필드 이름들(없으면 []), 목록에서 본 그 필드들의 gid(키로 찾기에 쓴다).
+let asanaKeyFields: string[] = []
+const asanaKeyGids = new Set<string>()
 let asanaEditDraft = ''
 // 고치는 칸의 키 차례: 칸은 Enter 뒤에 비므로, 거절·실패하면 고치던 글을 새 키로 다시 그린다.
 let asanaEditRound = 0
@@ -117,12 +123,13 @@ async function refreshAsana($: EngineInterface) {
       return
     }
     const since = doneSince(await $.clock.now())
-    const [unruled, ...gots] = await Promise.all([findUnruled($, server), ...listCalls(server, since).map(call => callAsana($, server, call))])
+    const [unruled, ...gots] = await Promise.all([findUnruled($, server), ...listCalls(server, since, asanaKeyFields).map(call => callAsana($, server, call))])
     const failed = gots.find(got => !got.ok)
+    for (const got of gots) if (got.ok) keyFieldGids(got.data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
     await update($, asana, (): AsanaState =>
       failed && !failed.ok
         ? { status: 'failed', server, tasks: [], unruled, error: failed.error }
-        : { status: 'ok', server, tasks: gots.flatMap(got => (got.ok ? toTasks(got.data) : [])), unruled },
+        : { status: 'ok', server, tasks: gots.flatMap(got => (got.ok ? toTasks(got.data, asanaKeyFields) : [])), unruled },
     )
   })().finally(() => {
     asanaFetch = null
@@ -185,12 +192,13 @@ async function openAsanaProject($: EngineInterface, project: AsanaProject) {
   const tasks = []
   let offset: string | undefined
   for (let page = 0; page < PROJECT_TASK_PAGES; page++) {
-    const got = await callAsana($, server, projectTasksCall(server, project.gid, since, offset))
+    const got = await callAsana($, server, projectTasksCall(server, project.gid, since, asanaKeyFields, offset))
     if (!got.ok) {
       await update($, asanaProject, (view): AsanaProjectView | null => (view?.project.gid !== project.gid ? view : { ...view, status: 'failed', error: got.error }))
       return
     }
-    tasks.push(...toTasks(got.data, project.gid))
+    keyFieldGids(got.data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
+    tasks.push(...toTasks(got.data, asanaKeyFields, project.gid))
     offset = nextOffset(got.data) ?? undefined
     const isLast = offset === undefined || page === PROJECT_TASK_PAGES - 1
     const shown = [...tasks]
@@ -218,7 +226,7 @@ async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: strin
     asanaMe === null ? callAsana($, server, meCall(server)) : null,
   ])
   if (me?.ok) asanaMe = myGid(me.data)
-  const task = got.ok ? toDetail(got.data, stories?.ok ? stories.data : undefined) : null
+  const task = got.ok ? toDetail(got.data, stories?.ok ? stories.data : undefined, asanaKeyFields) : null
   const error = got.ok ? (task ? undefined : 'unexpected result') : got.error
   await update($, asanaView, (view): AsanaView | null => (view?.gid !== gid ? view : task ? { gid, status: 'ok', task } : { gid, status: 'failed', task: null, error }))
 }
@@ -239,9 +247,18 @@ async function searchAsana($: EngineInterface, server: AsanaServer, value: strin
   if (query === '') return clearAsanaSearch($)
   asanaFindText = value
   await update($, asanaSearch, (): AsanaSearch => ({ query, status: 'loading', tasks: [] }))
-  const got = await callAsana($, server, searchCall(server, query))
+  // 키로 찾은 것을 앞에. 키로 찾기가 실패해도 글자 검색 결과는 보인다.
+  const [got, byKey] = await Promise.all([
+    callAsana($, server, searchCall(server, query, asanaKeyFields)),
+    Promise.all(keySearchCalls(server, query, asanaKeyFields, [...asanaKeyGids]).map(call => callAsana($, server, call))),
+  ])
+  // 내 목록에 키 필드가 없던 사람도 검색에 걸린 태스크에서 gid 를 배워 다음 키 검색부터 찾는다.
+  if (got.ok) keyFieldGids(got.data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
+  const keyed = byKey.flatMap(found => (found.ok ? toTasks(found.data, asanaKeyFields) : []))
+  const texted = got.ok ? toTasks(got.data, asanaKeyFields) : []
+  const tasks = [...keyed, ...texted].filter((task, index, all) => all.findIndex(other => other.gid === task.gid) === index)
   await update($, asanaSearch, (search): AsanaSearch | null =>
-    search?.query !== query ? search : got.ok ? { query, status: 'ok', tasks: toTasks(got.data) } : { query, status: 'failed', tasks: [], error: got.error },
+    search?.query !== query ? search : got.ok || keyed.length > 0 ? { query, status: 'ok', tasks } : { query, status: 'failed', tasks: [], error: got.ok ? '' : got.error },
   )
 }
 
@@ -470,6 +487,8 @@ export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
   asanaToken = typeof options.asanaToken === 'string' ? options.asanaToken.trim() : ''
+  asanaKeyFields = keyFieldNames(options.asanaKeyField)
+  asanaKeyGids.clear()
   asanaMe = null
   asanaTokenMe = null
 
@@ -761,15 +780,18 @@ export const register: Register = (on, options) => {
 
     const room = Math.max(16, columns - 10)
     const owner = (name: string | null) => name !== null && <Text color={COLORS.muted}>{` ${clip(name, 12)}`}</Text>
-    // 완료된 태스크는 흐리게, 마감일 대신 상태(없으면 ✓)를 붙인다.
-    const taskRow = (task: AsanaTask) =>
-      rowButton(
+    // 완료된 태스크는 흐리게, 마감일 대신 상태(없으면 ✓)를 붙인다. 태스크 키는 제목 바로 뒤에 흐리게.
+    const taskRow = (task: AsanaTask) => {
+      const key = task.key ?? null
+      return rowButton(
         els,
         { key: `asana-task-${task.gid}`, dimColor: task.isDone, onPress: () => void (server && openAsanaTask($, server, task.gid)) },
-        clip(task.name, task.assignee === null ? room : Math.max(12, room - 13)),
+        clip(task.name, Math.max(12, room - (task.assignee === null ? 0 : 13) - (key === null ? 0 : key.length + 1))),
+        key !== null && <Text color={COLORS.muted}>{` ${key}`}</Text>,
         owner(task.assignee),
         task.isDone ? <Text color={COLORS.success}>{` ${task.status === null ? '✓' : `● ${task.status}`}`}</Text> : due(task.dueOn),
       )
+    }
     // 탭은 diff 패널의 범위 고르기와 같은 모양. allow 규칙 안내는 두 탭 모두에.
     const tabs = (
       <Box key="asana-tabs" columnGap={2}>
@@ -946,7 +968,7 @@ export const register: Register = (on, options) => {
           <Input
             key={`asana-search-${asanaFindRound}`}
             label={T.asanaSearchLabel}
-            placeholder={T.asanaSearchPlaceholder}
+            placeholder={asanaKeyFields.length === 0 ? T.asanaSearchPlaceholder : T.asanaSearchPlaceholderKey(asanaKeyFields.join('·'))}
             value={asanaFindText}
             submitLabel={T.asanaFind}
             onInput={value => (asanaFindText = value)}

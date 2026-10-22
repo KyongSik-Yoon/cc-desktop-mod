@@ -44,6 +44,7 @@ Claude Code 에 이미 연결된 Asana MCP 서버로 내 열린 태스크를 읽
 
 - `language`: `auto` (기본), `en`, `ko`. 플러그인 자신의 문구 언어. `auto` 는 desk-look 의 언어를, desk-look 이 없으면 Claude Code `/config` 의 `language` 를 따른다: 한국어를 가리키면 한국어, 아니면 영어
 - `asanaToken`: 비어 있음(기본). 선택. Asana 개인 토큰. 내 Asana 댓글의 `✎ 고치기` 와 작업 유형 상태 바꾸기만 쓴다(`/desk-asana` 참고). `/plugin configure desk-asana@cc-desktop-mod` 에서 넣는다
+- `asanaKeyField`: 비어 있음(기본). 선택. 태스크 키로 쓸 Asana 사용자 정의 필드 이름(예: `JKD-1630` 을 주는 ID 필드 `JKD`). 넣으면 목록의 각 태스크 제목 뒤에 키를 흐리게 붙이고, 검색칸에 키(`JKD-1630`)를 넣으면 그 열린 태스크를 맨 앞에 찾고, `Claude에게 맡기기` 글에 키를 넣는다. 쉼표로 여러 개(`JKD, J5S`)면 태스크에 값이 있는 앞의 것. 비우면 제목만
 
 ## 라이선스
 

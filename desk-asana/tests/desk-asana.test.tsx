@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, test, type TestBody } from 'claude-code/testing'
 
-import { commentCall, doneSince, dueChip, findAsanaServer, groupTasks, listCalls, mentionHtml, nextOffset, notesMarkdown, paneTools, projectTasksCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
+import { asanaPrompt, commentCall, doneSince, dueChip, findAsanaServer, groupTasks, keyFieldNames, keySearchCalls, keyFieldGids, listCalls, mentionHtml, nextOffset, notesMarkdown, paneTools, projectTasksCall, searchCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { setLang } from '../hooks/i18n'
 import { parseBlocks, parseInline, plainText } from '../hooks/shared/markdown'
 
@@ -137,7 +137,7 @@ describe('Asana 패널', () => {
     expect(dueChip('2026-10-16', '2026-10-16')?.level).toBe('warning')
     expect(dueChip('2027-01-02', '2026-10-16')).toEqual({ text: '2027/1/2', level: 'muted' })
     expect(dueChip(null, '2026-10-16')).toBeNull()
-    const task = (gid: string, project: string | null) => ({ gid, name: gid, dueOn: null, project, section: null, url: null, assignee: null, isDone: false, status: null })
+    const task = (gid: string, project: string | null) => ({ gid, name: gid, key: null, dueOn: null, project, section: null, url: null, assignee: null, isDone: false, status: null })
     expect(groupTasks([task('a', null), task('b', 'P'), task('c', 'Q'), task('d', 'P')]).map(g => [g.name, g.tasks.map(t => t.gid)])).toEqual([
       ['P', ['b', 'd']],
       ['Q', ['c']],
@@ -536,6 +536,75 @@ describe('Asana 패널', () => {
     await pane.unmount()
   })
 
+  test('태스크 키: 설정한 필드가 없으면 제목만, 있으면 목록·검색·맡기기에 키를', () => {
+    const v2 = { name: 'asana-v2', dialect: 'v2' } as const
+    const v1 = { name: 'asana', dialect: 'v1' } as const
+    expect(keyFieldNames(undefined)).toEqual([])
+    expect(keyFieldNames(' JKD , ,J5S ')).toEqual(['JKD', 'J5S'])
+    // 설정이 없으면 목록 응답을 예전 그대로(필드를 읽지 않는다)
+    for (const call of [...listCalls(v2, 'x'), ...listCalls(v1, 'x'), projectTasksCall(v2, 'p', 'x', []), searchCall(v2, 'a')]) {
+      expect(String(call.args.opt_fields)).not.toContain('custom_fields')
+    }
+    for (const call of [...listCalls(v2, 'x', ['JKD']), ...listCalls(v1, 'x', ['JKD']), projectTasksCall(v2, 'p', 'x', ['JKD']), searchCall(v2, 'a', ['JKD'])]) {
+      expect(String(call.args.opt_fields)).toContain('custom_fields.name,custom_fields.display_value')
+    }
+    const json = {
+      data: [
+        { gid: '1', name: 'a', custom_fields: [{ gid: 'f1', name: 'JKD', display_value: 'ABC-12' }] },
+        { gid: '2', name: 'b', custom_fields: [{ gid: 'f2', name: 'J5S', display_value: 'XY-3' }, { gid: 'f1', name: 'JKD', display_value: null }] },
+        { gid: '3', name: 'c', custom_fields: [{ gid: 'f9', name: '메모', display_value: 'ABC-99' }] },
+        { gid: '4', name: 'd' },
+      ],
+    }
+    expect(toTasks(json).map(task => task.key)).toEqual([null, null, null, null])
+    expect(toTasks(json, ['JKD', 'J5S']).map(task => task.key)).toEqual(['ABC-12', 'XY-3', null, null])
+    expect(keyFieldGids(json, ['JKD', 'J5S'])).toEqual(['f1', 'f2'])
+    // 키 모양 검색어만 키 필드마다 값으로 찾는다(대문자로, 글자 검색처럼 열린 것만)
+    expect(keySearchCalls(v2, '각 제품', ['JKD'], ['f1'])).toEqual([])
+    expect(keySearchCalls(v1, 'abc-12', ['JKD'], ['f1', 'f2']).map(call => [call.tool, call.args.custom_fields, call.args.completed])).toEqual([
+      ['asana_search_tasks', '{"f1.value":"ABC-12"}', false],
+      ['asana_search_tasks', '{"f2.value":"ABC-12"}', false],
+    ])
+    const detail = (keyFields: string[]) => toDetail({ data: { gid: '1', name: '조사', custom_fields: [{ gid: 'f1', name: 'JKD', type: 'text', display_value: 'ABC-12' }] } }, undefined, keyFields)
+    expect(detail([])?.key).toBeNull()
+    expect(asanaPrompt(detail(['JKD'])!).split('\n')[0]).toContain('ABC-12 "조사"')
+    expect(asanaPrompt(detail([])!).split('\n')[0]).not.toContain('ABC-12')
+    // 0.55.2 전에 연 상세(리로드 뒤 남은 atom)에는 key 가 없다
+    expect(asanaPrompt({ ...detail([])!, key: undefined }).split('\n')[0]).toBe('Asana 태스크 "조사" 을(를) 함께 봐 주세요.')
+  })
+
+  test('태스크 키: 제목 뒤에 흐리게, 키로 찾은 태스크를 검색 결과 맨 앞에', { options: { language: 'ko', asanaKeyField: 'JKD' } }, async ($, on) => {
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    const jkd = (value: string) => [{ gid: 'f1', name: 'JKD', display_value: value }]
+    on('clock.now', () => ({ value: Date.parse('2026-10-17T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    on('mcp.call', ($, e) => {
+      calls.push({ tool: e.tool, args: e.args })
+      if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: '키 있는 일', custom_fields: jkd('ABC-12'), memberships: [] }] })
+      if (e.tool === 'search_tasks' && e.args.custom_fields !== undefined) {
+        return text({ data: [{ gid: '9', name: '남의 일', custom_fields: jkd('ABC-7'), memberships: [] }] })
+      }
+      return text({ data: [{ gid: '8', name: 'ABC-7 을 말하는 일', custom_fields: jkd('ABC-8'), memberships: [] }, { gid: '9', name: '남의 일', custom_fields: jkd('ABC-7'), memberships: [] }] })
+    })
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-asana', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
+    await wait(50)
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('키 있는 일')
+    expect(drawn).toContain(' ABC-12')
+    expect(drawn.indexOf('키 있는 일')).toBeLessThan(drawn.indexOf('ABC-12'))
+    expect(drawn).toContain('또는 JKD 키로')
+    await pane.input({ key: 'asana-search-0', text: 'abc-7' })
+    await wait(50)
+    expect(calls.filter(call => call.tool === 'search_tasks').map(call => call.args.custom_fields)).toEqual([undefined, '{"f1.value":"ABC-7"}'])
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('검색 \\"abc-7\\" 2')
+    expect(drawn.indexOf('남의 일')).toBeLessThan(drawn.indexOf('ABC-7 을 말하는 일'))
+    await pane.unmount()
+  })
+
   test('검색창: 워크스페이스 태스크를 담당자와 함께, 상세에서 돌아오면 검색 결과, ✕ 나 빈 검색이면 내 태스크', KO, async ($, on) => {
     const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
     const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
@@ -606,14 +675,15 @@ describe('Asana 패널', () => {
     // 두 프로젝트에 걸친 태스크는 고른 프로젝트의 섹션을 쓴다
     const tasks = toTasks(
       { data: [{ gid: 't1', name: 'x', memberships: [{ project: { gid: 'p9', name: 'Other' }, section: { name: '딴 섹션' } }, { project: { gid: 'p2', name: 'Platform' }, section: { name: '백엔드' } }] }] },
+      [],
       'p2',
     )
     expect(tasks[0]).toMatchObject({ project: 'Platform', section: '백엔드' })
     expect(nextOffset({ data: [], next_page: { offset: 'abc' } })).toBe('abc')
     expect(nextOffset({ data: [], next_page: null })).toBeNull()
     const v2 = { name: 'asana-v2', dialect: 'v2' } as const
-    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', 'abc')).toMatchObject({ tool: 'get_tasks', args: { project: 'p2', completed_since: '2026-10-17T03:00:00.000Z', offset: 'abc' } })
-    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z').args).not.toHaveProperty('offset')
+    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', [], 'abc')).toMatchObject({ tool: 'get_tasks', args: { project: 'p2', completed_since: '2026-10-17T03:00:00.000Z', offset: 'abc' } })
+    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', []).args).not.toHaveProperty('offset')
   })
 
   test('프로젝트 탭: 내 프로젝트 → 섹션별 모든 사람의 열린 태스크 → 상세 → 돌아오면 그 프로젝트', KO, async ($, on) => {

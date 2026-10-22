@@ -3,7 +3,9 @@
 export type AsanaServer = { name: string; dialect: 'v2' | 'v1' }
 // assignee 는 검색 결과에만 있다(내 태스크 목록은 모두 나).
 // isDone: Asana 에서 완료(작업 유형의 보류·배포 대기 같은 상태도 완료일 수 있다). status 는 작업 유형의 상태 이름.
-export type AsanaTask = { gid: string; name: string; dueOn: string | null; project: string | null; section: string | null; url: string | null; assignee: string | null; isDone: boolean; status: string | null }
+// key: 태스크 키(설정 asanaKeyField 로 고른 필드의 값, Asana ID 필드면 "JKD-1630"). 설정이 없거나 값이 없으면 null,
+// 0.55.2 전에 저장된 목록에는 없다(atom 은 /reload-plugins 뒤에도 남는다).
+export type AsanaTask = { gid: string; name: string; key?: string | null; dueOn: string | null; project: string | null; section: string | null; url: string | null; assignee: string | null; isDone: boolean; status: string | null }
 export type AsanaComment = {
   gid: string
   author: string
@@ -18,6 +20,8 @@ export type AsanaField = { gid: string; name: string; value: string | null; opti
 export type AsanaDetail = {
   gid: string
   name: string
+  // 태스크 키(AsanaTask.key). 0.55.2 전에 연 상세에는 없다.
+  key?: string | null
   notes: string
   // html_notes 를 옮긴 마크다운(notesMarkdown). 서버가 html_notes 를 주지 않으면 null 이고 notes 평문을 그린다.
   richNotes: string | null

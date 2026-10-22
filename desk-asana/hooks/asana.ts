@@ -40,6 +40,14 @@ export const COMMENT_LIMIT = 30
 const LIST_FIELDS = 'name,due_on,completed,custom_type_status_option.name,memberships.project.name,memberships.section.name,permalink_url'
 // 검색 결과는 남의 태스크도 섞이니 담당자 이름까지.
 const SEARCH_FIELDS = `${LIST_FIELDS},assignee.name`
+const PROJECT_TASK_FIELDS = 'name,due_on,completed,custom_type_status_option.name,assignee.name,permalink_url,memberships.project.gid,memberships.project.name,memberships.section.name'
+// 태스크 키(taskKey)는 키 필드를 설정했을 때만 읽는다. 없으면 목록 응답을 예전 그대로.
+const withKey = (fields: string, keyFields: readonly string[]) => (keyFields.length === 0 ? fields : `${fields},custom_fields.name,custom_fields.display_value`)
+
+// 설정 asanaKeyField: 태스크 키로 보일 사용자 정의 필드 이름들(쉼표로, 앞의 것부터). 예: "JKD" 또는 "JKD, J5S".
+export function keyFieldNames(value: unknown): string[] {
+  return typeof value !== 'string' ? [] : value.split(',').map(name => name.trim()).filter(name => name !== '')
+}
 const TASK_FIELDS = [
   'name,notes,html_notes,completed,due_on,permalink_url,assignee.name',
   'memberships.project.name,memberships.section.name',
@@ -77,9 +85,10 @@ export const DONE_DAYS = 14
 export const doneSince = (now: number) => new Date(now - DONE_DAYS * 86_400_000).toISOString()
 
 // 내 태스크: v2 는 completed_since 하나로 열린 것과 그 뒤 완료된 것을 함께 준다. v1 검색은 둘을 한 번에 못 받아 따로 부른다.
-export function listCalls(server: AsanaServer, since: string): AsanaCall[] {
-  if (server.dialect === 'v2') return [{ tool: ASANA_TOOLS.v2.list, args: { completed_since: since, limit: 100, opt_fields: LIST_FIELDS } }]
-  const args = { assignee_any: 'me', limit: 100, opt_fields: LIST_FIELDS }
+export function listCalls(server: AsanaServer, since: string, keyFields: readonly string[] = []): AsanaCall[] {
+  const opt_fields = withKey(LIST_FIELDS, keyFields)
+  if (server.dialect === 'v2') return [{ tool: ASANA_TOOLS.v2.list, args: { completed_since: since, limit: 100, opt_fields } }]
+  const args = { assignee_any: 'me', limit: 100, opt_fields }
   return [
     { tool: ASANA_TOOLS.v1.list, args: { ...args, completed: false, sort_by: 'modified_at' } },
     { tool: ASANA_TOOLS.v1.list, args: { ...args, completed: true, completed_at_after: since, sort_by: 'completed_at' } },
@@ -87,8 +96,18 @@ export function listCalls(server: AsanaServer, since: string): AsanaCall[] {
 }
 
 // 워크스페이스 전체에서 글자로 찾는다(이름·설명·댓글). 열린 태스크만, 최근에 바뀐 것부터.
-export function searchCall(server: AsanaServer, text: string): AsanaCall {
-  return { tool: ASANA_TOOLS[server.dialect].search, args: { text, completed: false, limit: 50, sort_by: 'modified_at', opt_fields: SEARCH_FIELDS } }
+export function searchCall(server: AsanaServer, text: string, keyFields: readonly string[] = []): AsanaCall {
+  return { tool: ASANA_TOOLS[server.dialect].search, args: { text, completed: false, limit: 50, sort_by: 'modified_at', opt_fields: withKey(SEARCH_FIELDS, keyFields) } }
+}
+
+// 키로 찾기: 검색어가 "JKD-1630" 모양이면 키 필드마다 값이 같은 열린 태스크를 찾는다. 글자 검색은 필드 값을 보지 않는다.
+// gids 는 목록에서 본 키 필드의 gid(keyFieldGids). 아직 못 봤으면 키로는 찾지 않는다.
+export function keySearchCalls(server: AsanaServer, text: string, keyFields: readonly string[], gids: readonly string[]): AsanaCall[] {
+  if (!/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text)) return []
+  return gids.map(gid => ({
+    tool: ASANA_TOOLS[server.dialect].search,
+    args: { custom_fields: JSON.stringify({ [`${gid}.value`]: text.toUpperCase() }), completed: false, limit: 10, opt_fields: withKey(SEARCH_FIELDS, keyFields) },
+  }))
 }
 
 export function taskCall(server: AsanaServer, gid: string): AsanaCall {
@@ -558,14 +577,14 @@ export function projectsCall(server: AsanaServer, offset?: string): AsanaCall {
 }
 
 // 프로젝트의 열린 태스크와 since 뒤에 완료된 태스크. v2 completed_since 는 ISO 시각만 받는다('now' 를 거절).
-export function projectTasksCall(server: AsanaServer, project: string, since: string, offset?: string): AsanaCall {
+export function projectTasksCall(server: AsanaServer, project: string, since: string, keyFields: readonly string[], offset?: string): AsanaCall {
   return {
     tool: ASANA_TOOLS[server.dialect].tasks,
     args: {
       project,
       completed_since: since,
       limit: 100,
-      opt_fields: 'name,due_on,completed,custom_type_status_option.name,assignee.name,permalink_url,memberships.project.gid,memberships.project.name,memberships.section.name',
+      opt_fields: withKey(PROJECT_TASK_FIELDS, keyFields),
       ...(offset ? { offset } : {}),
     },
   }
@@ -624,8 +643,25 @@ type RawStory = { gid?: string; text?: string; html_text?: string; created_at?: 
 const str = (value: unknown) => (typeof value === 'string' ? value : null)
 const dataOf = (json: unknown) => (json as { data?: unknown } | null)?.data
 
+// 태스크 키: 설정한 키 필드 중 앞의 것부터 값이 있는 것(Asana ID 필드면 "JKD-1630").
+function taskKey(fields: RawTask['custom_fields'], keyFields: readonly string[]): string | null {
+  for (const name of keyFields) {
+    const value = str(fields?.find(field => field?.name === name)?.display_value)
+    if (value !== null && value.trim() !== '') return value.trim()
+  }
+  return null
+}
+
+// 응답의 태스크들에 붙은 키 필드의 gid. 키로 찾기(keySearchCalls)는 이름이 아니라 gid 로 묻는다.
+export function keyFieldGids(json: unknown, keyFields: readonly string[]): string[] {
+  const data = dataOf(json)
+  if (!Array.isArray(data)) return []
+  const fields = (data as RawTask[]).flatMap(raw => raw?.custom_fields ?? [])
+  return [...new Set(fields.filter(field => typeof field?.gid === 'string' && keyFields.includes(field.name ?? '')).map(field => field.gid as string))]
+}
+
 // project 를 주면 그 프로젝트의 자리(섹션)를 쓴다. 아니면 이름이 있는 첫 프로젝트.
-export function toTasks(json: unknown, project?: string): AsanaTask[] {
+export function toTasks(json: unknown, keyFields: readonly string[] = [], project?: string): AsanaTask[] {
   const data = dataOf(json)
   if (!Array.isArray(data)) return []
   return (data as RawTask[])
@@ -635,6 +671,7 @@ export function toTasks(json: unknown, project?: string): AsanaTask[] {
       return {
         gid: raw.gid as string,
         name: str(raw.name) ?? '',
+        key: taskKey(raw.custom_fields, keyFields),
         dueOn: str(raw.due_on),
         project: str(place?.project?.name),
         section: str(place?.section?.name),
@@ -691,7 +728,7 @@ function toComment(raw: RawStory): AsanaComment | null {
 }
 
 // 상세: 댓글은 활동 목록(stories)에서 고른다. stories 를 못 읽으면 v2 get_task 에 든 평문 댓글을 쓴다.
-export function toDetail(json: unknown, stories?: unknown): AsanaDetail | null {
+export function toDetail(json: unknown, stories?: unknown, keyFields: readonly string[] = []): AsanaDetail | null {
   const raw = dataOf(json) as RawTask | undefined
   if (!raw || typeof raw.gid !== 'string') return null
   const storyList = Array.isArray(dataOf(stories)) ? dataOf(stories) : raw.comments
@@ -715,6 +752,7 @@ export function toDetail(json: unknown, stories?: unknown): AsanaDetail | null {
   return {
     gid: raw.gid,
     name: str(raw.name) ?? '',
+    key: taskKey(raw.custom_fields, keyFields),
     notes: str(raw.notes) ?? '',
     richNotes: typeof raw.html_notes === 'string' ? notesMarkdown(raw.html_notes) : null,
     assignee: typeof raw.assignee?.gid === 'string' ? { gid: raw.assignee.gid, name: str(raw.assignee.name) ?? '?' } : null,
@@ -785,7 +823,7 @@ export function asanaPrompt(task: AsanaDetail): string {
       .split('\n')
       .map(line => `> ${line}`)
       .join('\n')
-  const head = [T.asanaPromptHead(task.name), task.url, [task.status, ...task.places].filter(Boolean).join(' · ')].filter(Boolean).join('\n')
+  const head = [T.asanaPromptHead(task.name, task.key ?? null), task.url, [task.status, ...task.places].filter(Boolean).join(' · ')].filter(Boolean).join('\n')
   const notes = task.notes.trim() === '' ? '' : `\n\n${quote(task.notes, 3000)}`
   const recent = task.comments.slice(-5)
   const comments = recent.length === 0 ? '' : `\n\n${T.asanaPromptComments}\n${recent.map(c => `- ${c.author}: ${c.text.trim().slice(0, 600).replaceAll('\n', ' ')}`).join('\n')}`
