@@ -4,7 +4,7 @@ import type { SlackInbox, SlackMessage, SlackPoller, SlackPost, SlackRoom, Slack
 // 이 서버는 JSON 이 아니라 마크다운 글을 JSON 한 겹({"results": …}, {"messages": …})에 싸서 준다. 그래서 줄 정규식으로 읽는다.
 // 받은 편지: 검색 to:<@나> 는 DM·그룹 DM 에서 남이 보낸 것만 준다(내 답장은 빠진다, 스레드 답글은 들어온다).
 // 방 안은 채널 기록(read_channel)으로 양쪽 다. 채널 기록에는 최상위 글만 있어 스레드 답글은 스레드(read_thread)로 따로 읽는다.
-// 읽음 표시를 Slack 에 되돌리는 도구가 없어 안 읽음은 desk-look 안에서만 센다.
+// 읽음 표시를 Slack 에 되돌리는 도구가 없어 안 읽음은 desk-slack 안에서만 센다.
 
 export const SLACK_TOOLS = {
   search: 'slack_search_public_and_private',

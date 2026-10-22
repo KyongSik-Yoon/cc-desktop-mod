@@ -1,7 +1,7 @@
 {
   "name": "desk-look",
-  "version": "0.54.3",
-  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, Asana tasks, Slack DMs, diff, context, background tasks and Markdown preview panes",
+  "version": "0.55.0",
+  "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff, context, background tasks and Markdown preview panes. The Asana and Slack panes are the separate desk-asana and desk-slack plugins",
   "keywords": [
     "claude-code",
     "claude-code-mod",
@@ -17,9 +17,7 @@
     "agents",
     "pull-request",
     "github",
-    "gitlab",
-    "asana",
-    "slack"
+    "gitlab"
   ],
   "author": {
     "name": "KyongSik-Yoon",
@@ -110,24 +108,6 @@
         "off"
       ],
       "default": "on",
-      "required": false
-    },
-    "slackNotify": {
-      "type": "string",
-      "title": "Slack notification",
-      "description": "Send a notification when a new Slack DM or group DM arrives (checked once a minute while the /desk-slack tools have allow rules). off keeps the pane and the ✉ chip without notifications",
-      "options": [
-        "on",
-        "off"
-      ],
-      "default": "on",
-      "required": false
-    },
-    "asanaToken": {
-      "type": "string",
-      "title": "Asana personal access token",
-      "description": "Optional. Lets the /desk-asana pane edit your own comments and change a task type's status through Asana's REST API (the Asana MCP servers cannot do either). Create one at https://app.asana.com/0/my-apps. Leave empty to keep the pane on MCP only",
-      "sensitive": true,
       "required": false
     }
   }
