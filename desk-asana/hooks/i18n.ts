@@ -29,6 +29,7 @@ const ko = {
   asanaProjectPartial: (count: number) => `처음 ${count}개만 읽었어요. 나머지는 Asana 에서.`,
   asanaSearchLabel: '검색',
   asanaSearchPlaceholder: '워크스페이스의 열린 태스크를 이름·설명·댓글로',
+  asanaSearchPlaceholderKey: (fields: string) => `워크스페이스의 열린 태스크를 이름·설명·댓글로, 또는 ${fields} 키로`,
   asanaSearching: '찾는 중…',
   asanaNoMatch: '맞는 열린 태스크가 없어요.',
   asanaFound: (query: string, count: number) => `검색 "${query}" ${count}`,
@@ -71,7 +72,7 @@ const ko = {
     `${what}는 Asana 개인 토큰(PAT)이 있어야 해요. Asana MCP 서버로는 할 수 없어서예요.\n1. https://app.asana.com/0/my-apps 에서 Personal access token 을 만든다\n2. /plugin configure desk-asana@cc-desktop-mod 의 Asana personal access token 에 넣고 Save configuration(저장하면 바로 적용돼요)`,
   asanaCommented: '댓글을 달았어요',
   asanaCommentFailed: (reason: string) => `댓글을 달지 못했어요: ${reason}`,
-  asanaPromptHead: (name: string) => `Asana 태스크 "${name}" 을(를) 함께 봐 주세요.`,
+  asanaPromptHead: (name: string, key: string | null) => `Asana 태스크 ${key === null ? '' : `${key} `}"${name}" 을(를) 함께 봐 주세요.`,
   asanaPromptComments: '최근 댓글:',
   handToClaude: 'Claude에게 맡기기',
   // Asana 패널
@@ -115,6 +116,7 @@ const en: Strings = {
   asanaProjectPartial: count => `Only the first ${count} were read; see the rest on Asana.`,
   asanaSearchLabel: 'Search',
   asanaSearchPlaceholder: 'Open tasks in the workspace, by name, description or comment',
+  asanaSearchPlaceholderKey: fields => `Open tasks in the workspace, by name, description or comment, or by ${fields} key`,
   asanaSearching: 'Searching…',
   asanaNoMatch: 'No open task matches.',
   asanaFound: (query, count) => `Search "${query}" ${count}`,
@@ -157,7 +159,7 @@ const en: Strings = {
     `${what} needs an Asana personal access token (PAT): the Asana MCP servers cannot do it.\n1. Create a personal access token at https://app.asana.com/0/my-apps\n2. Put it in Asana personal access token under /plugin configure desk-asana@cc-desktop-mod and Save configuration (it applies at once)`,
   asanaCommented: 'Comment added',
   asanaCommentFailed: reason => `Could not add the comment: ${reason}`,
-  asanaPromptHead: name => `Let's look at the Asana task "${name}" together.`,
+  asanaPromptHead: (name, key) => `Let's look at the Asana task ${key === null ? '' : `${key} `}"${name}" together.`,
   asanaPromptComments: 'Recent comments:',
   handToClaude: 'Hand to Claude',
   // Asana pane
