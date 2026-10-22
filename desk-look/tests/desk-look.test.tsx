@@ -1929,6 +1929,27 @@ test('옮김 안내: Asana·Slack MCP 서버를 쓰는데 그 플러그인이 �
   expect(movedPlugins([{ name: 'asana-notes', mcp: false }], { asana: false, slack: false })).toEqual([])
 })
 
+test('옮김 안내: 턴이 시작될 때 한 번, MCP 서버가 없으면 몇 턴 뒤 그만 본다', KO, async ($, on) => {
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('clock.now', () => ({ value: 0 }))
+  const store: Record<string, unknown> = {}
+  on('store.get', ($, e) => ({ value: store[e.key] }) as never)
+  on('store.set', ($, e) => ((store[e.key] = e.value), { value: undefined }) as never)
+  let listed = 0
+  let tools: Array<{ name: string; description: string; mcp: boolean }> = []
+  on('tool.list', () => (listed++, { value: tools }) as never)
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => (toasts.push(e.text), { value: undefined }) as never)
+  // MCP 서버가 아직(또는 아예) 없으면 몇 턴만 본다
+  for (let turn = 0; turn < 8; turn++) {
+    await $.turn.start({ text: 'hi', turnId: `t${turn}` } as never)
+    await wait(10)
+  }
+  expect(listed).toBe(5)
+  expect(toasts).toEqual([])
+  expect(store.movedNotice).toBeUndefined()
+})
+
 test('아래턱 ✉ 칩: desk-slack 의 안 읽은 수를 읽고, 누르면 /desk-slack', KO, async ($, on) => {
   on('process.run', gitStub as never)
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {

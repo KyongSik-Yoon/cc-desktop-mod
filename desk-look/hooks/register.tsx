@@ -1334,6 +1334,8 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
 // 0.55.0 에서 Asana·Slack 패널이 desk-asana·desk-slack 플러그인으로 옮겨 갔다. 그 MCP 서버를 쓰는데 플러그인이
 // 없으면 한 번 알린다. MCP 도구는 세션이 시작된 뒤에 붙으므로 턴이 시작될 때 보고, 알렸으면 store 에 남긴다.
 let movedChecked = false
+let movedTurns = 0
+const MOVED_CHECK_TURNS = 5
 // 한 번뿐인 안내라 기본(4초)보다 오래 둔다.
 const MOVED_NOTICE_MS = 10_000
 
@@ -1347,15 +1349,16 @@ export function movedPlugins(tools: ReadonlyArray<{ name: string; mcp?: boolean 
 
 async function noticeMoved($: EngineInterface) {
   if (movedChecked) return
+  if (await $.store.get('movedNotice').catch(() => undefined)) return void (movedChecked = true)
   const tools = await $.tool.list()
-  // 아직 MCP 서버가 붙지 않았으면 다음 턴에 다시 본다.
-  if (!tools.some(tool => tool.mcp)) return
+  // 아직 MCP 서버가 붙지 않았으면 다음 턴에 다시 본다. MCP 서버를 쓰지 않는 사람도 있어 몇 턴까지만.
+  if (!tools.some(tool => tool.mcp) && ++movedTurns < MOVED_CHECK_TURNS) return
   movedChecked = true
-  if (await $.store.get('movedNotice').catch(() => undefined)) return
-  const missing = movedPlugins(tools, { asana: await read($, asanaReady), slack: await read($, slackReady) })
-  if (missing.length === 0) return
+  if (!tools.some(tool => tool.mcp)) return
+  // MCP 서버가 붙은 뒤에 한 번 판단하면 끝이다(지금 없으면 옮겨 오는 사용자가 아니다).
   await $.store.set('movedNotice', true)
-  $.ui.toast(T.movedNotice(missing), { timeoutMs: MOVED_NOTICE_MS })
+  const missing = movedPlugins(tools, { asana: await read($, asanaReady), slack: await read($, slackReady) })
+  if (missing.length > 0) $.ui.toast(T.movedNotice(missing), { timeoutMs: MOVED_NOTICE_MS })
 }
 
 // 세션 패널이 열려 있을 때만 목록을 다시 읽는다(기록 파일 80개를 읽는다).
