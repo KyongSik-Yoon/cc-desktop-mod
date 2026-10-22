@@ -72,15 +72,29 @@ def installed():
 OTHER_SURFACES = re.compile(r'^- (\[(VSCode|JetBrains|Cloud sessions|Claude Tag|Code Review|Desktop)\]|Windows:|macOS:|Self-hosted runner:)')
 
 
+# gh 를 먼저 묻고, 막히면(클라우드 세션은 403) 공개 raw 주소를 curl 로 받는다.
+CHANGELOG_SOURCES = [
+    ['gh', 'api', 'repos/anthropics/claude-code/contents/CHANGELOG.md', '-H', 'Accept: application/vnd.github.raw'],
+    ['curl', '-sSfL', 'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md'],
+]
+
+
 def changelog():
-    out = subprocess.run(
-        ['gh', 'api', 'repos/anthropics/claude-code/contents/CHANGELOG.md', '-H', 'Accept: application/vnd.github.raw'],
-        capture_output=True, text=True,
-    )
-    if out.returncode != 0:
-        return None, out.stderr.strip()
+    errors, text = [], None
+    for command in CHANGELOG_SOURCES:
+        try:
+            out = subprocess.run(command, capture_output=True, text=True)
+        except OSError as error:
+            errors.append(f'{command[0]}: {error}')
+            continue
+        if out.returncode == 0 and out.stdout.strip():
+            text = out.stdout
+            break
+        errors.append(f'{command[0]}: {out.stderr.strip()}')
+    if text is None:
+        return None, '; '.join(errors)
     sections, current = {}, None
-    for line in out.stdout.split('\n'):
+    for line in text.split('\n'):
         heading = re.match(r'^## ([\d.]+)\s*$', line)
         if heading:
             current = heading.group(1)
