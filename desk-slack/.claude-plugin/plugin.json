@@ -1,0 +1,50 @@
+{
+  "name": "desk-slack",
+  "version": "0.55.0",
+  "description": "Claude Code mod that opens the Slack DMs and group DMs sent to you as conversations in a side pane (/desk-slack): recent messages, replying, closing, and a notification when a new one arrives. Reads Slack through the Slack MCP server Claude Code already has connected. Pairs with desk-look, whose status band shows the unread count",
+  "keywords": [
+    "claude-code",
+    "claude-code-mod",
+    "claude-code-plugin",
+    "slack",
+    "dm",
+    "terminal-ui",
+    "tui"
+  ],
+  "author": {
+    "name": "KyongSik-Yoon",
+    "url": "https://github.com/KyongSik-Yoon"
+  },
+  "license": "MIT",
+  "icon": "./.claude-plugin/icon.svg",
+  "documentationUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-slack#readme",
+  "supportUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/issues",
+  "homepage": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
+  "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of desk-slack's own labels. auto follows desk-look's language, or Claude Code's language setting in /config without desk-look (Korean when it names Korean, English otherwise)",
+      "options": [
+        "auto",
+        "en",
+        "ko"
+      ],
+      "default": "auto",
+      "required": false
+    },
+    "slackNotify": {
+      "type": "string",
+      "title": "Slack notification",
+      "description": "Send a notification when a new Slack DM or group DM arrives (checked once a minute while the /desk-slack tools have allow rules). off keeps the pane and desk-look's ✉ chip without notifications",
+      "options": [
+        "on",
+        "off"
+      ],
+      "default": "on",
+      "required": false
+    }
+  }
+}

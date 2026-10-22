@@ -10,13 +10,12 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 **한눈에 보기**
 
 - **데스크톱 앱처럼 읽히는 대화 기록**: 프롬프트 말풍선, 폭을 채우는 표·mermaid 그림·알림 상자가 든 데스크톱 스타일 마크다운, 한 줄로 접혀 눌러서 펴는 도구 호출, 서브에이전트마다 카드, 계획 카드, 질문 카드, 턴마다 고친 파일 카드
-- **입력창 위 상태 띠**: 저장소·브랜치·`+N −M`, 그리고 PR 체크·컨텍스트 사용량·도는 백그라운드 작업·안 읽은 Slack 메시지 칩과 할 일 체크리스트
-- **오른쪽 패널 여덟 개**, 명령이나 칩을 눌러 엶: diff(`/desk-diff`), 백그라운드 작업(`/desk-tasks`), PR(`/desk-pr`), 내 Asana 태스크(`/desk-asana`), 내 Slack DM(`/desk-slack`), 마크다운 미리보기(`/desk-preview`), 컨텍스트·사용 한도(`/desk-context`), 최근 세션(`/desk-sessions`)
+- **입력창 위 상태 띠**: 저장소·브랜치·`+N −M`, 그리고 PR 체크·컨텍스트 사용량·도는 백그라운드 작업 칩(desk-slack 이 있으면 안 읽은 Slack 메시지 칩도)과 할 일 체크리스트
+- **오른쪽 패널 여섯 개**, 명령이나 칩을 눌러 엶: diff(`/desk-diff`), 백그라운드 작업(`/desk-tasks`), PR(`/desk-pr`), 마크다운 미리보기(`/desk-preview`), 컨텍스트·사용 한도(`/desk-context`), 최근 세션(`/desk-sessions`)
 - **diff 줄 댓글**: `/desk-diff` 에서 줄 번호를 눌러 줄·범위에 댓글을 달면, 다음 프롬프트와 함께 Claude 에게 감
 - **마크다운 미리보기**: Claude 가 한 턴에 쓴 문서는 턴이 끝나면 미리보기 패널에 저절로 열림
 - **GitHub 와 GitLab**: PR 은 `gh`, MR 은 `glab` 으로 읽음
-- **Asana**: 내게 할당된 태스크, 워크스페이스 검색, 내 프로젝트의 섹션별 태스크, 댓글을 보고 댓글을 닮. Claude Code 에 이미 연결된 Asana MCP 서버로
-- **Slack**: 나에게 온 DM·그룹 DM 을 대화방으로 보고 답장, 새 메시지는 알림. Claude Code 에 이미 연결된 Slack MCP 서버로
+- **Asana·Slack 패널**은 같은 마켓의 플러그인 두 개 [desk-asana](desk-asana/README.ko.md)·[desk-slack](desk-slack/README.ko.md) 로: 쓰는 것만 설치하면 되고, desk-look 자신은 스스로 네트워크 요청을 하지 않고 MCP 서버도 부르지 않음
 - **영어·한국어** 표시, 기본은 Claude Code 언어 설정을 따름
 
 ## 명령
@@ -24,14 +23,12 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - `/desk-diff [파일|branch|commits]`: diff 패널: 커밋 안 한 변경, 브랜치 전체, 커밋별
 - `/desk-tasks [번호]`: 백그라운드 작업 패널: 에이전트, 백그라운드 셸, 모니터
 - `/desk-pr`: 지금 브랜치의 PR·MR, 머지 버튼
-- `/desk-asana`: 내게 할당된 Asana 태스크·워크스페이스 검색·내 프로젝트의 섹션별 태스크: 상세·댓글·댓글 달기·담당자·드롭다운 필드·상태
-- `/desk-slack`: 나에게 온 Slack DM·그룹 DM 을 대화방으로: 최근 대화·답장·닫기
 - `/desk-preview [파일]`: 마크다운 미리보기 패널: 문서를 대화와 같은 모양으로
 - `/desk-context`: 컨텍스트 내역, 사용 한도, 세션 비용
 - `/desk-sessions [번호]`: 프로젝트별 최근 세션과 검색, 세션 이동
 - `/desk-fold`: 열린 패널을 접어 대화를 넓게, 다시 치면 같은 스크롤 위치로 편다
 - `/desk-quote`: 대화 기록에서 마우스로 고른 글을 `>` 인용으로 입력창에 넣어 묻기
-- `/desk-update`: desk-look 을 최신 버전으로
+- `/desk-update`: desk-look 과 설치한 desk-asana·desk-slack 을 최신 버전으로
 
 패널 명령은 Claude 가 일하는 중에도 바로 실행된다. 큐에 들어가거나 턴을 멈추지 않고 패널만 연다.
 
@@ -114,52 +111,14 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - `머지` 는 5초 안에 두 번 눌러야 머지하고, 패널이 본 head 커밋일 때만 합니다(그 사이 푸시되면 머지가 거절됨). 체크가 아직 돌면 `파이프라인 성공하면 머지`(GitLab)·`체크 통과하면 머지`(GitHub)로 바뀌어 자동 머지를 겁니다. 열려 있고 Draft 가 아니며 실패한 체크가 없고 호스트가 머지 가능하다고 할 때만 보입니다. 머지 방식은 저장소 설정을 따릅니다: GitLab 은 MR 의 squash 설정, GitHub 은 허용된 것 중 merge → squash → rebase 순. 원격 소스 브랜치는 지우고(GitHub 자동 머지는 저장소가 head 브랜치를 지우게 해 둔 경우만), 로컬 브랜치는 건드리지 않음
 - 그 밖에는 바꾸지 않음: 승인·댓글·`Ready for review` 없음
 
-### `/desk-asana`: Asana 태스크
+### Asana·Slack: 별도 플러그인
 
-Claude Code 에 이미 연결된 Asana MCP 서버로 내 열린 태스크를 읽는다(따로 토큰·설정 없음). Asana 공식 V2 서버(`https://mcp.asana.com/v2/mcp`, `get_my_tasks` 가 있는 것)가 붙어 있으면 그것을, 없으면 claude.ai Asana 커넥터를 쓴다. 커넥터로 내 태스크를 읽으려면 Premium 워크스페이스여야 한다(Asana 태스크 검색). 둘 다 없으면 `/mcp` 에서 Asana 를 연결하라고 알린다.
+0.55.0 부터 Asana·Slack 패널은 이 마켓의 별도 플러그인입니다. desk-look 은 그 플러그인이 있든 없든 동작하고, 있으면 `/desk-fold` 가 그 패널도 함께 접고, 그 플러그인은 desk-look 의 언어를 따르며, desk-slack 의 안 읽은 수는 desk-look 띠의 `✉ N` 칩으로 나옵니다.
 
-- 목록은 끝내지 않은 내 태스크를 프로젝트별로 묶고, 줄 끝에 마감일(지났으면 빨강). 그 아래 `최근 14일 완료` 묶음에 14일 안에 완료된 태스크를 상태(`● 보류`)와 함께 흐리게 둔다. 작업 유형에 따라 보류·배포 대기 같은 상태도 Asana 에선 완료라, 그런 상태로 바꾼 태스크도 패널에서 다시 열 수 있다
-- 맨 위 `● 내 태스크 ○ 프로젝트` 탭으로 바꾼다. `프로젝트` 탭은 내가 멤버인 프로젝트를 최근에 바뀐 것부터(멤버 수, V2 서버면 열린 태스크 수). 누르면 그 프로젝트의 열린 태스크를 담당자와 상관없이 섹션별로 묶어 담당자·마감일과 함께 보인다(열린 태스크가 없는 섹션은 빠진다). 14일 안에 완료된 태스크는 끝의 `최근 14일 완료` 묶음에 둔다. 섹션 줄을 누르면 접히고 `모두 접기`(`z`)는 모든 섹션을 접거나 편다. 한 프로젝트는 열린 태스크 300개까지 읽는다. 위와 맨 아래의 `← 프로젝트` 로 목록에 돌아온다
-- 목록 위 `검색` 칸은 내가 볼 수 있는 워크스페이스의 열린 태스크를 이름·설명·댓글로 찾는다(최근에 바뀐 50개). 같은 모양에 담당자를 붙여 보이고, `✕ 내 태스크` 나 빈 검색으로 돌아온다. 검색은 Premium 워크스페이스여야 한다(Asana 태스크 검색)
-- 태스크를 누르면 상세: 작업 유형의 상태(`● Open`), 프로젝트·섹션, 담당자, 마감일, 사용자 정의 필드, 웹과 같은 서식의 설명(제목·굵게·목록·인라인 코드·코드 블록·링크·태스크 멘션), 같은 서식에 멘션을 이름으로 보이는 최근 댓글 30개(claude.ai 커넥터는 태스크 활동 첫 100개 안의 댓글). `↻` 다시 읽기(어느 화면이든 `r`), `← 목록`(맨 아래에도 있음)은 목록·검색·프로젝트로 돌아가기
-- 맨 아래 칸에 댓글을 쓰고 Enter 로 Asana 에 단다. 그 아래 `@ 멘션` 으로 이름·이메일로 사람을 찾아 누르면 댓글에 `@이름` 이 들어가고, 보낼 때 글에 `@이름` 이 남아 있으면 Asana 멘션(상대에게 알림)으로 단다
-- 내가 쓴 댓글 옆 `✎ 고치기` 로 그 자리에서 고친다(Enter 로 저장). Asana MCP 서버에 댓글을 고치는 도구가 없어, 이것만은 사람이 직접 넣은 개인 토큰으로 Asana REST API 를 부른다: https://app.asana.com/0/my-apps 에서 Personal access token 을 만들어 `/plugin configure desk-look@cc-desktop-mod` 의 `Asana personal access token` 에 넣고(보안 저장소에 둔다) `Save configuration` 을 누르면 바로 적용된다. 토큰이 없으면 `✎ 고치기` 가 이 방법을 알려 주기만 하고 아무것도 부르지 않는다. 바꾼 글자만 댓글의 원래 서식 글(html_text)에 끼워 넣어, 손대지 않은 멘션·링크·굵게·목록·코드 블록·이미지는 그대로 남는다. 목록 기호(`• `, `1. `)·이미지(`[이미지]`)·멘션과 링크의 글자는 보이기만 하고 여기서 못 바꾼다(멘션 하나를 통째로 지우는 것은 된다). 그런 자리를 건드린 고침은 보내지 않고 고치던 글을 칸에 둔다. 토큰 주인이 쓴 댓글만 고친다
-- 담당자 옆 `바꾸기` 로 이름·이메일로 사람을 찾는다(또는 `나`). 다른 사람에게 넘기기는 5초 안에 한 번 더 눌러야 한다
-- 드롭다운 사용자 정의 필드 옆 `›` 로 선택지를 펼쳐 하나를 누르면 바뀐다
-- `Claude에게 맡기기` 는 태스크 제목·링크·상태·설명·최근 댓글을 입력창에 채운다
-- 작업 유형의 상태(Open, In Progress…) 옆 `바꾸기` 로 그 유형의 상태들을 펼쳐 골라 바꾼다. 두 Asana MCP 서버 모두 이 키를 버려서, `✎ 고치기` 처럼 개인 토큰을 넣었을 때만 Asana REST API 를 부른다. 토큰이 없으면 `바꾸기` 가 넣는 법을 알려 주기만 하고 아무것도 부르지 않는다
-- 이 Asana 호출은 패널을 열거나 무언가를 눌렀을 때만 하고, Claude 의 호출처럼 Claude Code 권한 검사를 거친다. allow 규칙이 없으면 auto mode 는 거절하고 기본 모드는 매번 묻는다. 패널이 쓰는 도구를 `~/.claude/settings.json` 의 `permissions.allow` 에 넣는다. 빠진 것이 있으면 패널이 그 목록을 보여 준다. V2 서버라면:
+- [desk-asana](desk-asana/README.ko.md): `/desk-asana`, 내 Asana 태스크·워크스페이스 검색·내 프로젝트의 섹션별 태스크, 상세·댓글·담당자·드롭다운 필드·상태
+- [desk-slack](desk-slack/README.ko.md): `/desk-slack`, 나에게 온 Slack DM·그룹 DM 을 대화방으로, 답장, 새 메시지 알림
 
-  ```json
-  "mcp__asana-v2__get_my_tasks", "mcp__asana-v2__search_tasks", "mcp__asana-v2__get_task",
-  "mcp__asana-v2__get_task_stories", "mcp__asana-v2__add_comment", "mcp__asana-v2__update_tasks", "mcp__asana-v2__search_objects",
-  "mcp__asana-v2__get_me", "mcp__asana-v2__get_projects", "mcp__asana-v2__get_tasks"
-  ```
-
-  이 규칙은 Claude 가 부르는 같은 도구(댓글 달기·태스크 바꾸기 포함)도 허용한다
-
-### `/desk-slack`: Slack DM
-
-남이 나에게 보낸 DM·그룹 DM 을 Slack 클라이언트처럼 대화방으로 모아 둔다. Claude Code 에 이미 연결된 Slack MCP 서버(claude.ai Slack 커넥터)로 읽는다(따로 토큰·설정 없음). 채널의 메시지·@멘션·스레드 답글은 넣지 않는다(DM 안의 스레드 답글은 넣는다). Slack 서버가 없으면 `/mcp` 에서 Slack 을 연결하라고 알린다.
-
-- 목록은 대화방마다 한 줄, 최근 것부터: desk-look 에서 아직 열지 않은 메시지가 있으면 `●`, 참가자, 마지막 메시지, 얼마 전인지. 처음에는 최근 3일 치를 읽은 것으로 채운다
-- 대화방을 누르면 양쪽 대화 최근 30개. 맨 아래 칸에 쓰고 Enter 로 그 방에 답장한다. `↻` 다시 읽기, `← 대화방`(답장 칸 아래에도 있음)은 목록으로
-- 답글이 달린 글 아래 `답글 N개` 를 누르면 그 스레드(원글과 최근 답글 30개)가 열리고, 거기서 쓴 답장은 그 스레드로 간다. `← 이름` 은 대화방으로. 대화방의 마지막 메시지가 스레드 답글이면 목록에서 누를 때 그 스레드로 바로 열린다
-- `✕` 는 대화방 닫기, 맨 위 `모두 닫기` 는 목록의 모든 방 닫기(둘 다 5초 안에 한 번 더 눌러야 한다). 닫은 방은 새 메시지가 오면 다시 생긴다
-- `Claude에게 맡기기` 는 최근 대화를 입력창에 채우고, `Slack에서 열기` 는 Slack 에서 연다
-- Claude Code 세션이 하나라도 떠 있으면 1분마다 새 메시지를 확인하고, 대화방마다 알림을 하나씩 보낸다(알림 채널로, `slackNotify` 로 끔). 입력창 띠의 `✉ N` 칩이 안 읽은 수이고 누르면 패널이 열린다. 세션이 여럿이면 하나만 확인하고 나머지는 그 결과를 같이 본다
-- 안 읽음은 desk-look 안에서만 센다: 여기서 열어도 Slack 에서 읽음이 되지 않고, Slack 에서 읽어도 여기서는 지워지지 않는다
-- Slack 커넥터는 이걸로 보낸 메시지 끝에 "Sent using Claude" 줄을 붙인다
-- 네 Slack 도구가 모두 `~/.claude/settings.json` 의 `permissions.allow` 에 있을 때만 Slack 을 부른다. 그 전에는 아무것도 부르지 않고(확인·알림도 없음) 패널이 빠진 규칙을 보여 준다. 확인은 권한 창에 답할 사람이 없는 백그라운드에서 돌기 때문이다:
-
-  ```json
-  "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_channel",
-  "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_read_user_profile"
-  ```
-
-  스레드를 열려면 `"mcp__claude_ai_Slack__slack_read_thread"` 도 넣는다. 이 규칙만 없으면 확인·알림·대화방은 그대로 돌고, 스레드만 열지 않고 대화방에 넣을 규칙을 보여 준다
-
-  이 규칙은 Claude 가 부르는 같은 도구도 허용한다: Claude 가 Slack 을 보낼 때도 묻지 않는다
+예전 desk-look 에서 올라왔다면: 쓰는 플러그인을 설치하고(아래), Asana 개인 토큰을 넣어 두었다면 `/plugin configure desk-asana@cc-desktop-mod` 에 다시 넣으세요. desk-look 은 플러그인 없이 Asana·Slack MCP 서버가 보이면 이를 한 번 알립니다.
 
 ### `/desk-preview [파일]`: 마크다운 미리보기
 
@@ -210,6 +169,13 @@ Claude Code 터미널 세션의 프롬프트에서:
 
 마켓플레이스 추가를 물으면 `y`, 범위는 user 를 고르면 됩니다.
 
+Asana·Slack 패널은 같은 마켓에서 쓰는 플러그인을 더 설치합니다:
+
+```
+/plugin install desk-asana@cc-desktop-mod
+/plugin install desk-slack@cc-desktop-mod
+```
+
 ## 설정
 
 `/config` 에서 `desk-look` 으로 찾으면 아래 항목이 나옵니다.
@@ -219,9 +185,7 @@ Claude Code 터미널 세션의 프롬프트에서:
 - `askNotify`: `on` (기본), `off`. 질문 카드가 뜰 때 알림. 엔진 창은 뜰 때 알림을 보내지만 카드가 뜬 동안엔 엔진이 보내지 않아서 카드가 직접 보냅니다
 - `prBar`: `on` (기본), `off`. 입력창 띠 옆 PR 칩. 세션을 시작할 때와 턴이 끝날 때 지금 브랜치의 PR 을 `gh`(GitHub)·`glab`(GitLab)으로 읽음(30초에 한 번까지). 열린 PR 의 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴과 상관없이 15초마다 다시 읽고, 체크 상태가 그대로면 간격을 두 배씩 늘려 2분마다까지(runner 를 기다리는 job 처럼 끝나지 않는 체크가 계속 묻지 않게). 둘 다 없거나 어느 쪽 저장소도 아니면 숨기고 그 브랜치에서는 다시 묻지 않음(네트워크 오류는 다음 턴에 다시 읽음). `/desk-pr` 패널은 설정과 상관없이 열 수 있음
 - `previewAutoOpen`: `on` (기본), `off`. Claude 가 쓴 마크다운 문서를 턴이 끝날 때 미리보기 패널에 엶. `off` 면 `◫` 칩과 `/desk-preview` 로만
-- `slackNotify`: `on` (기본), `off`. 새 Slack DM 이 오면 알림(`/desk-slack` 참고). `off` 여도 패널과 `✉` 칩을 위한 확인은 계속
 - `replyInBlocks`: `on` (기본), `off`. Claude 의 답을 0.1초마다 몇 줄씩 흘리지 않고 블록째 보여 줌: 도구 호출 앞 글은 그 호출과 함께, 턴 끝 답은 통째로 나옴. 기다리는 동안 스피너에 모은 줄 수. 화면보다 긴 블록도 통째로 나와서 화면이 그 끝에 가 있으니 앞부분은 올려서 읽음. Esc 로 끊어도 모은 글은 보임. 모으기는 답 스트림 자체를 늦춰 Remote Control(Claude 앱, claude.ai/code)도 덩어리로 받으므로, 마지막 프롬프트를 앱에서 보냈으면 앱의 부드러운 흐름을 지키려고 평소처럼 흘림
-- `asanaToken`: 비어 있음(기본). 선택. Asana 개인 토큰. 내 Asana 댓글의 `✎ 고치기` 와 작업 유형 상태 바꾸기만 쓴다(`/desk-asana` 참고). `/plugin configure desk-look@cc-desktop-mod` 에서 넣는다
 - `contextChip`: `auto` (기본), `always`, `off`. 입력창 띠 옆 컨텍스트 칩. `auto` 는 50% 이상일 때만(상태 줄이나 다른 플러그인이 이미 늘 보여 주는 경우가 많아서), `always` 는 늘, `off` 는 끔. `/desk-context` 패널은 설정과 상관없이 열 수 있음
 
 ## 업데이트
@@ -232,7 +196,7 @@ Claude Code 터미널 세션의 프롬프트에서:
 claude plugin update desk-look
 ```
 
-`/desk-update` 는 새 버전을 받았으면 `/reload-plugins` 까지 대신 실행합니다. 셸 명령으로 올렸으면 세션에서 `/reload-plugins` 를 실행합니다.
+`/desk-update` 는 설치한 desk-asana·desk-slack 도 함께 올리고, 새 버전을 받았으면 `/reload-plugins` 까지 대신 실행합니다. 셸 명령으로 올렸으면 세션에서 `/reload-plugins` 를 실행합니다.
 
 ## 환경별 동작
 
@@ -259,11 +223,13 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` 는 지난 점검 이후의 Claude Code 릴리즈 노트와 플러그인 API diff 를 모아, desk-look 이 쓰거나 걷어낼 거리를 찾습니다. 저장소 관례(최신 Claude Code 만 지원, 버전마다 GitHub 릴리즈)는 `CLAUDE.md` 에 있습니다.
 
+`desk-asana`·`desk-slack` 에서도 같은 명령을 씁니다. desk-asana 는 댓글을 desk-look 의 마크다운 렌더러로 그리는데, 플러그인은 자기 폴더만 설치되므로 `desk-asana/hooks/shared/` 에 복사해 둡니다. `desk-look/hooks/markdown.tsx`·`diagram.ts` 를 고쳤으면 `scripts/sync-shared.sh` 를 돌려 함께 커밋합니다. 복사본이 어긋나면 릴리즈 워크플로가 실패합니다(`scripts/sync-shared.sh --check`).
+
 `desk-look/.claude-plugin/types/` 는 엔진이 mod 를 로드할 때마다 다시 까는 타입 정의라 커밋하지 않습니다.
 
 ## 서드파티
 
-- `desk-look/hooks/vendor/lovely-mermaid.js` — [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 를 묶은 파일, Apache-2.0 (`LICENSE.lovely-mermaid`)
+- `desk-look/hooks/vendor/lovely-mermaid.js` — [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 를 묶은 파일, Apache-2.0 (`LICENSE.lovely-mermaid`). `desk-asana/hooks/shared/vendor/` 에도 복사해 둠
 
 ## 라이선스
 

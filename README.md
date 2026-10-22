@@ -10,13 +10,12 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 **At a glance**
 
 - **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
-- **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage, running background tasks and unread Slack messages, and a task checklist
-- **Eight side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), your Asana tasks (`/desk-asana`), your Slack DMs (`/desk-slack`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage, running background tasks and, with desk-slack, unread Slack messages, and a task checklist
+- **Six side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
 - **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
 - **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
-- **Asana**: the tasks assigned to you, a search across the workspace and your projects' tasks by section, their comments, and adding a comment, through the Asana MCP server Claude Code already has connected
-- **Slack**: the DMs and group DMs sent to you as conversations, replying in them, and a notification when a new one arrives, through the Slack MCP server Claude Code already has connected
+- **Asana and Slack panes** as two more plugins from the same marketplace, [desk-asana](desk-asana/README.md) and [desk-slack](desk-slack/README.md): install only the ones you use, so desk-look itself makes no network request of its own and calls no MCP server
 - **English or Korean** labels, following Claude Code's own language setting by default
 
 ## Commands
@@ -24,14 +23,12 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - `/desk-diff [file|branch|commits]`: Diff pane: uncommitted changes, the whole branch, or per commit
 - `/desk-tasks [number]`: Background tasks pane: agents, background shells and monitors
 - `/desk-pr`: The current branch's pull request or merge request, with a merge button
-- `/desk-asana`: The Asana tasks assigned to you, a search across the workspace, or your projects' tasks by section: details, comments, adding a comment, assignee, dropdown fields and status
-- `/desk-slack`: The Slack DMs and group DMs sent to you, as conversations: recent messages, replying, closing
 - `/desk-preview [file]`: Markdown preview pane: a document drawn like the transcript
 - `/desk-context`: Context breakdown, usage limits and session cost
 - `/desk-sessions [number]`: Recent sessions by project, with search; switch to one
 - `/desk-fold`: Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position
 - `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it
-- `/desk-update`: Update desk-look to the latest version
+- `/desk-update`: Update desk-look, and desk-asana and desk-slack if installed, to the latest version
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
 
@@ -114,52 +111,14 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 - `Merge` merges it after a second press within 5 seconds, only at the head commit the pane showed (a newer push makes the merge fail). While checks are still running it reads `Merge when pipeline succeeds` (GitLab) or `Merge when checks pass` (GitHub) and sets auto-merge instead. It shows only on an open, non-draft PR with no failing checks that the host reports as mergeable. The merge method is the repository's: GitLab follows the MR's squash setting; GitHub uses merge, else squash, else rebase, whichever the repository allows. The remote source branch is deleted (on GitHub, after an auto-merge only if the repository deletes head branches); the local branch is left alone
 - Nothing else is changed: no approvals, comments or `Ready for review`
 
-### `/desk-asana`: Asana tasks
+### Asana and Slack: separate plugins
 
-Your open Asana tasks, read through the Asana MCP server Claude Code already has connected (no token or setting of its own). It uses Asana's official V2 server (`https://mcp.asana.com/v2/mcp`, the one with `get_my_tasks`) when one is connected, otherwise the claude.ai Asana connector; on the connector, listing your tasks needs a Premium workspace (Asana's task search). With neither, the pane says to connect Asana in `/mcp`.
+Since 0.55.0 the Asana and Slack panes are their own plugins in this marketplace. desk-look works with or without them; with them, `/desk-fold` folds their panes too, they follow desk-look's language, and desk-slack's unread count shows as the `✉ N` chip in desk-look's band.
 
-- The list groups your incomplete tasks by project, with the due date at the end of the row (red when overdue). Below them, `Done in the last 14 days` shows the tasks completed in the last 14 days, dimmed, with their status (`● On hold`). Depending on the task type, statuses such as on hold or waiting for release count as complete in Asana, so a task moved to one of them can still be opened from the pane
-- The `● My tasks ○ Projects` tabs at the top switch views. `Projects` lists the projects you are a member of, most recently changed first (member count, and open task count on the V2 server). Click one for its open tasks, whoever they are assigned to, grouped by section with the assignee and due date (sections with no open task are left out), and tasks completed in the last 14 days in a `Done in the last 14 days` group at the end; click a section row to fold it, or `Collapse all` (`z`) to fold or unfold every section. Up to 300 open tasks are read per project. `← Projects`, at the top and again at the bottom, goes back to the list
-- The `Search` box above it finds open tasks anywhere in the workspace you can see, by name, description or comment (the 50 most recently changed), shown the same way with each task's assignee; `✕ My tasks` or an empty search goes back to your tasks. Search needs a Premium workspace (Asana's task search)
-- Click a task for its details: the task type's status (`● Open`), projects and sections, assignee, due date, custom fields, the description with its formatting as on the web (headings, bold, lists, inline code, code blocks, links and task mentions) and the latest 30 comments, formatted the same way with mentions by name (on the claude.ai connector, the comments among the task's first 100 activity entries). `↻` (`r` in every view) reloads, `← Tasks` (also at the bottom) goes back to the list, the search or the project
-- Write a comment in the box at the bottom and press Enter to add it on Asana. `@ Mention` below it finds people by name or email; pressing one puts `@Name` in the comment, and it is sent as an Asana @-mention (which notifies them) as long as the `@Name` is still in the text when you send
-- `✎ Edit` next to one of your own comments edits it in place (Enter saves). The Asana MCP servers have no tool for editing a comment, so this one call goes to Asana's REST API with a personal access token you put in yourself: create one at https://app.asana.com/0/my-apps, put it in `Asana personal access token` under `/plugin configure desk-look@cc-desktop-mod` (kept in secure storage) and choose `Save configuration`, which reloads the plugin. Without a token, `✎ Edit` explains this and calls nothing. Only the characters you change are written back into the comment's original rich text, so mentions, links, bold, lists, code blocks and images you did not touch stay exactly as they were. List marks (`• `, `1. `), images (`[image]`) and the letters of a mention or link are shown but cannot be changed here (a whole mention can be deleted); an edit that touches them is refused and kept in the box. Only comments the token's owner wrote can be edited
-- `Change` next to the assignee finds people by name or email (or `Me`); handing the task to someone takes a second press within 5 seconds
-- `›` next to a dropdown custom field lists its options; press one to set it
-- `Hand to Claude` fills the prompt with the task's title, link, status, description and recent comments
-- `Change` next to the task type's status (Open, In Progress…) lists the type's statuses; picking one changes it. The Asana MCP servers drop this key, so like `✎ Edit` it goes to Asana's REST API only when you have put in a personal access token; without one, `Change` explains how and calls nothing
-- These Asana calls are made only when you open the pane or press something in it, and they go through Claude Code's permission check like Claude's own calls: auto mode refuses them and the default mode asks each time, unless an allow rule covers them. Add the pane's tools to `permissions.allow` in `~/.claude/settings.json`; while some are missing, the pane lists them. For the V2 server:
+- [desk-asana](desk-asana/README.md): `/desk-asana`, your Asana tasks, a search across the workspace and your projects' tasks by section, with details, comments, assignee, dropdown fields and status
+- [desk-slack](desk-slack/README.md): `/desk-slack`, the Slack DMs and group DMs sent to you as conversations, replying, and a notification when a new one arrives
 
-  ```json
-  "mcp__asana-v2__get_my_tasks", "mcp__asana-v2__search_tasks", "mcp__asana-v2__get_task",
-  "mcp__asana-v2__get_task_stories", "mcp__asana-v2__add_comment", "mcp__asana-v2__update_tasks", "mcp__asana-v2__search_objects",
-  "mcp__asana-v2__get_me", "mcp__asana-v2__get_projects", "mcp__asana-v2__get_tasks"
-  ```
-
-  The rule allows the same tools for Claude too, including adding comments and changing tasks
-
-### `/desk-slack`: Slack DMs
-
-The DMs and group DMs other people sent you, kept as conversations like the Slack client, read through the Slack MCP server Claude Code already has connected (the claude.ai Slack connector; no token or setting of its own). Messages, @mentions and thread replies in channels are not included (thread replies in a DM are). With no Slack server, the pane says to connect Slack in `/mcp`.
-
-- The list shows one row per conversation, most recent first: `●` when it has messages you have not opened in desk-look, the people in it, the last message and how long ago. The first time, it fills in the last 3 days as already read
-- Click a conversation for its latest 30 messages, both sides. Write in the box at the bottom and press Enter to reply there. `↻` reloads, `← Conversations` (also under the reply box) goes back
-- Under a message with replies, `N replies` opens that thread (the message and its latest 30 replies), and a reply written there goes to the thread. `← name` goes back to the conversation. When a conversation's last message is a thread reply, clicking it in the list opens that thread directly
-- `✕` closes a conversation, and `Close all` at the top closes every conversation in the list (both need a second press within 5 seconds). A closed conversation comes back when a new message arrives in it
-- `Hand to Claude` fills the prompt with the conversation's recent messages; `Open in Slack` opens it in Slack
-- While any Claude Code session is running, desk-look checks for new messages once a minute and sends a notification per conversation through your notification channel (`slackNotify` turns that off). The `✉ N` chip in the band shows the unread count and opens the pane. With several sessions open, one of them checks and the others share what it finds
-- "Unread" is desk-look's own: opening a conversation here does not mark it read in Slack, and reading it in Slack does not clear it here
-- The Slack connector adds a "Sent using Claude" line to messages sent through it
-- desk-look calls Slack only while all four of its Slack tools have an allow rule in `permissions.allow` in `~/.claude/settings.json`; until then it calls nothing (no checking, no notifications) and the pane lists the missing rules. The check runs in the background, where nobody could answer a permission prompt:
-
-  ```json
-  "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_channel",
-  "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_read_user_profile"
-  ```
-
-  To open threads, add `"mcp__claude_ai_Slack__slack_read_thread"` too. Without just that rule, checking, notifications and conversations keep working; threads do not open, and the conversation shows the rule to add
-
-  The rule allows the same tools for Claude too: Claude can then send Slack messages without asking
+Coming from an earlier desk-look: install the one you use (below), and if you had set an Asana personal access token, set it again under `/plugin configure desk-asana@cc-desktop-mod`. desk-look shows this once when it finds an Asana or Slack MCP server without the plugin.
 
 ### `/desk-preview [file]`: Markdown preview
 
@@ -210,6 +169,13 @@ At the prompt of a Claude Code terminal session:
 
 Answer `y` when asked to add the marketplace, and pick the user scope.
 
+For the Asana or Slack pane, add the plugin you use from the same marketplace:
+
+```
+/plugin install desk-asana@cc-desktop-mod
+/plugin install desk-slack@cc-desktop-mod
+```
+
 ## Settings
 
 Search for `desk-look` in `/config` to find these options.
@@ -219,9 +185,7 @@ Search for `desk-look` in `/config` to find these options.
 - `askNotify`: `on` (default), `off`. Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself
 - `prBar`: `on` (default), `off`. The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds, and, while a check (GitLab: a pipeline job) of an open PR is still running, between turns too: every 15 seconds, doubling up to every 2 minutes while nothing changes (a check that never reports, such as one waiting for a runner, would otherwise keep asking); without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting
 - `previewAutoOpen`: `on` (default), `off`. Open a Markdown document Claude writes in the preview pane when the turn ends. `off` leaves it to the `◫` chips and `/desk-preview`
-- `slackNotify`: `on` (default), `off`. Notify when a new Slack DM arrives (see `/desk-slack`). `off` keeps checking for the pane and the `✉` chip, without notifications
 - `replyInBlocks`: `on` (default), `off`. Show Claude's reply a block at a time instead of a few lines every tenth of a second: the text before a tool call comes out with the call, and the answer at the end of a turn comes out whole. While it waits, the spinner shows how many lines it holds. A block taller than the screen comes out whole too, so the view ends at its end: scroll up to read its start. Pressing Esc still shows what was held. Holding slows the reply stream itself, which Remote Control clients (the Claude app, claude.ai/code) receive too, so when your last prompt came from the app the reply streams as usual, to keep the app's smooth text
-- `asanaToken`: empty (default). An Asana personal access token, optional. Only `✎ Edit` on your Asana comments and changing a task type's status use it (see `/desk-asana`); set it with `/plugin configure desk-look@cc-desktop-mod`
 - `contextChip`: `auto` (default), `always`, `off`. The context chip next to the band above the prompt. `auto` shows it only from 50% (a status line or another plugin often shows context all the time already), `always` always shows it, `off` hides it. The `/desk-context` pane opens regardless of this setting
 
 ## Update
@@ -232,7 +196,7 @@ Run `/desk-update` at the prompt, or from a shell:
 claude plugin update desk-look
 ```
 
-`/desk-update` runs `/reload-plugins` for you when a new version came in; after the shell command, run it in your session.
+`/desk-update` also updates desk-asana and desk-slack when they are installed, and runs `/reload-plugins` for you when a new version came in; after the shell command, run it in your session.
 
 ## Behavior by environment
 
@@ -259,11 +223,13 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` gathers the Claude Code release notes and the plugin API diff since the last check, to find what desk-look can use or drop. `CLAUDE.md` holds the repository's conventions (latest Claude Code only, a GitHub release for every version).
 
+The same commands work in `desk-asana` and `desk-slack`. desk-asana draws comments with desk-look's Markdown renderer, copied into `desk-asana/hooks/shared/` (a plugin is installed from its own folder only): after changing `desk-look/hooks/markdown.tsx` or `diagram.ts`, run `scripts/sync-shared.sh` and commit both. The release workflow fails while the copy differs (`scripts/sync-shared.sh --check`).
+
 `desk-look/.claude-plugin/types/` holds type definitions the engine lays down again every time it loads the mod, so it isn't committed.
 
 ## Third party
 
-- `desk-look/hooks/vendor/lovely-mermaid.js`: a bundle of [lovely-mermaid](https://github.com/xl0/lovely-mermaid), Apache-2.0 (`LICENSE.lovely-mermaid`)
+- `desk-look/hooks/vendor/lovely-mermaid.js`: a bundle of [lovely-mermaid](https://github.com/xl0/lovely-mermaid), Apache-2.0 (`LICENSE.lovely-mermaid`), copied into `desk-asana/hooks/shared/vendor/` too
 
 ## License
 

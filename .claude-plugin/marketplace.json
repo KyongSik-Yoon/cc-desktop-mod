@@ -27,6 +27,32 @@
         "github",
         "gitlab"
       ]
+    },
+    {
+      "name": "desk-asana",
+      "source": "./desk-asana",
+      "description": "Your Asana tasks in a Claude Code side pane (/desk-asana): assigned tasks, workspace search, project tasks by section, details, comments, assignee, fields and status, through the Asana MCP server. Pairs with desk-look",
+      "category": "productivity",
+      "tags": [
+        "mod",
+        "asana",
+        "tasks",
+        "terminal",
+        "tui"
+      ]
+    },
+    {
+      "name": "desk-slack",
+      "source": "./desk-slack",
+      "description": "The Slack DMs sent to you as conversations in a Claude Code side pane (/desk-slack): recent messages, replying and notifications, through the Slack MCP server. Pairs with desk-look",
+      "category": "productivity",
+      "tags": [
+        "mod",
+        "slack",
+        "dm",
+        "terminal",
+        "tui"
+      ]
     }
   ]
 }
