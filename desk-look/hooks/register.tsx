@@ -1520,9 +1520,10 @@ type StepChunk = Chunk<'turn.step'>
 // 도구 청크를 엔진에 넘기기 전에 그 호출을 묶음에 넣는다. 엔진은 청크를 받자마자 행을 그리는데, 묶음은
 // session.append 뒤 기록을 다시 읽어야 채워져서, 그 사이 새 호출이 제 줄을 따로 그렸다가 윗줄 묶음으로
 // 합쳐지며 대화가 한 줄씩 오르내렸다.
+// $ 는 넘기지 않고 저장만 받는다: 디렉터리 검사가 yield* 안의 placeCalls($, …) 를 막았다(0.55.3).
 async function* placeCalls(
-  $: EngineInterface,
   stream: { next(): Promise<IteratorResult<StepChunk, TurnStepResult>> },
+  save: () => Promise<unknown>,
 ): AsyncGenerator<StepChunk, TurnStepResult> {
   while (true) {
     const step = await stream.next()
@@ -1534,7 +1535,7 @@ async function* placeCalls(
       runCursor = placed.cursor
       const call: RunCall = { tool_use_id: chunk.id, tool: chunk.name, input: {}, isRunning: true, isErrored: false, isInterrupted: false }
       predicted = [...predicted, { first: placed.first, call }]
-      await update($, runs, state => withPredicted(state, predicted)).catch(() => undefined)
+      await save().catch(() => undefined)
     }
     yield chunk
   }
@@ -2621,8 +2622,9 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
     if (id === undefined) {
-      if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* placeCalls($, next(e))
-      return yield* placeCalls($, gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS)))
+      const savePredicted = () => update($, runs, state => withPredicted(state, predicted))
+      if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* placeCalls(next(e), savePredicted)
+      return yield* placeCalls(gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS)), savePredicted)
     }
     // 단계의 모델은 시작할 때 이미 정해져 있다. 단계를 붙잡지 않게 기다리지 않는다.
     void patchAgent($, id, () => ({ model: e.model })).catch(() => undefined)
