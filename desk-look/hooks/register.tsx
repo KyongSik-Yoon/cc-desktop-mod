@@ -1334,6 +1334,8 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
 // 0.55.0 에서 Asana·Slack 패널이 desk-asana·desk-slack 플러그인으로 옮겨 갔다. 그 MCP 서버를 쓰는데 플러그인이
 // 없으면 한 번 알린다. MCP 도구는 세션이 시작된 뒤에 붙으므로 턴이 시작될 때 보고, 알렸으면 store 에 남긴다.
 let movedChecked = false
+// 한 번뿐인 안내라 기본(4초)보다 오래 둔다.
+const MOVED_NOTICE_MS = 10_000
 
 export function movedPlugins(tools: ReadonlyArray<{ name: string; mcp?: boolean }>, ready: { asana: boolean; slack: boolean }): string[] {
   const mcp = tools.filter(tool => tool.mcp)
@@ -1353,7 +1355,7 @@ async function noticeMoved($: EngineInterface) {
   const missing = movedPlugins(tools, { asana: await read($, asanaReady), slack: await read($, slackReady) })
   if (missing.length === 0) return
   await $.store.set('movedNotice', true)
-  $.ui.toast(T.movedNotice(missing))
+  $.ui.toast(T.movedNotice(missing), { timeoutMs: MOVED_NOTICE_MS })
 }
 
 // 세션 패널이 열려 있을 때만 목록을 다시 읽는다(기록 파일 80개를 읽는다).

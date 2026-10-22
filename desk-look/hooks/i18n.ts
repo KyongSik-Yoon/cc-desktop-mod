@@ -88,9 +88,9 @@ const ko = {
   updateLatest: (version: string) => `desk-look 은 이미 최신(${version})이에요.`,
   updateFailed: (reason: string) => `desk-look 을 올리지 못했어요: ${reason}`,
   siblingUpdated: (name: string, from: string, to: string) => `${name} 도 ${from} → ${to} 로 올렸어요.`,
-  // 0.55.0 에서 Asana·Slack 패널이 별도 플러그인으로 옮겨 갔다는 한 번 안내
+  // 0.55.0 에서 Asana·Slack 패널이 별도 플러그인으로 옮겨 갔다는 한 번 안내. 토스트는 40칸 세 줄쯤이라 짧게.
   movedNotice: (names: string[]) =>
-    `Asana·Slack 패널이 별도 플러그인으로 옮겨 갔어요. ${names.map(name => `/plugin install ${name}@cc-desktop-mod`).join(', ')} 로 설치하세요.${names.includes('desk-asana') ? ' Asana 토큰을 넣어 두었다면 desk-asana 설정에 다시 넣어 주세요.' : ''}`,
+    `Asana·Slack 패널은 옮겨 갔어요: /plugin install ${names[0]}@cc-desktop-mod${names.length > 1 ? ` (${names.slice(1).join('·')} 도)` : ''}`,
   noSession: (index: number) => `${index}번 세션이 없어요. /desk-sessions 로 목록을 다시 열어 주세요.`,
   sessionPicked: (index: number, title: string) => `${index}번 세션: ${title}`,
   sessionsOpened: '세션 패널을 열었습니다.',
@@ -360,7 +360,7 @@ const en: Strings = {
   updateFailed: reason => `Couldn't update desk-look: ${reason}`,
   siblingUpdated: (name, from, to) => `Updated ${name} ${from} → ${to} too.`,
   movedNotice: names =>
-    `The Asana and Slack panes moved to their own plugins. Install with ${names.map(name => `/plugin install ${name}@cc-desktop-mod`).join(', ')}.${names.includes('desk-asana') ? ' If you had set an Asana token, set it again in the desk-asana settings.' : ''}`,
+    `Asana/Slack panes moved: /plugin install ${names[0]}@cc-desktop-mod${names.length > 1 ? ` (and ${names.slice(1).join(', ')})` : ''}`,
   noSession: index => `There is no session ${index}. Run /desk-sessions to open the list again.`,
   sessionPicked: (index, title) => `Session ${index}: ${title}`,
   sessionsOpened: 'Opened the sessions pane.',
