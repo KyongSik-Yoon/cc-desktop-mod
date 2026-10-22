@@ -43,6 +43,9 @@ const SEARCH_FIELDS = `${LIST_FIELDS},assignee.name`
 const PROJECT_TASK_FIELDS = 'name,due_on,completed,custom_type_status_option.name,assignee.name,permalink_url,memberships.project.gid,memberships.project.name,memberships.section.name'
 // 태스크 키(taskKey)는 키 필드를 설정했을 때만 읽는다. 없으면 목록 응답을 예전 그대로.
 const withKey = (fields: string, keyFields: readonly string[]) => (keyFields.length === 0 ? fields : `${fields},custom_fields.name,custom_fields.display_value`)
+// 목록 한 쪽의 크기. custom_fields 는 프로젝트의 모든 필드를 태스크마다 실어 응답이 커지니(필드 셋에 약 230자) 반으로 시작한다.
+// 그래도 MCP 결과 한도를 넘으면 패널이 더 줄여 다시 읽는다(register.tsx readPages).
+const pageSize = (keyFields: readonly string[]) => (keyFields.length === 0 ? 100 : 50)
 
 // 설정 asanaKeyField: 태스크 키로 보일 사용자 정의 필드 이름들(쉼표로, 앞의 것부터). 예: "JKD" 또는 "JKD, J5S".
 export function keyFieldNames(value: unknown): string[] {
@@ -87,8 +90,9 @@ export const doneSince = (now: number) => new Date(now - DONE_DAYS * 86_400_000)
 // 내 태스크: v2 는 completed_since 하나로 열린 것과 그 뒤 완료된 것을 함께 준다. v1 검색은 둘을 한 번에 못 받아 따로 부른다.
 export function listCalls(server: AsanaServer, since: string, keyFields: readonly string[] = []): AsanaCall[] {
   const opt_fields = withKey(LIST_FIELDS, keyFields)
-  if (server.dialect === 'v2') return [{ tool: ASANA_TOOLS.v2.list, args: { completed_since: since, limit: 100, opt_fields } }]
-  const args = { assignee_any: 'me', limit: 100, opt_fields }
+  const limit = pageSize(keyFields)
+  if (server.dialect === 'v2') return [{ tool: ASANA_TOOLS.v2.list, args: { completed_since: since, limit, opt_fields } }]
+  const args = { assignee_any: 'me', limit, opt_fields }
   return [
     { tool: ASANA_TOOLS.v1.list, args: { ...args, completed: false, sort_by: 'modified_at' } },
     { tool: ASANA_TOOLS.v1.list, args: { ...args, completed: true, completed_at_after: since, sort_by: 'completed_at' } },
@@ -577,16 +581,10 @@ export function projectsCall(server: AsanaServer, offset?: string): AsanaCall {
 }
 
 // 프로젝트의 열린 태스크와 since 뒤에 완료된 태스크. v2 completed_since 는 ISO 시각만 받는다('now' 를 거절).
-export function projectTasksCall(server: AsanaServer, project: string, since: string, keyFields: readonly string[], offset?: string): AsanaCall {
+export function projectTasksCall(server: AsanaServer, project: string, since: string, keyFields: readonly string[]): AsanaCall {
   return {
     tool: ASANA_TOOLS[server.dialect].tasks,
-    args: {
-      project,
-      completed_since: since,
-      limit: 100,
-      opt_fields: withKey(PROJECT_TASK_FIELDS, keyFields),
-      ...(offset ? { offset } : {}),
-    },
+    args: { project, completed_since: since, limit: pageSize(keyFields), opt_fields: withKey(PROJECT_TASK_FIELDS, keyFields) },
   }
 }
 
@@ -643,10 +641,13 @@ type RawStory = { gid?: string; text?: string; html_text?: string; created_at?: 
 const str = (value: unknown) => (typeof value === 'string' ? value : null)
 const dataOf = (json: unknown) => (json as { data?: unknown } | null)?.data
 
+// 필드 이름은 대소문자를 가리지 않는다(설정에 "jkd" 라고 넣어도 JKD 필드).
+const isKeyField = (name: unknown, keyFields: readonly string[]) => typeof name === 'string' && keyFields.some(key => key.toLowerCase() === name.toLowerCase())
+
 // 태스크 키: 설정한 키 필드 중 앞의 것부터 값이 있는 것(Asana ID 필드면 "JKD-1630").
 function taskKey(fields: RawTask['custom_fields'], keyFields: readonly string[]): string | null {
   for (const name of keyFields) {
-    const value = str(fields?.find(field => field?.name === name)?.display_value)
+    const value = str(fields?.find(field => isKeyField(field?.name, [name]))?.display_value)
     if (value !== null && value.trim() !== '') return value.trim()
   }
   return null
@@ -657,7 +658,7 @@ export function keyFieldGids(json: unknown, keyFields: readonly string[]): strin
   const data = dataOf(json)
   if (!Array.isArray(data)) return []
   const fields = (data as RawTask[]).flatMap(raw => raw?.custom_fields ?? [])
-  return [...new Set(fields.filter(field => typeof field?.gid === 'string' && keyFields.includes(field.name ?? '')).map(field => field.gid as string))]
+  return [...new Set(fields.filter(field => typeof field?.gid === 'string' && isKeyField(field.name, keyFields)).map(field => field.gid as string))]
 }
 
 // project 를 주면 그 프로젝트의 자리(섹션)를 쓴다. 아니면 이름이 있는 첫 프로젝트.

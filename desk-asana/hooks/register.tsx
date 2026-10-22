@@ -98,6 +98,41 @@ async function callAsana($: EngineInterface, server: AsanaServer, call: AsanaCal
   }
 }
 
+// MCP 결과 크기 한도(엔진 MAX_MCP_OUTPUT_TOKENS, 플러그인은 못 바꾼다)에 걸린 실패. 응답 크기는 태스크 수보다
+// 프로젝트의 사용자 정의 필드 수를 따라 미리 알 수 없어, 걸리면 쪽을 반으로 줄여 다시 읽는다.
+const isTooLarge = (error: string) => error.includes('exceeds maximum allowed tokens')
+// 도구(프로젝트 태스크는 프로젝트)마다 줄여 둔 쪽 크기. 세션 동안 기억해 같은 실패와 엔진이 남기는 결과 파일을 되풀이하지 않는다.
+const asanaPageLimits = new Map<string, number>()
+const MIN_PAGE = 10
+const MAX_PAGE_CALLS = 12
+
+type AsanaPages = { ok: true; data: { data: unknown[] }; isPartial: boolean } | { ok: false; error: string }
+
+// 쪽을 이어 읽는다: max 개가 차거나 다음 쪽이 없을 때까지(호출은 MAX_PAGE_CALLS 번까지). 한도에 걸리면 같은 쪽을 반 크기로
+// 다시 읽는다. 검색은 다음 쪽이 없어 줄인 만큼 적게 보인다. onPage 는 쪽마다 지금까지 읽은 것으로.
+async function readPages($: EngineInterface, server: AsanaServer, call: AsanaCall, max: number, onPage?: (data: { data: unknown[] }, isLast: boolean, isPartial: boolean) => Promise<unknown>): Promise<AsanaPages> {
+  const key = `${call.tool}:${String(call.args.project ?? '')}`
+  let limit = Math.min(Number(call.args.limit), asanaPageLimits.get(key) ?? Infinity)
+  const items: unknown[] = []
+  let offset: string | null = null
+  for (let calls = 0; calls < MAX_PAGE_CALLS; calls++) {
+    const got = await callAsana($, server, { tool: call.tool, args: { ...call.args, limit, ...(offset === null ? {} : { offset }) } })
+    if (!got.ok && isTooLarge(got.error) && limit > MIN_PAGE) {
+      limit = Math.max(MIN_PAGE, Math.floor(limit / 2))
+      asanaPageLimits.set(key, limit)
+      continue
+    }
+    if (!got.ok) return got
+    items.push(...((got.data as { data?: unknown[] } | null)?.data ?? []))
+    offset = nextOffset(got.data)
+    const isLast = offset === null || items.length >= max || calls === MAX_PAGE_CALLS - 1
+    const data = { data: [...items] }
+    await onPage?.(data, isLast, offset !== null)
+    if (isLast) return { ok: true, data, isPartial: offset !== null }
+  }
+  return { ok: false, error: 'too many pages' }
+}
+
 async function findAsana($: EngineInterface): Promise<AsanaServer | null> {
   const tools = await $.tool.list().catch(() => [])
   return findAsanaServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
@@ -123,7 +158,7 @@ async function refreshAsana($: EngineInterface) {
       return
     }
     const since = doneSince(await $.clock.now())
-    const [unruled, ...gots] = await Promise.all([findUnruled($, server), ...listCalls(server, since, asanaKeyFields).map(call => callAsana($, server, call))])
+    const [unruled, ...gots] = await Promise.all([findUnruled($, server), ...listCalls(server, since, asanaKeyFields).map(call => readPages($, server, call, LIST_MAX))])
     const failed = gots.find(got => !got.ok)
     for (const got of gots) if (got.ok) keyFieldGids(got.data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
     await update($, asana, (): AsanaState =>
@@ -143,9 +178,10 @@ async function openAsana($: EngineInterface) {
   await shown
 }
 
-// 쪽 수 한도: 프로젝트는 500개, 한 프로젝트의 열린 태스크는 300개까지 읽는다(쪽마다 MCP 호출 한 번).
+// 읽는 한도: 프로젝트는 500개(쪽마다 MCP 호출 한 번), 한 프로젝트의 태스크와 내 태스크는 개수로(readPages).
 const PROJECT_PAGES = 5
-const PROJECT_TASK_PAGES = 3
+const PROJECT_TASK_MAX = 300
+const LIST_MAX = 100
 
 async function switchAsanaTab($: EngineInterface, tab: AsanaTab) {
   await update($, asanaTab, () => tab)
@@ -189,24 +225,14 @@ async function openAsanaProject($: EngineInterface, project: AsanaProject) {
   if (server === null) return
   await update($, asanaProject, (view): AsanaProjectView => ({ project, status: 'loading', tasks: view?.project.gid === project.gid ? view.tasks : [], isPartial: false }))
   const since = doneSince(await $.clock.now())
-  const tasks = []
-  let offset: string | undefined
-  for (let page = 0; page < PROJECT_TASK_PAGES; page++) {
-    const got = await callAsana($, server, projectTasksCall(server, project.gid, since, asanaKeyFields, offset))
-    if (!got.ok) {
-      await update($, asanaProject, (view): AsanaProjectView | null => (view?.project.gid !== project.gid ? view : { ...view, status: 'failed', error: got.error }))
-      return
-    }
-    keyFieldGids(got.data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
-    tasks.push(...toTasks(got.data, asanaKeyFields, project.gid))
-    offset = nextOffset(got.data) ?? undefined
-    const isLast = offset === undefined || page === PROJECT_TASK_PAGES - 1
-    const shown = [...tasks]
-    await update($, asanaProject, (view): AsanaProjectView | null =>
-      view?.project.gid !== project.gid ? view : { project, status: isLast ? 'ok' : 'loading', tasks: shown, isPartial: isLast && offset !== undefined },
+  const got = await readPages($, server, projectTasksCall(server, project.gid, since, asanaKeyFields), PROJECT_TASK_MAX, (data, isLast, isPartial) => {
+    keyFieldGids(data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
+    const tasks = toTasks(data, asanaKeyFields, project.gid)
+    return update($, asanaProject, (view): AsanaProjectView | null =>
+      view?.project.gid !== project.gid ? view : { project, status: isLast ? 'ok' : 'loading', tasks, isPartial: isLast && isPartial },
     )
-    if (isLast) return
-  }
+  })
+  if (!got.ok) await update($, asanaProject, (view): AsanaProjectView | null => (view?.project.gid !== project.gid ? view : { ...view, status: 'failed', error: got.error }))
 }
 
 async function closeAsanaProject($: EngineInterface) {
@@ -249,8 +275,8 @@ async function searchAsana($: EngineInterface, server: AsanaServer, value: strin
   await update($, asanaSearch, (): AsanaSearch => ({ query, status: 'loading', tasks: [] }))
   // 키로 찾은 것을 앞에. 키로 찾기가 실패해도 글자 검색 결과는 보인다.
   const [got, byKey] = await Promise.all([
-    callAsana($, server, searchCall(server, query, asanaKeyFields)),
-    Promise.all(keySearchCalls(server, query, asanaKeyFields, [...asanaKeyGids]).map(call => callAsana($, server, call))),
+    readPages($, server, searchCall(server, query, asanaKeyFields), 50),
+    Promise.all(keySearchCalls(server, query, asanaKeyFields, [...asanaKeyGids]).map(call => readPages($, server, call, 10))),
   ])
   // 내 목록에 키 필드가 없던 사람도 검색에 걸린 태스크에서 gid 를 배워 다음 키 검색부터 찾는다.
   if (got.ok) keyFieldGids(got.data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
