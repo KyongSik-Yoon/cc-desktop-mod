@@ -12,7 +12,7 @@ desk-look 의 `desk-look/.claude-plugin/plugin.json` 버전을 올리는 커밋�
 
 같은 마켓의 `desk-asana`·`desk-slack` 은 desk-look 과 같은 버전으로 함께 올린다(0.55.0 에서 desk-look 의 Asana·Slack 패널을 떼어 냄). 태그·릴리즈는 desk-look 버전 하나이고, 세 버전이 다르면 워크플로가 실패한다.
 따로 올리면 `/desk-update` 와 릴리즈 노트가 플러그인마다 갈라지고, 세 플러그인이 서로의 상태(`desk-look.lang`·`folded`, `desk-slack.unread` 등)를 읽어 함께 바뀌기 때문이다.
-desk-asana 는 desk-look 의 `markdown.tsx`·`diagram.ts`·`vendor/lovely-mermaid*` 를 `desk-asana/hooks/shared/` 에 복사해 쓴다(설치본은 플러그인 폴더만 받으므로 `../desk-look` 을 가져올 수 없다). 원본을 고친 커밋에는 `scripts/sync-shared.sh` 로 복사본도 함께 넣는다. 어긋나면 워크플로의 `--check` 가 실패한다.
+desk-asana 는 desk-look 의 `markdown.tsx`·`diagram.ts`·`vendor/lovely-mermaid*` 를 `desk-asana/hooks/shared/` 에 복사해 쓴다(설치본은 플러그인 폴더만 받으므로 `../desk-look` 을 가져올 수 없다). 형제 공용 도우미 `desk-slack/hooks/util.tsx` 도 desk-asana 로 복사하고, 그 `cellWidth` 는 desk-look `markdown.tsx` 의 것과 같아야 한다. 원본을 고친 커밋에는 `scripts/sync-shared.sh` 로 복사본도 함께 넣는다. 어긋나면 워크플로의 `--check` 가 실패한다.
 
 손으로 만들어야 할 때(Actions 가 막혔을 때):
 

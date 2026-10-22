@@ -127,6 +127,9 @@ const slackFolded = atom({ plugin: 'desk-slack', key: 'folded' } as const, null 
 const asanaReady = atom({ plugin: 'desk-asana', key: 'ready' } as const, false)
 const slackReady = atom({ plugin: 'desk-slack', key: 'ready' } as const, false)
 const slackUnread = atom({ plugin: 'desk-slack', key: 'unread' } as const, 0)
+// desk-asana·desk-slack 의 패널이 지금 열려 있는지(그쪽이 ui.open·ui.close 로 맞춘다). /desk-fold 가 접을지 펼지 고른다.
+const asanaShown = atom({ plugin: 'desk-asana', key: 'shown' } as const, false)
+const slackShown = atom({ plugin: 'desk-slack', key: 'shown' } as const, false)
 
 // 스피너 시계: 엔진은 모드가 바뀔 때만 Spinner 를 다시 그리므로 직접 tick 을 올려 다시 그리게 한다.
 // 스피너가 사라지면(마지막으로 그린 지 2초가 지나면) 스스로 멈춘다.
@@ -895,15 +898,20 @@ async function siblingsFolded($: EngineInterface): Promise<number> {
   return (asanaPanes?.length ?? 0) + (slackPanes?.length ?? 0)
 }
 
+// 열린 패널이 하나라도 있으면(desk-asana·desk-slack 것 포함) 접고, 없으면 접어 둔 것을 편다. 이미 접어 둔 것이
+// 있으면 새로 접는 것을 그 목록에 더한다(접은 뒤 다른 패널을 열어 다시 접어도 처음 것이 남는다).
 async function toggleFold($: EngineInterface): Promise<string> {
   const panes = (await $.ui.panes()).filter(pane => pane.isPlaced)
   const saved = await read($, folded)
-  if (panes.length > 0 || saved === null) {
-    await update($, folded, () => panes.map(pane => ({ id: pane.id, title: pane.title, isShown: pane.isShown, offset: paneOffsets.get(pane.id) ?? 0 })))
+  const [asanaOpen, slackOpen] = await Promise.all([read($, asanaShown), read($, slackShown)])
+  if (panes.length > 0 || asanaOpen || slackOpen || saved === null) {
+    const fresh = panes.map(pane => ({ id: pane.id, title: pane.title, isShown: pane.isShown, offset: paneOffsets.get(pane.id) ?? 0 }))
+    await update($, folded, () => [...(saved ?? []).filter(pane => !fresh.some(item => item.id === pane.id)), ...fresh])
     for (const pane of panes) await $.ui.close({ id: pane.id }).catch(() => undefined)
-    const count = panes.length + (await siblingsFolded($))
+    // desk-asana·desk-slack 은 패널이 하나씩이라 열려 있던 것이 접힌 수다.
+    const count = panes.length + Number(asanaOpen) + Number(slackOpen)
     if (count > 0) return T.folded(count)
-    await update($, folded, () => null)
+    if ((saved ?? []).length === 0 && (await siblingsFolded($)) === 0) await update($, folded, () => null)
     return T.foldNothing
   }
   const count = saved.length + (await siblingsFolded($))
@@ -1332,33 +1340,39 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
 }
 
 // 0.55.0 에서 Asana·Slack 패널이 desk-asana·desk-slack 플러그인으로 옮겨 갔다. 그 MCP 서버를 쓰는데 플러그인이
-// 없으면 한 번 알린다. MCP 도구는 세션이 시작된 뒤에 붙으므로 턴이 시작될 때 보고, 알렸으면 store 에 남긴다.
+// 없으면 한 번 알린다. MCP 도구는 세션이 시작된 뒤에, 서버마다 다른 때 붙으므로 턴이 시작될 때마다 보고,
+// Asana·Slack 을 저마다 그 도구가 보인 때 한 번 판단한다. 판단한 것은 store 에 남긴다(0.55.0 의 true 는 둘 다).
+// MCP 서버를 쓰지 않는 사람도 있어 세션마다 몇 턴까지만 본다.
 let movedChecked = false
 let movedTurns = 0
 const MOVED_CHECK_TURNS = 5
 // 한 번뿐인 안내라 기본(4초)보다 오래 둔다.
 const MOVED_NOTICE_MS = 10_000
+const MOVED = [
+  { name: 'desk-asana', tool: /asana/i, ready: 'asana' },
+  { name: 'desk-slack', tool: /slack/i, ready: 'slack' },
+] as const
 
-export function movedPlugins(tools: ReadonlyArray<{ name: string; mcp?: boolean }>, ready: { asana: boolean; slack: boolean }): string[] {
+// 이번 턴의 판단: 도구가 새로 보인 플러그인은 판단한 것에 더하고, 그중 이 세션에 없는 것을 알린다.
+export function movedStep(
+  tools: ReadonlyArray<{ name: string; mcp?: boolean }>,
+  ready: { asana: boolean; slack: boolean },
+  decided: readonly string[],
+): { decided: string[]; notice: string[] } {
   const mcp = tools.filter(tool => tool.mcp)
-  return [
-    ...(!ready.asana && mcp.some(tool => /asana/i.test(tool.name)) ? ['desk-asana'] : []),
-    ...(!ready.slack && mcp.some(tool => /slack/i.test(tool.name)) ? ['desk-slack'] : []),
-  ]
+  const seen = MOVED.filter(item => !decided.includes(item.name) && mcp.some(tool => item.tool.test(tool.name)))
+  return { decided: [...decided, ...seen.map(item => item.name)], notice: seen.filter(item => !ready[item.ready]).map(item => item.name) }
 }
 
 async function noticeMoved($: EngineInterface) {
   if (movedChecked) return
-  if (await $.store.get('movedNotice').catch(() => undefined)) return void (movedChecked = true)
-  const tools = await $.tool.list()
-  // 아직 MCP 서버가 붙지 않았으면 다음 턴에 다시 본다. MCP 서버를 쓰지 않는 사람도 있어 몇 턴까지만.
-  if (!tools.some(tool => tool.mcp) && ++movedTurns < MOVED_CHECK_TURNS) return
-  movedChecked = true
-  if (!tools.some(tool => tool.mcp)) return
-  // MCP 서버가 붙은 뒤에 한 번 판단하면 끝이다(지금 없으면 옮겨 오는 사용자가 아니다).
-  await $.store.set('movedNotice', true)
-  const missing = movedPlugins(tools, { asana: await read($, asanaReady), slack: await read($, slackReady) })
-  if (missing.length > 0) $.ui.toast(T.movedNotice(missing), { timeoutMs: MOVED_NOTICE_MS })
+  const kept = await $.store.get('movedNotice').catch(() => undefined)
+  const decided = kept === true ? MOVED.map(item => item.name) : Array.isArray(kept) ? kept.filter((name): name is string => typeof name === 'string') : []
+  if (decided.length === MOVED.length) return void (movedChecked = true)
+  const step = movedStep(await $.tool.list(), { asana: await read($, asanaReady), slack: await read($, slackReady) }, decided)
+  if (step.decided.length > decided.length) await $.store.set('movedNotice', step.decided)
+  if (step.notice.length > 0) $.ui.toast(T.movedNotice(step.notice), { timeoutMs: MOVED_NOTICE_MS })
+  if (step.decided.length === MOVED.length || ++movedTurns >= MOVED_CHECK_TURNS) movedChecked = true
 }
 
 // 세션 패널이 열려 있을 때만 목록을 다시 읽는다(기록 파일 80개를 읽는다).
@@ -2531,9 +2545,11 @@ export const register: Register = (on, options) => {
     const market = await $.process.run(['claude', 'plugin', 'marketplace', 'update', 'cc-desktop-mod'], { timeoutMs: 150_000 })
     if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
     const ran = await $.process.run(['claude', 'plugin', 'update', 'desk-look@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
-    // 같은 마켓의 desk-asana·desk-slack 도 올린다. 설치하지 않았으면 실패하는데, 그건 알리지 않는다.
-    const asanaRan = await $.process.run(['claude', 'plugin', 'update', 'desk-asana@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
-    const slackRan = await $.process.run(['claude', 'plugin', 'update', 'desk-slack@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    // 같은 마켓의 desk-asana·desk-slack 도 함께 올린다. 설치하지 않았으면 실패하는데, 그건 알리지 않는다.
+    const [asanaRan, slackRan] = await Promise.all([
+      $.process.run(['claude', 'plugin', 'update', 'desk-asana@cc-desktop-mod', '--json'], { timeoutMs: 150_000 }),
+      $.process.run(['claude', 'plugin', 'update', 'desk-slack@cc-desktop-mod', '--json'], { timeoutMs: 150_000 }),
+    ])
     const siblings = [siblingUpdate('desk-asana', asanaRan.exitCode, asanaRan.stdout), siblingUpdate('desk-slack', slackRan.exitCode, slackRan.stdout)]
     if (isUpdated(ran.exitCode, ran.stdout) || siblings.some(note => note !== null)) {
       $.clock.after(RELOAD_AFTER_MS, () => void $.command.run({ command: 'reload-plugins' }).catch(() => $.ui.toast(T.reloadFailed)))

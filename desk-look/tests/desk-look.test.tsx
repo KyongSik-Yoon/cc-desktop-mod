@@ -1565,7 +1565,7 @@ test('에이전트 메시지는 줄 전체가 버튼', KO, async ($, on) => {
   await row.unmount()
 })
 
-import { clipStart, isUpdated, matchDiffFile, movedPlugins, splitCommitDiffs, updateMessage } from '../hooks/register'
+import { clipStart, isUpdated, matchDiffFile, movedStep, splitCommitDiffs, updateMessage } from '../hooks/register'
 
 test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', KO, () => {
   const files = [{ path: 'a.txt' }, { path: 'src/a.txt' }, { path: 'b.txt' }]
@@ -1922,11 +1922,49 @@ test('옮김 안내: Asana·Slack MCP 서버를 쓰는데 그 플러그인이 �
     { name: 'mcp__claude_ai_asana__asana_get_task', mcp: true },
     { name: 'mcp__claude_ai_Slack__slack_send_message', mcp: true },
   ]
-  expect(movedPlugins(tools, { asana: false, slack: false })).toEqual(['desk-asana', 'desk-slack'])
-  expect(movedPlugins(tools, { asana: true, slack: false })).toEqual(['desk-slack'])
-  expect(movedPlugins(tools, { asana: true, slack: true })).toEqual([])
+  expect(movedStep(tools, { asana: false, slack: false }, [])).toEqual({ decided: ['desk-asana', 'desk-slack'], notice: ['desk-asana', 'desk-slack'] })
+  expect(movedStep(tools, { asana: true, slack: false }, [])).toEqual({ decided: ['desk-asana', 'desk-slack'], notice: ['desk-slack'] })
+  expect(movedStep(tools, { asana: true, slack: true }, [])).toEqual({ decided: ['desk-asana', 'desk-slack'], notice: [] })
+  // 이미 판단한 것은 다시 알리지 않는다
+  expect(movedStep(tools, { asana: false, slack: false }, ['desk-slack'])).toEqual({ decided: ['desk-slack', 'desk-asana'], notice: ['desk-asana'] })
   // 이름에 asana 가 들어 있어도 MCP 도구가 아니면 보지 않는다
-  expect(movedPlugins([{ name: 'asana-notes', mcp: false }], { asana: false, slack: false })).toEqual([])
+  expect(movedStep([{ name: 'asana-notes', mcp: false }], { asana: false, slack: false }, [])).toEqual({ decided: [], notice: [] })
+})
+
+test('옮김 안내: 커넥터가 서버마다 늦게 붙어도 보일 때 알리고, 둘 다 판단하면 그만 본다', KO, async ($, on) => {
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('clock.now', () => ({ value: 0 }))
+  const store: Record<string, unknown> = {}
+  on('store.get', ($, e) => ({ value: store[e.key] }) as never)
+  on('store.set', ($, e) => ((store[e.key] = e.value), { value: undefined }) as never)
+  let listed = 0
+  const local = { name: 'mcp__local__search', description: '', mcp: true }
+  const slack = { name: 'mcp__claude_ai_Slack__slack_send_message', description: '', mcp: true }
+  const asana = { name: 'mcp__claude_ai_asana__asana_get_task', description: '', mcp: true }
+  let tools = [local]
+  on('tool.list', () => (listed++, { value: tools }) as never)
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => (toasts.push(e.text), { value: undefined }) as never)
+  const turn = async (id: string) => {
+    await $.turn.start({ text: 'hi', turnId: id } as never)
+    await wait(10)
+  }
+  // 로컬 MCP 서버만 먼저 붙었다: 아직 판단하지 않는다
+  await turn('t1')
+  expect(toasts).toEqual([])
+  // Slack 커넥터가 붙었다: desk-slack 만 알린다
+  tools = [local, slack]
+  await turn('t2')
+  expect(toasts).toEqual(['Asana·Slack 패널은 옮겨 갔어요: /plugin install desk-slack@cc-desktop-mod'])
+  expect(store.movedNotice).toEqual(['desk-slack'])
+  // Asana 커넥터는 더 늦게: desk-asana 를 알리고, 둘 다 판단했으니 더는 보지 않는다
+  tools = [local, slack, asana]
+  await turn('t3')
+  expect(toasts.at(-1)).toBe('Asana·Slack 패널은 옮겨 갔어요: /plugin install desk-asana@cc-desktop-mod')
+  expect(toasts).toHaveLength(2)
+  const seen = listed
+  await turn('t4')
+  expect(listed).toBe(seen)
 })
 
 test('옮김 안내: 턴이 시작될 때 한 번, MCP 서버가 없으면 몇 턴 뒤 그만 본다', KO, async ($, on) => {
@@ -1948,6 +1986,36 @@ test('옮김 안내: 턴이 시작될 때 한 번, MCP 서버가 없으면 몇 �
   expect(listed).toBe(5)
   expect(toasts).toEqual([])
   expect(store.movedNotice).toBeUndefined()
+})
+
+test('/desk-fold: desk-asana 패널만 열려 있어도 접고, 접은 뒤 다시 열어도 또 접는다', KO, async ($, on) => {
+  on('ui.panes', () => ({ value: [] }) as never)
+  // desk-asana 흉내: 패널이 열려 있는지(shown)·접어 둔 것(folded)을 내놓고, desk-look 의 folded 쓰기를 따라 접고 편다
+  let shown = true
+  let asanaFolded: unknown[] | null = null
+  on('state.get', { plugin: 'desk-asana', key: 'shown' }, () => ({ value: { value: shown, version: 1 } }) as never)
+  on('state.get', { plugin: 'desk-asana', key: 'folded' }, () => ({ value: { value: asanaFolded, version: 1 } }) as never)
+  on('state.set', { plugin: 'desk-look', key: 'folded' }, ($, e, next) => {
+    if (e.value !== null && shown) {
+      asanaFolded = [{ id: 'desk-asana', title: 'Asana', isShown: true, offset: 0 }]
+      shown = false
+    }
+    if (e.value === null && asanaFolded !== null) {
+      asanaFolded = null
+      shown = true
+    }
+    return next(e)
+  })
+  const fold = async () => ((await $.command.run({ command: 'desk-fold', args: '' } as never)) as { text: string }).text
+  expect(await fold()).toBe('패널 1개를 접었어요. /desk-fold 로 다시 펴세요.')
+  expect(shown).toBe(false)
+  // 사람이 /desk-asana 로 다시 열었다: 펴지 않고 또 접는다(0.55.0 에서는 "폈어요" 로 거꾸로 갔다)
+  shown = true
+  expect(await fold()).toBe('패널 1개를 접었어요. /desk-fold 로 다시 펴세요.')
+  expect(shown).toBe(false)
+  // 이제 열린 게 없으니 편다
+  expect(await fold()).toBe('접어 둔 패널 1개를 폈어요.')
+  expect(shown).toBe(true)
 })
 
 test('아래턱 ✉ 칩: desk-slack 의 안 읽은 수를 읽고, 누르면 /desk-slack', KO, async ($, on) => {
