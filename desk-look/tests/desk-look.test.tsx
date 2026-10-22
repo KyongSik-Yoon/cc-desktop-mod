@@ -10,7 +10,7 @@ import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
-import { currentHead, headAt } from '../hooks/register'
+import { currentHead, headAt, quoteInto } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -1649,15 +1649,16 @@ test('백그라운드 에이전트를 기다리는 턴 끝 줄: 에이전트마�
 test('턴 끝 줄의 ❝ 칩과 /desk-quote 는 선택한 글을 인용으로 입력창에 넣는다', KO, async ($, on) => {
   let selected: { text: string; requestId?: string } | undefined = { text: '첫 줄\n\n둘째 줄  ', requestId: 'r1' }
   let box = ''
-  const filled: Array<{ text: string; mode?: string }> = []
+  let caret = 0
+  const filled: Array<{ text: string; mode?: string; cursor?: number }> = []
   const toasts: string[] = []
   on('process.run', gitStub as never)
   on('clock.now', () => ({ value: 0 }))
   on('turn.complete', () => ({ text: '답' }) as never)
   on('ui.selection', () => ({ value: selected }) as never)
-  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.read', () => ({ value: { text: box, cursor: caret } }))
   on('prompt.fill', ($, e) => {
-    filled.push({ text: e.text, mode: e.mode })
+    filled.push({ text: e.text, mode: e.mode, cursor: e.cursor })
     return { isFilled: true } as never
   })
   on('ui.toast', ($, e) => {
@@ -1673,17 +1674,27 @@ test('턴 끝 줄의 ❝ 칩과 /desk-quote 는 선택한 글을 인용으로 �
   expect(JSON.stringify(await row.drawn())).toContain('❝ quote')
   // 빈 입력창: 인용으로 바꾸고 아래에 질문 칸을 비워 둔다
   await row.press({ key: 'quote-turn-3000' })
-  expect(filled).toEqual([{ text: '> 첫 줄\n>\n> 둘째 줄\n\n', mode: 'replace' }])
-  // 쓰던 글이 있으면 그 뒤에 붙인다
+  expect(filled).toEqual([{ text: '> 첫 줄\n>\n> 둘째 줄\n\n', mode: 'replace', cursor: 16 }])
+  // 쓰던 글이 있으면 인용을 그 위에 넣고 커서는 쓰던 자리(‘이거’ 뒤)에 둔다
   box = '이거 왜?'
+  caret = 2
   await $.command.run({ command: 'desk-quote', args: '' } as never)
-  expect(filled[1]).toEqual({ text: '\n\n> 첫 줄\n>\n> 둘째 줄\n\n', mode: 'append' })
+  expect(filled[1]).toEqual({ text: '> 첫 줄\n>\n> 둘째 줄\n\n이거 왜?', mode: 'replace', cursor: 18 })
   // 고른 글이 없으면 채우지 않고 알린다
   selected = undefined
   await row.press({ key: 'quote-turn-3000' })
   expect(filled.length).toBe(2)
   expect(toasts.at(-1)).toContain('선택')
   await row.unmount()
+})
+
+test('인용은 앞서 넣은 인용들 다음, 쓰던 글 위에 들어가고 커서는 쓰던 자리를 따라간다', KO, async () => {
+  const quote = '> 새\n\n'
+  expect(quoteInto('  \n', 1, quote)).toEqual({ text: quote, cursor: quote.length })
+  expect(quoteInto('\n\n질문', 4, quote)).toEqual({ text: '> 새\n\n질문', cursor: 7 })
+  expect(quoteInto('> 앞\n\n질문', 7, quote)).toEqual({ text: '> 앞\n\n> 새\n\n질문', cursor: 12 })
+  expect(quoteInto('> 앞', 2, quote)).toEqual({ text: '> 앞\n\n> 새\n\n', cursor: 10 })
+  expect(quoteInto('> 앞\n\n질문', 1, quote)).toEqual({ text: '> 앞\n\n> 새\n\n질문', cursor: 10 })
 })
 
 test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 파일은 남고, 끝났던 에이전트는 다시 실행 중', KO, async ($, on) => {

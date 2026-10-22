@@ -1038,13 +1038,27 @@ export function quoteText(text: string): string {
   return `${lines.map(line => (line === '' ? '>' : `> ${line}`)).join('\n')}\n\n`
 }
 
+// 쓰던 글이 있으면 인용을 그 위에(앞서 넣은 인용들 다음에) 넣고, 커서는 쓰던 자리에 그대로 둔다.
+// 질문은 인용 아래에 오고, 치던 손이 끊기지 않는다. 커서가 앞 인용 안에 있었으면 글 첫머리로.
+export function quoteInto(draft: string, cursor: number, quote: string): { text: string; cursor: number } {
+  if (draft.trim() === '') return { text: quote, cursor: quote.length }
+  const lead = /^(?:>[^\n]*(?:\n|$)|\n)*/.exec(draft)?.[0] ?? ''
+  const head = lead.includes('>') ? lead.replace(/\n*$/, '\n\n') : ''
+  const rest = draft.slice(lead.length)
+  const start = head.length + quote.length
+  return { text: head + quote + rest, cursor: start + Math.max(0, cursor - lead.length) }
+}
+
 async function quoteSelection($: EngineInterface) {
   const selected = await $.ui.selection().catch(() => undefined)
   if (!selected || selected.text.trim() === '') {
     $.ui.toast(T.quoteNone)
     return
   }
-  await fillPrompt($, quoteText(selected.text), T.quoted)
+  const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
+  const next = quoteInto(box.text, box.cursor, quoteText(selected.text))
+  const filled = await $.prompt.fill({ text: next.text, mode: 'replace', cursor: next.cursor }).catch(() => null)
+  $.ui.toast(filled?.isFilled ? T.quoted : T.fillFailed)
 }
 
 // diff 패널의 브랜치·커밋 범위. 커밋 안 한 변경은 refreshDiff 의 diff 를 그대로 쓴다.
