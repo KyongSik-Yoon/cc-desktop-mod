@@ -63,7 +63,7 @@ Search for `desk-asana` in `/config` to find these options.
 
 - `language`: `auto` (default), `en`, `ko`. Language of the plugin's own labels. `auto` follows desk-look's language, or without desk-look Claude Code's `language` in `/config`: Korean when it names Korean, English otherwise
 - `asanaToken`: empty (default). An Asana personal access token, optional. Only `✎ Edit` on your Asana comments and changing a task type's status use it (see `/desk-asana`); set it with `/plugin configure desk-asana@cc-desktop-mod`
-- `asanaKeyField`: empty (default). Optional. Name of the Asana custom field that holds each task's key (for example an ID field `JKD` giving `JKD-1630`). With it, the list shows the key dimmed after each task's title, typing a key (`JKD-1630`) in the search box finds that open task first, and `Hand to Claude` includes the key. Several names separated by commas (`JKD, J5S`) use the first one a task has a value for. Empty shows titles only
+- `asanaKeyField`: empty (default). Optional. The name of the Asana custom field that holds each task's key, as shown next to its value in a task's details (`JKD` for a field showing `JKD-1630`; not the field's ID, any case). With it, the list shows the key dimmed after each task's title, typing a key (`JKD-1630`) in the search box finds that open task first, and `Hand to Claude` includes the key. Several names separated by commas (`JKD, J5S`) use the first one a task has a value for. Empty shows titles only
 
 ## License
 

@@ -558,6 +558,9 @@ describe('Asana 패널', () => {
     }
     expect(toTasks(json).map(task => task.key)).toEqual([null, null, null, null])
     expect(toTasks(json, ['JKD', 'J5S']).map(task => task.key)).toEqual(['ABC-12', 'XY-3', null, null])
+    // 필드 이름은 대소문자를 가리지 않는다
+    expect(toTasks(json, ['jkd']).map(task => task.key)).toEqual(['ABC-12', null, null, null])
+    expect(keyFieldGids(json, ['jkd'])).toEqual(['f1'])
     expect(keyFieldGids(json, ['JKD', 'J5S'])).toEqual(['f1', 'f2'])
     // 키 모양 검색어만 키 필드마다 값으로 찾는다(대문자로, 글자 검색처럼 열린 것만)
     expect(keySearchCalls(v2, '각 제품', ['JKD'], ['f1'])).toEqual([])
@@ -682,8 +685,9 @@ describe('Asana 패널', () => {
     expect(nextOffset({ data: [], next_page: { offset: 'abc' } })).toBe('abc')
     expect(nextOffset({ data: [], next_page: null })).toBeNull()
     const v2 = { name: 'asana-v2', dialect: 'v2' } as const
-    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', [], 'abc')).toMatchObject({ tool: 'get_tasks', args: { project: 'p2', completed_since: '2026-10-17T03:00:00.000Z', offset: 'abc' } })
-    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', []).args).not.toHaveProperty('offset')
+    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', [])).toMatchObject({ tool: 'get_tasks', args: { project: 'p2', completed_since: '2026-10-17T03:00:00.000Z', limit: 100 } })
+    // 사용자 정의 필드를 실으면 응답이 커져 반 쪽으로 시작한다
+    expect(projectTasksCall(v2, 'p2', '2026-10-17T03:00:00.000Z', ['JKD']).args.limit).toBe(50)
   })
 
   test('프로젝트 탭: 내 프로젝트 → 섹션별 모든 사람의 열린 태스크 → 상세 → 돌아오면 그 프로젝트', KO, async ($, on) => {
@@ -778,6 +782,60 @@ describe('Asana 패널', () => {
     expect(JSON.stringify(await pane.drawn())).toContain('내 프로젝트 1')
     await pane.press({ key: 'asana-tab-mine' })
     expect(JSON.stringify(await pane.drawn())).toContain('내 태스크 0')
+    await pane.unmount()
+  })
+
+  test('MCP 결과 한도에 걸리면 쪽을 반으로 줄여 이어 읽고, 그 크기를 기억한다', { options: { language: 'ko', asanaKeyField: 'JKD' } }, async ($, on) => {
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    on('clock.now', () => ({ value: Date.parse('2026-10-17T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    const task = (gid: string) => ({ gid, name: `일 ${gid}`, custom_fields: [{ gid: 'f1', name: 'JKD', display_value: `ABC-${gid}` }], memberships: [{ project: { gid: 'p2', name: 'Platform' }, section: { name: '백엔드' } }] })
+    on('mcp.call', ($, e) => {
+      calls.push({ tool: e.tool, args: e.args })
+      switch (e.tool) {
+        case 'get_my_tasks':
+          return text({ data: [] })
+        case 'get_me':
+          return text({ data: { gid: 'me', name: 'Sam' } })
+        case 'get_projects':
+          return text({ data: [{ gid: 'p2', name: 'Platform', members: [{ gid: 'me' }], modified_at: '2026-10-16T00:00:00Z' }], next_page: null })
+        default:
+          // 25개를 넘게 달라면 엔진이 결과를 버린다
+          if (Number(e.args.limit) > 25) {
+            return { value: { content: [{ type: 'text', text: 'Error: result (56,232 characters) exceeds maximum allowed tokens. Output has been saved to /tmp/x' }], isError: true } }
+          }
+          return e.args.offset === undefined ? text({ data: [task('1'), task('2')], next_page: { offset: 'tp2' } }) : text({ data: [task('3')], next_page: null })
+      }
+    })
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-asana', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 96 } as never })
+    await pane.press({ key: 'asana-tab-projects' })
+    await wait(50)
+    await pane.press({ key: 'asana-project-p2' })
+    await wait(50)
+    const pages = () => calls.filter(call => call.tool === 'get_tasks').map(call => [call.args.limit, call.args.offset])
+    expect(pages()).toEqual([
+      [50, undefined],
+      [25, undefined],
+      [25, 'tp2'],
+    ])
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('열린 태스크 3')
+    expect(drawn).toContain(' ABC-3')
+    expect(drawn).not.toContain('exceeds')
+    // 다시 펼치면 줄인 크기로 바로 읽는다
+    await pane.press({ key: 'asana-project-back-end' })
+    calls.length = 0
+    await pane.press({ key: 'asana-project-p2' })
+    await wait(50)
+    expect(pages()).toEqual([
+      [25, undefined],
+      [25, 'tp2'],
+    ])
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('열린 태스크 3')
     await pane.unmount()
   })
 
