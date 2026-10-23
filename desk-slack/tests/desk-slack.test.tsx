@@ -271,6 +271,8 @@ describe('Slack 패널', () => {
     expect(calls.at(-1)).toEqual({ tool: 'slack_read_channel', args: { channel_id: 'D01', limit: 30, response_format: 'detailed' } })
     expect(drawn).toContain('{\\"pid\\":12029}')
     expect(drawn).toContain('오오... 링크')
+    // 패널을 골라도 답장 칸이 고리를 가져가지 않아야 r·b 가 눌린다
+    expect(drawn).not.toContain('autoFocus')
 
     // 답글이 달린 글은 "답글 N개" 버튼, 누르면 스레드, ← 는 방으로
     expect(drawn).toContain('답글 2개')

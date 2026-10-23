@@ -388,7 +388,6 @@ export const register: Register = (on, options) => {
             rows={COMMENT_ROWS}
             value={slackDraft}
             submitLabel={T.slackSend}
-            autoFocus
             onInput={value => (slackDraft = value)}
             onSubmit={value => void sendSlack($, server, view.channel, view.thread, value)}
           />
