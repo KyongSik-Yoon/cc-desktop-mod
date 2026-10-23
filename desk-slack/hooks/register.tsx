@@ -334,6 +334,7 @@ export const register: Register = (on, options) => {
           key={key}
           plain
           dimColor
+          hotkey={key === 'slack-back' ? 'b' : undefined}
           label={view.thread === null ? T.slackBack : `← ${title}`}
           onPress={() => void (view.thread === null ? closeSlackView($) : openSlackRoom($, server, view.channel))}
         />
@@ -342,7 +343,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
             {back('slack-back')}
-            <Button key="slack-reload" plain dimColor label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openSlackRoom($, server, view.channel, view.thread)} />
+            <Button key="slack-reload" plain dimColor hotkey="r" label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openSlackRoom($, server, view.channel, view.thread)} />
           </Box>
           <Box flexDirection="column">
             <Text color={COLORS.text} weight="semibold">
@@ -407,7 +408,7 @@ export const register: Register = (on, options) => {
         <Text color={COLORS.text} weight="semibold">
           {T.slackInbox(rooms.length, unread)}
         </Text>
-        <Button key="slack-refresh" plain dimColor label={isLoading ? '…' : '↻'} onPress={() => void pollSlack($, true).catch(() => undefined)} />
+        <Button key="slack-refresh" plain dimColor hotkey="r" label={isLoading ? '…' : '↻'} onPress={() => void pollSlack($, true).catch(() => undefined)} />
         {rooms.length > 0 && (
           <Button
             key="slack-close-all"

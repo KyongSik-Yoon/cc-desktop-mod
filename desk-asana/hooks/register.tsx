@@ -593,7 +593,7 @@ export const register: Register = (on, options) => {
       const task = view.task
       const head = (
         <Box columnGap={1}>
-          <Button key="asana-back" plain dimColor label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
+          <Button key="asana-back" plain dimColor hotkey="b" label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
           <Button key="asana-reload" plain dimColor hotkey="r" label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaTask($, server, view.gid)} />
         </Box>
       )
@@ -866,7 +866,7 @@ export const register: Register = (on, options) => {
             {unruled}
             <Box flexDirection="column">
               <Box columnGap={1}>
-                <Button key="asana-project-back" plain dimColor label={T.asanaProjectsBack} onPress={() => void closeAsanaProject($)} />
+                <Button key="asana-project-back" plain dimColor hotkey="b" label={T.asanaProjectsBack} onPress={() => void closeAsanaProject($)} />
                 <Button key="asana-project-refresh" plain dimColor hotkey="r" label={project.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaProject($, project.project)} />
                 {folds.length > 1 && (
                   <Button key="asana-fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />
