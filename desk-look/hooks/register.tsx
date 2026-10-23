@@ -3169,7 +3169,7 @@ export const register: Register = (on, options) => {
 
     const agent = view === null ? undefined : records[view]
     // 상세가 길면 위로 되돌아가지 않도록 맨 아래에도 같은 버튼을 둔다.
-    const back = (key: string) => rowButton(els, { key, dimColor: true, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)
+    const back = (key: string) => rowButton(els, { key, dimColor: true, hotkey: key === 'agent-back' ? 'b' : undefined, onPress: () => void openAgents($) }, `‹ ${T.agentBack}`)
     // 셸·모니터 상세: 데스크톱·엔진의 Shell details 처럼 상태, 실행 시간, 명령, 요약, 출력 끝부분.
     if (agent && (agent.kind === 'shell' || agent.kind === 'monitor')) {
       const live = isLive(agent.status)
@@ -3371,7 +3371,7 @@ export const register: Register = (on, options) => {
             {T.contextTitle}
           </Text>
           {percent !== null && <Text color={COLORS[meterLevel(percent)]}>{`${ring(percent)} ${percent}%`}</Text>}
-          <Button key="context-refresh" plain dimColor label="↻" onPress={() => void refreshBreakdown($).catch(() => undefined)} />
+          <Button key="context-refresh" plain dimColor hotkey="r" label="↻" onPress={() => void refreshBreakdown($).catch(() => undefined)} />
         </Box>
         {percent === null ? (
           <Text color={COLORS.muted}>{T.noUsage}</Text>
@@ -3660,7 +3660,7 @@ export const register: Register = (on, options) => {
         {view.scope !== 'commits' && shownCount > 0 && <Box flexShrink={0}>{diffChips(Text, added, removed)}</Box>}
         {view.scope !== 'uncommitted' && (
           <Box flexShrink={0}>
-            <Button key="base-pick" plain dimColor={!view.bases} label={`${view.base ? `vs ${view.base.ref}` : T.pickBase} ${view.bases ? '⌃' : '⌄'}`} onPress={() => void toggleBases($)} />
+            <Button key="base-pick" plain dimColor={!view.bases} hotkey="v" label={`${view.base ? `vs ${view.base.ref}` : T.pickBase} ${view.bases ? '⌃' : '⌄'}`} onPress={() => void toggleBases($)} />
           </Box>
         )}
       </Box>
@@ -3670,7 +3670,7 @@ export const register: Register = (on, options) => {
     const tool = (node: unknown) => <Box flexShrink={0}>{node as never}</Box>
     const toolsRow = (
       <Box key="diff-tools" columnGap={2} height={1} overflow="hidden">
-        {tool(<Button key="refresh" plain dimColor label="↻" onPress={() => void refreshDiffView($)} />)}
+        {tool(<Button key="refresh" plain dimColor hotkey="r" label="↻" onPress={() => void refreshDiffView($)} />)}
         {canStep && tool(<Button key="file-prev" plain dimColor hotkey="p" label={T.prevFile} onPress={() => void stepFile($, -1)} />)}
         {canStep && tool(<Button key="file-next" plain dimColor hotkey="n" label={T.nextFile} onPress={() => void stepFile($, 1)} />)}
         {(matchTotal > 1 || filter.isOpen) && tool(<Button key="filter" plain dimColor={!filter.isOpen} hotkey="f" label={T.filterFiles} onPress={() => void toggleFilter($)} />)}
@@ -3847,7 +3847,7 @@ export const register: Register = (on, options) => {
     const columns = e.viewport?.columns ?? 80
     // ↻ 로 다시 읽는 동안은 … : 다 읽은 PR 이 그대로여도 다시 읽었는지 보이게(15초 자동 갱신은 바꾸지 않는다)
     const isLoading = state?.status === 'loading'
-    const refresh = <Button key="pr-refresh" plain dimColor label={isLoading ? '…' : '↻'} onPress={() => void refreshPr($, true).catch(() => undefined)} />
+    const refresh = <Button key="pr-refresh" plain dimColor hotkey="r" label={isLoading ? '…' : '↻'} onPress={() => void refreshPr($, true).catch(() => undefined)} />
     const info = state?.pr ?? null
 
     if (!info) {

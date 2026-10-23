@@ -79,9 +79,10 @@ Per-file diffs in three scopes, like the desktop diff panel:
 - `Uncommitted`, `Branch` (the whole branch since it left the base branch, via `merge-base`) and `Commits` (click a commit to expand its diff)
 - Give a file name (the end of the path is enough) to scroll to it, or `branch` / `commits` to open in that scope
 - The pane opens as a folded list of files. Click a file's header row to unfold its diff and scroll to it; the file that was open folds, so one file is open at a time. Click it again to fold it. `z` unfolds or folds them all for reading every change in one scroll (in `Commits`, every commit and its files at once; several commits can stay open)
+- `r` reads the diff again
 - `n` / `p` go to the next or previous file: with one file open, they open that file (folding the current one); with several open (after `z`), they scroll to its header
 - `f` opens a file filter above the list: type parts of a path (separated by spaces, all must match) to keep only matching files, and Enter opens the first. `✕` clears and closes it
-- In `Branch` and `Commits`, click `vs <base> ⌄` to pick the base from the most recently committed local and remote branches, or `auto` to go back to the detected one (the PR's base, origin's default branch, then main, master or develop)
+- In `Branch` and `Commits`, click `vs <base> ⌄` (`v`) to pick the base from the most recently committed local and remote branches, or `auto` to go back to the detected one (the PR's base, origin's default branch, then main, master or develop)
 - Click `N unmodified lines` to show those lines in place, read from the file as it is now (in `Commits`, from that commit)
 - Uncommitted files have `Revert`: press it twice within 5 seconds to `git restore` (not offered for new files)
 - Drawn like the desktop diff panel when the terminal theme is known (Omarchy): a header band per file, full-width green and red rows with a colored edge, one line-number column, syntax colors on removed lines too, changed words in a darker tint, and unchanged stretches as `N unmodified lines`. Only the rows near the visible part are drawn, so a diff of thousands of lines scrolls as fast as a short one. Edits made this session outside git are grouped under `Edited this session, outside git` (click it to fold the group), each edit on its own, split by `· next edit`. Without a known theme, the engine's diff is used as before
@@ -99,7 +100,7 @@ Like the desktop's Background tasks: this session's agents, background shells (`
 - **Shells and monitors** show their command. `View details` shows status, runtime, the result line and the end of the output (once it finishes)
 - `■ Stop` stops a running task after a second press within 5 seconds
 - `z` folds `Done`, `c` clears finished tasks from the list, `Remove` clears one
-- Click a card or give its number to open it; `‹ Back`, at the top and again at the bottom of the details, goes back to the list
+- Click a card or give its number to open it; `‹ Back` (`b`), at the top and again at the bottom of the details, goes back to the list
 
 ### `/desk-pr`: pull request
 
@@ -109,6 +110,7 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 - Failing and running checks (passing ones folded) and unresolved review threads
 - `Hand to Claude` next to a failing check or a review thread fills the prompt with it
 - `Merge` merges it after a second press within 5 seconds, only at the head commit the pane showed (a newer push makes the merge fail). While checks are still running it reads `Merge when pipeline succeeds` (GitLab) or `Merge when checks pass` (GitHub) and sets auto-merge instead. It shows only on an open, non-draft PR with no failing checks that the host reports as mergeable. The merge method is the repository's: GitLab follows the MR's squash setting; GitHub uses merge, else squash, else rebase, whichever the repository allows. The remote source branch is deleted (on GitHub, after an auto-merge only if the repository deletes head branches); the local branch is left alone
+- `r` reads the PR again
 - Nothing else is changed: no approvals, comments or `Ready for review`
 
 ### Asana and Slack: separate plugins
@@ -140,7 +142,7 @@ Replaces the `/context` grid:
 - A context bar (tokens / window, the auto-compact point)
 - A per-category breakdown, the same categories as `/context` (a local estimate, so no API requests)
 - 5-hour and 7-day usage limits with time until reset, and the session cost
-- `↻` recalculates
+- `↻` (`r`) recalculates
 
 ### `/desk-sessions [number]`: recent sessions
 
