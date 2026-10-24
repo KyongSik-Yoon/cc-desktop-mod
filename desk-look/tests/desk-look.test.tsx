@@ -493,7 +493,7 @@ describe('v3: 테마 면과 도구 묶음', () => {
   })
 })
 
-import { CORNER_SIZE, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize } from '../hooks/images'
+import { CORNER_SIZE, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, tmuxGraphicsOf } from '../hooks/images'
 import { renderDiagram } from '../hooks/diagram'
 
 test('붙여 넣은 이미지 목록과 썸네일 크기', KO, async () => {
@@ -602,6 +602,74 @@ test('iTerm2 3.5 전체 화면: 모서리는 rgba, 썸네일은 PNG 바이트로
   expect(plain).not.toContain('"png"')
   expect(plain).toContain('둘째 줄')
   await main.unmount()
+})
+
+test('tmux 안 그림: 통과 설정과 바깥 터미널을 tmux 에 물어 엔진과 같은 때 그린다(2.1.310)', KO, async () => {
+  const reply = (termtype: string, passthrough = 'on', focus = '1', bigger = '0') => [termtype, passthrough, focus, bigger].join('\t') + '\n'
+  expect(tmuxGraphicsOf(reply('kitty(0.35.1)'))).toBe('kitty-bytes')
+  expect(tmuxGraphicsOf(reply('kitty(0.27.0)'))).toBe(null)
+  expect(tmuxGraphicsOf(reply('ghostty 1.2.0'))).toBe('kitty-bytes')
+  expect(tmuxGraphicsOf(reply('kitty(0.35.1)', 'all'))).toBe('kitty-bytes')
+  expect(tmuxGraphicsOf(reply('kitty(0.35.1)', 'off'))).toBe(null)
+  expect(tmuxGraphicsOf(reply('kitty(0.35.1)', ''))).toBe(null)
+  expect(tmuxGraphicsOf(reply('kitty(0.35.1)', 'on', '0'))).toBe(null)
+  expect(tmuxGraphicsOf(reply('iTerm2 3.5.10'))).toBe('iterm')
+  expect(tmuxGraphicsOf(reply('iTerm2 3.4.23'))).toBe(null)
+  // iTerm2 는 all 이 아니라 on, 창이 터미널보다 크면 그리지 않는다
+  expect(tmuxGraphicsOf(reply('iTerm2 3.5.10', 'all'))).toBe(null)
+  expect(tmuxGraphicsOf(reply('iTerm2 3.5.10', 'on', '1', '1'))).toBe(null)
+  expect(tmuxGraphicsOf(reply('xterm-256color'))).toBe(null)
+  expect(tmuxGraphicsOf(reply(''))).toBe(null)
+  const tmux = { TERM: 'tmux-256color', TERM_PROGRAM: 'tmux', TMUX: '/tmp/tmux-0/default,1,0' }
+  expect(graphicsOf(tmux, false, reply('kitty(0.35.1)'))).toBe('kitty-bytes')
+  expect(graphicsOf(tmux, false, null)).toBe(null)
+  expect(graphicsOf({ ...tmux, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT: '1' }, false, reply('iTerm2 3.5.10'))).toBe(null)
+})
+
+test('tmux 안 kitty: 썸네일과 모서리를 파일 이름 대신 바이트로 그린다', KO, async ($, on) => {
+  const env: Record<string, string> = { HOME: '/home/t', TERM: 'tmux-256color', TERM_PROGRAM: 'tmux', TMUX: '/tmp/tmux-501/default,1,0', TMUX_PANE: '%3' }
+  const header = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 1, 234, 0, 0, 1, 42]
+  const dir = '/tmp/claude-501/-repo/s1/images'
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+  const asked: string[][] = []
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    const path = String((e as { path?: string }).path ?? e)
+    if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
+    if (path === `${dir}/3.png`) return { value: { base64: png } } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.list', ($, e) => {
+    const path = (e as { path?: string }).path
+    if (path === '/tmp/claude-501') return { value: [{ name: '-repo', kind: 'dir', size: 0, mtimeMs: 1 }] } as never
+    if (path === dir) return { value: [{ name: '3.png', kind: 'file', size: 9, mtimeMs: 1 }] } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.exists', ($, e) => ({ value: (e as { path?: string }).path === dir }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('process.run', ($, e) => {
+    if (e.argv[0] === 'tmux') asked.push(e.argv)
+    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'od' ? header.join(' ') : e.argv[0] === 'tmux' ? 'kitty(0.35.1)\ton\t1\t0\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const props = { text: '[Image #3] 첫 줄\n둘째 줄', origin: { kind: 'composer' }, isExpanded: false }
+  // tmux 기본은 main screen 이다
+  const bubble = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: { ...VIEWPORT, isFullscreen: false }, props } as never)
+  let drawn = ''
+  for (let tries = 0; tries < 50 && !drawn.includes(png); tries++) {
+    await wait(10)
+    drawn = JSON.stringify(await bubble.drawn())
+  }
+  expect(asked[0]?.slice(0, 5)).toEqual(['tmux', 'display-message', '-p', '-t', '%3'])
+  expect(drawn).toContain(`"png":"${png}"`)
+  expect(drawn).not.toContain('"file"')
+  expect(drawn).toContain('"rgba"')
+  expect(drawn).toContain('"alt":"[Image #3]"')
+  await bubble.unmount()
 })
 
 test('말풍선 모서리 그림: 바깥 모서리는 비우고 안쪽은 말풍선 색으로 채운다', KO, async () => {

@@ -25,7 +25,8 @@ export type ImageInfo = { path: string; width: number; height: number }
 
 // 엔진이 그림을 그리는 길. kitty: kitty 그래픽 프로토콜(그림 파일 이름도 넘긴다). iterm: iTerm2 3.5 이상의
 // 인라인 그림(2.1.305): 전체 화면 그리기에서만, png·rgba 바이트만 그리고 파일 이름은 alt 글자로 둔다.
-export type Graphics = 'kitty' | 'iterm' | null
+// kitty-bytes: tmux 안의 kitty 그래픽(2.1.310): 바이트만 넘어가 파일 이름은 alt 글자로 둔다.
+export type Graphics = 'kitty' | 'kitty-bytes' | 'iterm' | null
 
 // diff 줄 댓글(hooks/comments.ts). 줄은 종류·옛 번호·새 번호로 기억한다(diffview 의 DiffLine 과 같은 모양).
 export type CommentLine = { kind: ' ' | '+' | '-'; text: string; oldNo: number; newNo: number }
