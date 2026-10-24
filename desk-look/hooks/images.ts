@@ -33,13 +33,43 @@ export function herdrGraphicsOn(config: string): boolean {
   return /^[ \t]*kitty_graphics[ \t]*=[ \t]*true/m.test(config)
 }
 
-// 그림을 그릴 수 있는 환경인지. tmux·zellij 는 통과시키지 않아 그림 대신 alt 글자가 나오므로 그리지 않는다.
+// tmux 에 이 창의 바깥 터미널과 그림 통과 설정을 묻는 형식. 엔진도 같은 것을 물어 tmux 안에서 그릴지 정한다.
+export const TMUX_GRAPHICS_FORMAT = ['#{client_termtype}', '#{allow-passthrough}', '#{focus-events}', '#{window_bigger}'].join('\t')
+
+// '0.35.1' 이 [0, 28] 이상인지. 숫자가 아니면 false.
+function versionAtLeast(text: string, least: number[]): boolean {
+  const parts = /^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(text)
+  if (!parts) return false
+  const have = [1, 2, 3].map(i => Number(parts[i] ?? 0))
+  for (let i = 0; i < 3; i++) if (have[i] !== (least[i] ?? 0)) return (have[i] ?? 0) > (least[i] ?? 0)
+  return true
+}
+
+// tmux 안에서 엔진이 그림을 그리는지(2.1.310): tmux 3.3 이상에서 allow-passthrough 와 focus-events 가 켜져 있고
+// 바깥 터미널(client_termtype)이 kitty 0.28 이상·Ghostty 면 kitty 그래픽을, iTerm2 3.5 이상이면 iTerm2 그림을 그린다.
+// iTerm2 는 allow-passthrough 가 all 이 아니라 on 이어야 하고 창이 터미널보다 크지 않아야 한다.
+// 바이트만 넘어가므로 kitty 도 파일 이름 대신 바이트를 준다('kitty-bytes'). reply 는 TMUX_GRAPHICS_FORMAT 의 대답.
+export function tmuxGraphicsOf(reply: string): Graphics {
+  const [termtype = '', passthrough = '', focusEvents = '', bigger = ''] = reply.replace(/\r?\n$/, '').split('\t')
+  if (!['on', '1', 'all'].includes(passthrough) || focusEvents !== '1') return null
+  if (termtype.startsWith('kitty(')) return versionAtLeast(termtype.slice(6), [0, 28]) ? 'kitty-bytes' : null
+  if (['kitty', 'ghostty'].some(name => termtype === name || termtype.startsWith(`${name} `))) return 'kitty-bytes'
+  if (/^iTerm2\s/.test(termtype) && versionAtLeast(termtype.slice(6), [3, 5])) return passthrough === 'on' && bigger !== '1' ? 'iterm' : null
+  return null
+}
+
+// 그림을 그릴 수 있는 환경인지. tmux 는 tmuxReply(tmuxGraphicsOf) 로 정하고, 못 물었으면 그리지 않는다.
+// zellij 는 통과시키지 않아 그림 대신 alt 글자가 나오므로 그리지 않는다.
 // herdr 는 kitty_graphics 를 켰을 때만(herdrGraphics) 넘기는데, 엔진은 터미널 이름을 물어 kitty·ghostty 일 때만
 // 그림을 그리고 herdr 안에서는 herdr 가 대답하므로 CLAUDE_CODE_FORCE_TERMINAL_IMAGES 까지 켜야 그린다.
 // iTerm2 는 엔진이 XTVERSION 대답의 버전을 보는데, iTerm2 가 TERM_PROGRAM_VERSION 에 같은 버전을 적는다.
-// CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT 면 엔진이 매 화면 그림을 다시 보내야 해서 그리지 않는다.
-export function graphicsOf(env: Record<string, string | undefined>, herdrGraphics = false): Graphics {
-  if (env.TMUX || env.ZELLIJ) return null
+// CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT 면 엔진이 매 화면 그림을 다시 보내야 해서 iTerm2 는 그리지 않는다.
+export function graphicsOf(env: Record<string, string | undefined>, herdrGraphics = false, tmuxReply: string | null = null): Graphics {
+  if (env.TMUX) {
+    const kind = tmuxReply === null ? null : tmuxGraphicsOf(tmuxReply)
+    return kind === 'iterm' && env.CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT ? null : kind
+  }
+  if (env.ZELLIJ) return null
   if (env.HERDR_ENV === '1') {
     return herdrGraphics && ['1', 'true'].includes((env.CLAUDE_CODE_FORCE_TERMINAL_IMAGES ?? '').toLowerCase()) ? 'kitty' : null
   }

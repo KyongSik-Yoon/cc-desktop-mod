@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Chunk, Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
 
 import type { AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
-import { CORNER_SIZE, IMAGE_TOKEN, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
+import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
@@ -1250,9 +1250,10 @@ async function refreshSurface($: EngineInterface) {
 let diffColors: DiffPalette | null = null
 
 async function refreshGraphics($: EngineInterface) {
-  const [TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, CLAUDE_CODE_FORCE_TERMINAL_IMAGES, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT] =
+  const [TMUX, TMUX_PANE, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, CLAUDE_CODE_FORCE_TERMINAL_IMAGES, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT] =
     await Promise.all([
       $.env.get('TMUX'),
+      $.env.get('TMUX_PANE'),
       $.env.get('ZELLIJ'),
       $.env.get('HERDR_ENV'),
       $.env.get('TERM'),
@@ -1262,8 +1263,15 @@ async function refreshGraphics($: EngineInterface) {
       $.env.get('CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT'),
     ])
   const herdr = HERDR_ENV === '1' && herdrGraphicsOn(await readHerdrConfig($))
+  const tmux = TMUX && TMUX_PANE ? await readTmuxGraphics($, TMUX_PANE) : null
   const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, CLAUDE_CODE_FORCE_TERMINAL_IMAGES, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT }
-  await update($, graphics, () => graphicsOf(env, herdr))
+  await update($, graphics, () => graphicsOf(env, herdr, tmux))
+}
+
+// 엔진처럼 이 창(TMUX_PANE)의 바깥 터미널과 그림 통과 설정을 tmux 에 묻는다. 못 물으면 null(그리지 않는다).
+async function readTmuxGraphics($: EngineInterface, pane: string): Promise<string | null> {
+  const ran = await $.process.run(['tmux', 'display-message', '-p', '-t', pane, TMUX_GRAPHICS_FORMAT], { timeoutMs: 3000 }).catch(() => null)
+  return ran?.exitCode === 0 ? ran.stdout : null
 }
 
 async function readHerdrConfig($: EngineInterface): Promise<string> {
@@ -1282,7 +1290,7 @@ let userId: string | null = null
 let imagesDir: string | null = null
 // 같은 그림(경로·수정 시각)은 PNG 머리를 다시 읽지 않는다.
 const imageSizes = new Map<string, { width: number; height: number } | null>()
-// iTerm2 는 파일 이름을 그리지 않아 PNG 바이트(base64)를 넘긴다. Image 가 받는 2 MiB 를 넘으면 null(글자로 둔다).
+// iTerm2 와 tmux 안의 kitty 는 파일 이름을 그리지 않아 PNG 바이트(base64)를 넘긴다. Image 가 받는 2 MiB 를 넘으면 null(글자로 둔다).
 const imageBytes = new Map<string, string | null>()
 const IMAGE_BYTES_MAX = 2 * 1024 * 1024
 
@@ -2714,7 +2722,7 @@ export const register: Register = (on, options) => {
     const { Box, Text, Image } = els
     const [face, known, kind, openState] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open)])
     // iTerm2 는 전체 화면 그리기에서만 그린다(엔진 기본 화면은 줄마다 그림을 다시 보내야 해서 alt 글자).
-    const canDraw = kind === 'kitty' || (kind === 'iterm' && e.viewport?.isFullscreen === true)
+    const canDraw = kind === 'kitty' || kind === 'kitty-bytes' || (kind === 'iterm' && e.viewport?.isFullscreen === true)
     const columns = e.viewport?.columns ?? 80
     const { text: typed, pastes } = splitPastes(e.props.text)
     const found = [...typed.matchAll(IMAGE_TOKEN)]
