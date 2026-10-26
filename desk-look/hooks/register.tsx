@@ -517,6 +517,14 @@ export function editHunk(oldText: string, newText: string, context = 2): string 
   ].join('\n')
 }
 
+// 패널이 그릴 diff 만 상태에 둔다. 엔진은 atom 값 하나를 4 MiB 글자로 묶어 넘으면 $.state.set 이 던지고,
+// 한 번 그리는 글자도 10만 자에서 자른다. 한 줄이 아주 긴 파일(빌드 결과물·minified)이나 아주 큰 파일은 내용을
+// 비우고 +/− 수만 남긴다. clara-apm 의 3.8 MB 번들 커밋이 브랜치 diff 와 함께 7.6 M 자가 되어 커밋 줄이 안 펴졌다.
+const PATCH_LINE_MAX = 2000
+const PATCH_MAX = 200_000
+// atom 하나에 넣는 diff 내용의 합계. 4 MiB 에서 경로·커밋 목록 몫을 남긴다.
+const PATCHES_MAX = 3_000_000
+
 // `git diff` 출력을 파일 단위로 나눈다. Code format: 'diff' 는 @@ 헌크부터 받는다.
 export function parseDiff(text: string, isNew = false): FileDiff[] {
   const files: FileDiff[] = []
@@ -526,15 +534,37 @@ export function parseDiff(text: string, isNew = false): FileDiff[] {
     const path = header.replace(/^a\/.* b\/(.*)$/, '$1')
     const firstHunk = lines.findIndex(line => line.startsWith('@@'))
     const hunks = firstHunk === -1 ? [] : lines.slice(firstHunk)
-    files.push({
+    const patch = hunks.join('\n').trimEnd()
+    const file = {
       path,
       added: hunks.filter(line => line.startsWith('+')).length,
       removed: hunks.filter(line => line.startsWith('-')).length,
-      patch: hunks.join('\n').trimEnd(),
+      patch,
       isNew,
-    })
+    }
+    files.push(patch.length > PATCH_MAX || hunks.some(line => line.length > PATCH_LINE_MAX) ? { ...file, patch: '', large: true } : file)
   }
   return files
+}
+
+// 한 atom 에 함께 들어갈 diff 묶음들을 합계 안으로 줄인다: 큰 파일부터 내용을 비운다. 묶음 모양은 그대로.
+export function fitDiffs(groups: FileDiff[][], room = PATCHES_MAX): FileDiff[][] {
+  const sized = groups.flat().map(file => ({ file, size: JSON.stringify(file.patch).length }))
+  let total = sized.reduce((sum, entry) => sum + entry.size, 0)
+  const dropped = new Set<FileDiff>()
+  for (const entry of sized.sort((a, b) => b.size - a.size)) {
+    if (total <= room) break
+    dropped.add(entry.file)
+    total -= entry.size
+  }
+  return dropped.size === 0 ? groups : groups.map(files => files.map(file => (dropped.has(file) ? { ...file, patch: '', large: true } : file)))
+}
+
+// 브랜치 전체와 펼친 커밋들은 diffView 한 atom 에 산다.
+export function fitView(view: DiffView): DiffView {
+  const shas = Object.keys(view.commitFiles)
+  const [files = [], ...commits] = fitDiffs([view.files, ...shas.map(sha => view.commitFiles[sha] ?? [])])
+  return { ...view, files, commitFiles: Object.fromEntries(shas.map((sha, index) => [sha, commits[index] ?? []])) }
 }
 
 // 사용자 git 설정(diff.mnemonicPrefix·noprefix)과 상관없이 머리말을 a/ b/ 로 고정해 경로를 읽는다.
@@ -651,7 +681,7 @@ async function refreshDiff($: EngineInterface) {
     root: root || undefined,
     ignored,
   }))
-  await update($, diff, () => files)
+  await update($, diff, () => fitDiffs([files])[0] ?? [])
 }
 
 // diff 패널의 되돌리기: 처음 누르면 5초 동안 확인 상태, 그 안에 한 번 더 누르면 HEAD 로 되돌린다.
@@ -1193,7 +1223,7 @@ async function refreshDiffView($: EngineInterface, scope?: DiffScope) {
     // 브랜치 전체에도 아직 git 에 없는 새 파일을 넣는다(커밋 안 한 변경 쪽에서 이미 읽었다)
     const fresh = (await read($, diff)).filter(file => file.isNew)
     const files = ran && ran.exitCode === 0 ? [...parseDiff(ran.stdout), ...fresh] : []
-    await update($, diffView, previous => ({ ...previous, scope: next, base, files }))
+    await update($, diffView, previous => fitView({ ...previous, scope: next, base, files }))
     return
   }
   const log = base
@@ -1240,7 +1270,7 @@ async function pickCommit($: EngineInterface, sha: string) {
     return
   }
   const files = await commitDiffs($, [sha])
-  await update($, diffView, previous => ({ ...previous, commitFiles: { ...previous.commitFiles, ...files } }))
+  await update($, diffView, previous => fitView({ ...previous, commitFiles: { ...previous.commitFiles, ...files } }))
 }
 
 // 커밋별 탭의 모두 접기·펴기: 하나라도 펼쳐져 있으면 모두 접고, 아니면 목록의 커밋과 그 안의 파일을 모두 편다.
@@ -1253,7 +1283,7 @@ async function foldCommits($: EngineInterface) {
   const files = await commitDiffs($, view.commits.map(commit => commit.sha))
   const ids = view.commits.flatMap(commit => (files[commit.sha] ?? []).map(file => `c:${commit.short}:${file.path}`))
   await update($, open, state => ({ ...state, ...Object.fromEntries(ids.map(id => [`fold:${id}`, false])) }))
-  await update($, diffView, previous => ({ ...previous, commitFiles: files }))
+  await update($, diffView, previous => fitView({ ...previous, commitFiles: files }))
 }
 
 async function refreshSurface($: EngineInterface) {
@@ -2182,7 +2212,7 @@ function virtualDiff(v: VirtualDiff) {
       heads.push({ id, key: `fh-${id}` })
       items.push({ key: `fh-${id}`, height: 1, always: true, node: () => v.fileHeader(file, prefix, section.canRevert, indent) })
       if (v.isFolded(id)) return
-      if (!file.patch) note(`bin-${id}`, T.binary, indent + 2)
+      if (!file.patch) note(`bin-${id}`, file.large ? T.largeDiff : T.binary, indent + 2)
       else rowItems(file.patch, `d-${id}`, file.path, indent, v.notes.scopeOf(prefix), section.source)
     } else {
       const { edit } = section
@@ -3822,7 +3852,7 @@ export const register: Register = (on, options) => {
         {isFolded(`${prefix}${file.path}`) ? null : file.patch ? (
           <Code source={file.patch} path={file.path} format="diff" />
         ) : (
-          <Text color={COLORS.muted}>{T.binary}</Text>
+          <Text color={COLORS.muted}>{file.large ? T.largeDiff : T.binary}</Text>
         )}
       </Box>
     )

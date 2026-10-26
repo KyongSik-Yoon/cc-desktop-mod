@@ -1941,7 +1941,7 @@ test('에이전트 메시지는 줄 전체가 버튼', KO, async ($, on) => {
   await row.unmount()
 })
 
-import { clipStart, isUpdated, matchDiffFile, movedStep, splitCommitDiffs, updateMessage } from '../hooks/register'
+import { clipStart, fitDiffs, fitView, isUpdated, matchDiffFile, movedStep, splitCommitDiffs, updateMessage } from '../hooks/register'
 
 test('턴 끝 카드 파일 → diff 패널 파일 짝짓기, 앞 줄이기', KO, () => {
   const files = [{ path: 'a.txt' }, { path: 'src/a.txt' }, { path: 'b.txt' }]
@@ -3102,6 +3102,29 @@ test('커밋 여러 개의 git show 출력을 커밋별로 나눈다', () => {
   expect(split.c1sha?.map(file => file.path)).toEqual(['b.txt'])
   expect(split.c2sha).toEqual([])
   expect(split.c3sha?.length).toBe(1)
+})
+
+test('아주 긴 줄·아주 큰 diff 는 내용을 비우고 +/− 수만 남긴다', () => {
+  const head = (path: string) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n`
+  const [bundle, small] = parseDiff(`${head('dist/app.js')}@@ -1 +1 @@\n-${'a'.repeat(3000)}\n+${'b'.repeat(3000)}\n${head('src/x.ts')}@@ -1 +1 @@\n-old\n+new\n`)
+  expect(bundle).toEqual({ path: 'dist/app.js', added: 1, removed: 1, patch: '', isNew: false, large: true })
+  expect(small?.patch).toBe('@@ -1 +1 @@\n-old\n+new')
+  const lines = Array.from({ length: 5000 }, (_, index) => `+line ${index} ${'x'.repeat(40)}`).join('\n')
+  expect(parseDiff(`${head('big.txt')}@@ -0,0 +1,5000 @@\n${lines}\n`)[0]?.large).toBe(true)
+})
+
+test('한 atom 에 함께 드는 diff 는 합계 안으로 큰 파일부터 비운다', () => {
+  const file = (path: string, size: number) => ({ path, added: 1, removed: 0, patch: 'x'.repeat(size), isNew: false })
+  const [branch, commit] = fitDiffs([[file('a', 50), file('b', 10)], [file('a', 50), file('c', 5)]], 80)
+  expect(branch?.map(f => f.patch.length)).toEqual([0, 10])
+  expect(branch?.[0]?.large).toBe(true)
+  expect(commit?.map(f => f.patch.length)).toEqual([50, 5])
+  const under = [[file('a', 10)]]
+  expect(fitDiffs(under, 80)).toBe(under)
+  // 브랜치 diff 와 펼친 커밋이 같은 3 MB 넘는 파일을 함께 들고 있으면 하나만 남는다(atom 은 4 MiB 상한)
+  const view = fitView({ scope: 'commits', base: null, baseRef: null, bases: null, files: [file('a', 2_000_000)], commits: [], commitFiles: { c1: [file('a', 2_000_000)] } })
+  expect(JSON.stringify(view).length).toBeLessThan(4_194_304)
+  expect([view.files[0]?.large, view.commitFiles.c1?.[0]?.large].filter(Boolean).length).toBe(1)
 })
 
 import { T, langFromConfig, langSetting } from '../hooks/i18n'
