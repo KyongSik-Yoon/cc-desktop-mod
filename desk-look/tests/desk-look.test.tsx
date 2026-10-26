@@ -10,7 +10,7 @@ import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
-import { bandStayMs, currentHead, headAt, quoteInto } from '../hooks/register'
+import { bandStayMs, currentHead, headAt, quoteDecorations, quoteInto } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -2178,6 +2178,17 @@ test('인용은 앞서 넣은 인용들 다음, 쓰던 글 위에 들어가고 �
   expect(quoteInto('> 앞\n\n질문', 7, quote)).toEqual({ text: '> 앞\n\n> 새\n\n질문', cursor: 12 })
   expect(quoteInto('> 앞', 2, quote)).toEqual({ text: '> 앞\n\n> 새\n\n', cursor: 10 })
   expect(quoteInto('> 앞\n\n질문', 1, quote)).toEqual({ text: '> 앞\n\n> 새\n\n질문', cursor: 10 })
+})
+
+test('입력창 인용 줄 꾸밈: > 는 흐리게, 글은 기울여 흐린 색, 다른 줄은 그대로', () => {
+  expect(quoteDecorations('질문')).toEqual([])
+  expect(quoteDecorations('> 앞\n>\n>뒤\n\n질문 > 아님')).toEqual([
+    { start: 0, end: 2, color: 'subtle' },
+    { start: 2, end: 3, italic: true, color: 'inactive' },
+    { start: 4, end: 5, color: 'subtle' },
+    { start: 6, end: 7, color: 'subtle' },
+    { start: 7, end: 8, italic: true, color: 'inactive' },
+  ])
 })
 
 test('메인 턴 중 서브에이전트 턴이 시작해도 턴 끝 카드의 파일은 남고, 끝났던 에이전트는 다시 실행 중', KO, async ($, on) => {
