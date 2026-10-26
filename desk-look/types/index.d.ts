@@ -1,4 +1,5 @@
-export type FileDiff = { path: string; added: number; removed: number; patch: string; isNew: boolean }
+// large: 너무 커서 내용(patch)을 비우고 +/− 수만 남긴 파일(아주 긴 줄·아주 큰 diff).
+export type FileDiff = { path: string; added: number; removed: number; patch: string; isNew: boolean; large?: boolean }
 
 // root: 저장소 최상위 절대 경로(저장소가 아니면 없다).
 // ignored: 이 세션이 고친 저장소 안 파일 중 git 이 무시하는 것(절대 경로). git diff 에 안 잡혀 세션 기록으로 보인다.
