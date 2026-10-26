@@ -84,9 +84,11 @@ export function graphicsOf(env: Record<string, string | undefined>, herdrGraphic
 export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 
 // 여러 줄 말풍선의 모서리 한 칸 그림(RGBA). 칸 너비를 반지름으로 바깥 모서리를 둥글게 비우고 나머지는
-// 말풍선 색으로 채운다. 셀은 세로가 가로의 약 두 배라 16x32 로 그리면 터미널이 칸 크기에 맞춰 늘인다.
-// 가장자리는 한 픽셀을 4x4 로 나눠 덮인 비율을 알파로 써서 부드럽게 한다.
-export const CORNER_SIZE = { width: 16, height: 32 } as const
+// 말풍선 색으로 채운다. 가장자리는 한 픽셀을 4x4 로 나눠 덮인 비율을 알파로 써서 부드럽게 한다.
+// 터미널은 그림을 늘이지 않고 비율을 지켜 칸에 맞춘 뒤 픽셀로 반올림한다(Ghostty). 그림 비율이 칸과 다르면
+// 모서리 칸 위아래가 비어 줄 사이에 틈이 난다 — 16x32 는 11x24 칸에서 1px, 14x32 칸에서 2px.
+// 27x61 은 두 칸 모두 반올림으로 꽉 차고, 경계(x.5)까지 0.12px 여유가 있다.
+export const CORNER_SIZE = { width: 27, height: 61 } as const
 
 export function cornerPixels(corner: Corner, color: string): Uint8Array {
   const { width, height } = CORNER_SIZE

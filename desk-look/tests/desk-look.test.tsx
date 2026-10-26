@@ -687,6 +687,18 @@ test('말풍선 모서리 그림: 바깥 모서리는 비우고 안쪽은 말풍
   expect(alpha(bottomRight, width - 1, 0)).toBe(255)
 })
 
+test('말풍선 모서리 그림: 비율을 지켜 칸에 맞춰도 칸을 꽉 채운다', KO, async () => {
+  const { width, height } = CORNER_SIZE
+  // Ghostty 처럼 긴 쪽을 칸에 맞추고 짧은 쪽을 가운데에 둔 뒤 픽셀로 반올림한다. 11x24 는 1.5배, 14x32 는 2배 화면의 칸.
+  for (const [cellWidth, cellHeight] of [[11, 24], [14, 32]] as const) {
+    const wider = width * cellHeight > height * cellWidth
+    const drawn = wider ? (height * cellWidth) / width : (width * cellHeight) / height
+    const cell = wider ? cellHeight : cellWidth
+    expect(Math.round(drawn)).toBe(cell)
+    expect(Math.round((cell - drawn) / 2)).toBe(0)
+  }
+})
+
 test('분기 노드는 이중선 상자, 일반 노드는 둥근 상자', KO, async () => {
   const text = (renderDiagram('flowchart LR\n  A[답변] --> B{종류} --> C[그림]')?.rows ?? [])
     .map(row => row.map(seg => seg.text).join(''))
