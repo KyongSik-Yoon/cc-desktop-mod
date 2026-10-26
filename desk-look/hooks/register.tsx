@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Chunk, Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
 
-import type { AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
@@ -10,12 +10,15 @@ import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rang
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withPredicted } from './runs'
 import type { PredictedCall, RunCursor } from './runs'
-import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from './agents'
+import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { gather, gatheredLines } from './gather'
-import { computeTasks, visibleTasks } from './tasks'
+import { computeTasks } from './tasks'
+import { KIND_GLYPH, LOG_EVENTS, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
+import type { FlowRow, LaneSegment, ProcRow } from './activity'
+import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
 import type { ContextChipMode } from './usage'
@@ -48,7 +51,8 @@ const SESSIONS_PANE = 'desk-sessions'
 const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
 const AGENTS_PANE = 'desk-tasks'
-const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE])
+const ACTIVITY_PANE = 'desk-activity'
+const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE, ACTIVITY_PANE])
 // /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
 const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
@@ -79,6 +83,11 @@ const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskSta
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
+const IDLE_ACTIVITY: ActivityState = { calls: [], say: null, idleSince: null, proc: null, taskSince: {}, commands: 0, failed: 0, agents: 0 }
+const turnActivity = atom({ plugin: 'desk-look', key: 'activity' } as const, IDLE_ACTIVITY)
+const activityLog = atom({ plugin: 'desk-look', key: 'activityLog' } as const, null as ActivityLog | null)
+// /desk-activity 패널을 다시 그리게 하는 시계(ms). 패널이 그려지고 무언가 돌 때만 ACTIVITY_TICK 마다 간다.
+const activityClock = atom({ plugin: 'desk-look', key: 'activityClock' } as const, 0)
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
@@ -147,6 +156,17 @@ let spinnerFallbackStart = 0
 // 스트림이 막 엔진에 넘긴 도구 호출: 기록(session.append)에 나오기 전까지 묶음에 미리 넣어 둔다.
 let runCursor: RunCursor = null
 let predicted: PredictedCall[] = []
+// 진행 띠가 Bash 가 띄운 프로세스를 읽는 시계와 직전 표본. claudePid 는 /proc/self/stat 에서 한 번 읽고,
+// /proc 이 없으면(macOS) null 로 두어 다시 읽지 않는다.
+let procTimer: Timer | null = null
+let procSample: ProcSample | null = null
+let claudePid: number | null | undefined
+// 새 턴이 시작되기 전의 /desk-activity 기록. 새 턴이 도구 없이 끝나면(글로만 답한 턴, 백그라운드 작업 끝남 알림) 되살린다.
+let previousLog: ActivityLog | null = null
+// 패널 시계: 막대와 시간은 2초 단위면 충분하다(스피너처럼 초당 두 번 그리면 턴 중 비용이 크게 는다).
+const ACTIVITY_TICK = 2000
+let activityTimer: Timer | null = null
+let activitySeen = 0
 // 엔진이 백그라운드 안내("(ctrl+b to run in background)")를 띄운 호출과 그 글. 스피너 줄 끝에 단다.
 const backgroundHints = new Map<string, string>()
 
@@ -1533,8 +1553,151 @@ async function refreshRuns($: EngineInterface) {
   predicted = predicted.filter(item => computed.firstOf[item.call.tool_use_id] === undefined)
   const next = withPredicted(computed, predicted)
   if (!sameJson(await read($, runs), next)) await update($, runs, () => next)
+  // 이번 턴에 모델이 쓴 가장 늦은 설명 글: 할 일 도구가 없을 때 진행 띠 윗줄의 단계.
+  const said = turnNarration(messages)
+  const state = await read($, turnActivity)
+  if (said?.text !== state.say?.text || said?.count !== state.say?.count) {
+    await update($, turnActivity, current => ({ ...current, say: said === null ? null : { text: said.text, count: said.count } }))
+  }
+  // 설명 뒤 호출은 설명보다 늦게 기록에 붙으니, 같은 설명이라도 호출이 늘면 다시 시각을 맞춘다.
+  // 스트림에서 막 넘긴 호출(아직 기록에 없는 것)도 가장 늦은 설명 뒤의 호출이다.
+  if (said !== null) void logSay($, said.text, [...said.ids, ...predicted.map(item => item.call.tool_use_id)]).catch(() => undefined)
   const list = computeTasks(messages)
-  if (!sameJson(await read($, tasks), list)) await update($, tasks, () => list)
+  if (!sameJson(await read($, tasks), list)) {
+    await update($, tasks, () => list)
+    // 하는 중이 된 할 일은 그때부터 시간을 잰다(띠의 "◉ 검증 8m").
+    const now = await $.clock.now()
+    await update($, turnActivity, state => ({ ...state, taskSince: taskSinceOf(list, state.taskSince ?? {}, now) }))
+  }
+}
+
+export function taskSinceOf(list: ReadonlyArray<TaskItem>, since: Record<string, number>, now: number): Record<string, number> {
+  return Object.fromEntries(list.filter(item => item.status === 'in_progress').map(item => [item.id, since[item.id] ?? now]))
+}
+
+// 진행 띠 "지금" 줄의 호출 글: Bash 는 설명(없으면 명령 첫 줄), 나머지는 도구 이름과 대상.
+export function callLabel(tool: string, input: unknown): string {
+  const description = stringField(fieldsOf(input), 'description')
+  if (tool === 'Bash') return description ?? summarize(tool, input)
+  if (isAgentTool(tool)) return description ?? tool
+  const target = summarize(tool, input)
+  return target === '' ? tool : `${tool} ${target}`
+}
+
+async function settleCall($: EngineInterface, id: string, tool: string) {
+  const now = await $.clock.now()
+  await update($, turnActivity, state => {
+    const calls = (state.calls ?? []).filter(call => call.id !== id)
+    return {
+      ...state,
+      calls,
+      idleSince: calls.length === 0 ? now : state.idleSince,
+      commands: (state.commands ?? 0) + (tool === 'Bash' ? 1 : 0),
+      agents: (state.agents ?? 0) + (isAgentTool(tool) ? 1 : 0),
+    }
+  })
+  if (!callsOf(await read($, turnActivity)).some(call => call.tool === 'Bash')) stopProcWatch()
+}
+
+const callsOf = (state: ActivityState) => state.calls ?? []
+
+function startProcWatch($: EngineInterface) {
+  if (procTimer !== null || claudePid === null) return
+  procSample = null
+  procTimer = $.clock.every(PROC_POLL_MS, () => void pollProc($).catch(() => undefined))
+}
+
+function stopProcWatch() {
+  procTimer?.cancel()
+  procTimer = null
+  procSample = null
+}
+
+// 가장 먼저 시작해 아직 도는 Bash 호출이 띄운 프로세스들을 읽는다: CPU 틱·입출력 바이트를 합쳐 직전 표본과 비교하고,
+// 이름은 가장 늦게 뜬 말단 명령(bash -c 래퍼 아래의 java·ssh …). 리눅스 /proc 만 본다.
+// ps 로 모든 프로세스를 훑지 않고(한 번에 명령어 2,300만 개) claude 의 자식에서 셸 래퍼만 따라 내려간다.
+async function pollProc($: EngineInterface) {
+  const state = await read($, turnActivity)
+  const bash = callsOf(state).find(call => call.tool === 'Bash')
+  if (!bash) return stopProcWatch()
+  if (claudePid === undefined) claudePid = statPid(await $.fs.read('/proc/self/stat').catch(() => ''))
+  if (claudePid === null) return stopProcWatch()
+  const now = await $.clock.now()
+  const uptime = uptimeTicks(await $.fs.read('/proc/uptime').catch(() => ''))
+  if (uptime === null) return
+  const since = Math.ceil((now - bash.startedAt) / 1000)
+  const rows: ProcRow[] = []
+  const ticksOf = new Map<number, number>()
+  let queue = childPids(await $.fs.read(`/proc/${claudePid}/task/${claudePid}/children`).catch(() => ''))
+  for (let depth = 0; queue.length > 0 && depth < PROC_DEPTH; depth++) {
+    const next: number[] = []
+    for (const pid of queue) {
+      const row = statRow(await $.fs.read(`/proc/${pid}/stat`).catch(() => ''))
+      if (!row) continue
+      const etimes = etimesOf(uptime, row.startTicks)
+      // claude 의 자식 가운데 이 호출 전부터 있던 것(MCP 서버)이나 셸이 아닌 것(desk-look 이 띄운 git 등)은 내려가지 않는다
+      if (depth === 0 && !isCallRoot({ ...row, etimes }, since)) continue
+      rows.push({ pid: row.pid, ppid: row.ppid, etimes, name: row.name })
+      ticksOf.set(row.pid, row.ticks)
+      next.push(...childPids(await $.fs.read(`/proc/${pid}/task/${pid}/children`).catch(() => '')))
+    }
+    queue = next
+  }
+  const tree = callProcesses(rows, claudePid, since)
+  const leaf = tree.leaves[0]
+  if (!leaf) return
+  let ticks = 0
+  let io = 0
+  for (const pid of tree.pids) {
+    ticks += ticksOf.get(pid) ?? 0
+    io += ioBytes(await $.fs.read(`/proc/${pid}/io`).catch(() => '')) ?? 0
+  }
+  const sample = { at: now, ticks, io }
+  const view = procView(leaf.name, procSample, sample, state.proc ?? null)
+  procSample = sample
+  if (!sameJson(state.proc, view)) await update($, turnActivity, current => ({ ...current, proc: view }))
+}
+
+// /desk-activity 패널의 턴 기록. 메인 대화의 호출은 턴이 열려 있는 동안, 에이전트의 호출은 턴이 끝난 뒤에도
+// 다음 턴이 시작될 때까지 쌓는다(턴이 띄운 백그라운드 에이전트는 턴보다 오래 돈다).
+const logLabel = (tool: string, input: unknown) => (FILE_EDITING.has(tool) ? summarize(tool, input) : callLabel(tool, input))
+
+async function logCall($: EngineInterface, event: ActivityLog['events'][number]) {
+  await update($, activityLog, log => (log === null || (log.endedAt !== null && event.loop === undefined) ? log : { ...log, events: [...log.events, event].slice(-LOG_EVENTS) }))
+}
+
+async function settleLog($: EngineInterface, id: string) {
+  const now = await $.clock.now()
+  await update($, activityLog, log => (log === null ? log : { ...log, events: log.events.map(event => (event.id === id && event.end === undefined ? { ...event, end: now } : event)) }))
+}
+
+async function patchLog($: EngineInterface, id: string, patch: { isError: boolean; added?: number; removed?: number }) {
+  await update($, activityLog, log => (log === null ? log : { ...log, events: log.events.map(event => (event.id === id ? { ...event, ...patch } : event)) }))
+}
+
+// 설명 글은 그 메시지가 기록에 붙을 때(호출이 이미 시작된 뒤) 오므로, 같은 메시지 호출의 가장 이른 시작으로 시각을 당긴다.
+async function logSay($: EngineInterface, text: string, ids: ReadonlyArray<string>) {
+  const now = await $.clock.now()
+  await update($, activityLog, log => {
+    if (log === null || log.endedAt !== null) return log
+    const last = log.says[log.says.length - 1]
+    const at = Math.min(last?.text === text ? last.at : now, ...log.events.filter(event => ids.includes(event.id)).map(event => event.start))
+    if (last?.text === text) return at === last.at ? log : { ...log, says: [...log.says.slice(0, -1), { at, text }] }
+    return { ...log, says: [...log.says, { at, text }].slice(-LOG_EVENTS) }
+  })
+}
+
+// 턴 끝 줄의 요약: 진행 띠를 띄운 긴 턴에서 셀 것이 있을 때만.
+export function turnStats(state: ActivityState, list: ReadonlyArray<TaskItem>, durationMs: number): TurnStats | undefined {
+  if (durationMs < NOW_AFTER_MS) return undefined
+  const stats = {
+    commands: state.commands ?? 0,
+    failed: state.failed ?? 0,
+    agents: state.agents ?? 0,
+    tasksDone: list.filter(item => item.status === 'completed').length,
+    tasksTotal: list.length,
+  }
+  return stats.commands + stats.agents + stats.tasksTotal > 0 ? stats : undefined
 }
 
 type StepChunk = Chunk<'turn.step'>
@@ -1644,6 +1807,28 @@ async function openAgents($: EngineInterface, id: string | null = null) {
   await refreshAgents($).catch(() => undefined)
   await refreshAgentDetail($).catch(() => undefined)
   await $.ui.open({ id: AGENTS_PANE, title: T.paneAgents, focus: true })
+}
+
+// 패널이 한동안 그려지지 않았거나(닫힘·접힘), 턴도 끝나고 도는 에이전트·셸도 없으면 멈춘다.
+function startActivityClock($: EngineInterface) {
+  activityTimer = $.clock.every(ACTIVITY_TICK, () => {
+    void (async () => {
+      const [at, startedAt, records] = await Promise.all([$.clock.now(), read($, turnStartedAt), read($, agents)])
+      const busy = startedAt !== null || Object.values(records).some(agent => isLive(agent.status))
+      if (at - activitySeen > 2 * ACTIVITY_TICK + 1000 || !busy) {
+        activityTimer?.cancel()
+        activityTimer = null
+        // 멈추기 전에 한 번 더 그려 끝난 모습을 남긴다.
+        await update($, activityClock, () => at)
+        return
+      }
+      await update($, activityClock, () => at)
+    })()
+  })
+}
+
+async function openActivity($: EngineInterface) {
+  await $.ui.open({ id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
 }
 
 // 에이전트 대화를 메인 화면에 띄운다(엔진의 작업 목록에서 고른 것처럼). 그 뒤 Enter 는 그 에이전트에게 간다. id 가 없으면 메인 대화로.
@@ -2422,6 +2607,11 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await $.command.register({
+      name: 'desk-activity',
+      description: T.cmdActivity,
+      immediate: true,
+    })
+    await $.command.register({
       name: 'desk-tasks',
       description: T.cmdAgents,
       argumentHint: T.cmdAgentsHint,
@@ -2513,6 +2703,12 @@ export const register: Register = (on, options) => {
     await update($, previewWritten, () => null)
     const now = await $.clock.now()
     await update($, turnStartedAt, () => now)
+    // 진행 띠의 셈은 턴마다 새로. 하는 중인 할 일도 이 턴 시작부터 잰다(턴 사이에 쉰 시간은 빼고).
+    stopProcWatch()
+    const openTasks = await read($, tasks)
+    await update($, turnActivity, () => ({ ...IDLE_ACTIVITY, taskSince: taskSinceOf(openTasks, {}, now), idleSince: now }))
+    previousLog = await read($, activityLog)
+    await update($, activityLog, () => ({ startedAt: now, endedAt: null, events: [], says: [] }))
     // 프롬프트가 열린 묶음을 닫는다. 끝내 기록에 오르지 못한 예측(중단된 스트림)도 여기서 버린다.
     runCursor = null
     predicted = []
@@ -2526,9 +2722,23 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined) {
       const files = await read($, pendingEdits)
       const text = done.text.trim().slice(0, MAX_COPY)
+      const stats = turnStats(await read($, turnActivity), await read($, tasks), e.durationMs)
       if (files.length > 0 || text !== '') {
-        await update($, turnCards, cards => [...cards, { durationMs: e.durationMs, files, text }].slice(-TURN_CARDS))
+        await update($, turnCards, cards => [...cards, { durationMs: e.durationMs, files, text, stats }].slice(-TURN_CARDS))
       }
+      stopProcWatch()
+      await update($, turnActivity, state => ({ ...state, calls: [], proc: null, idleSince: null }))
+      const kept = previousLog
+      previousLog = null
+      await update($, activityLog, log => {
+        if (log === null) return log
+        // 메인 대화가 도구를 하나도 부르지 않은 턴(글로만 답한 턴, 백그라운드 끝남 알림)은 앞 턴을 남기고,
+        // 그 사이 앞 턴의 에이전트가 부른 호출은 앞 턴 기록에 합친다.
+        if (kept !== null && !log.events.some(event => event.loop === undefined)) {
+          return { ...kept, events: [...kept.events, ...log.events].slice(-LOG_EVENTS) }
+        }
+        return { ...log, endedAt: log.startedAt + e.durationMs }
+      })
       await update($, pendingEdits, () => [])
       await update($, turnStartedAt, () => null)
       void refreshUsage($).catch(() => undefined)
@@ -2622,6 +2832,11 @@ export const register: Register = (on, options) => {
     return { text: T.diffOpened }
   })
 
+  on('command.run', { command: 'desk-activity' }, async $ => {
+    await openActivity($)
+    return { text: T.activityOpened }
+  })
+
   on('command.run', { command: 'desk-tasks' }, async ($, e) => {
     const index = Number.parseInt(e.args.trim(), 10)
     if (Number.isInteger(index) && index > 0) {
@@ -2671,11 +2886,28 @@ export const register: Register = (on, options) => {
     const activity = activityOf(String(e.tool))
     if (agentId !== undefined) await patchAgent($, agentId, agent => ({ toolUses: agent.toolUses + 1, activity })).catch(() => undefined)
     const startedAt = await $.clock.now()
-    const ran = await next(e)
+    // 메인 대화의 호출은 진행 띠의 "지금" 줄에. Bash 는 띄운 프로세스도 읽는다(짧은 명령은 첫 읽기 전에 끝난다).
+    const tool = String(e.tool)
+    await logCall($, { id: e.tool_use_id, loop: agentId, tool, label: logLabel(tool, e), kind: kindOf(tool, stringField(fieldsOf(e), 'command')), start: startedAt }).catch(() => undefined)
+    if (agentId === undefined) {
+      const call = { id: e.tool_use_id, tool, label: callLabel(tool, e), startedAt }
+      await update($, turnActivity, state => ({ ...state, calls: [...(state.calls ?? []), call] })).catch(() => undefined)
+      if (tool === 'Bash') startProcWatch($)
+    }
+    const ran = await next(e).finally(() => {
+      void settleLog($, e.tool_use_id).catch(() => undefined)
+      if (agentId !== undefined) return
+      void settleCall($, e.tool_use_id, tool).catch(() => undefined)
+    })
+    const editStat = FILE_EDITING.has(tool) && !ran.isError ? diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false, output: ran.result }) : null
+    if (ran.isError === true || editStat) void patchLog($, e.tool_use_id, { isError: ran.isError === true, ...(editStat ?? {}) }).catch(() => undefined)
+    if (agentId === undefined && tool === 'Bash' && ran.isError === true) void update($, turnActivity, state => ({ ...state, failed: (state.failed ?? 0) + 1 })).catch(() => undefined)
     if (agentId !== undefined) await patchAgent($, agentId, agent => (agent.activity === activity ? { activity: undefined } : {})).catch(() => undefined)
     // 백그라운드로 넘어간 셸·모니터는 백그라운드 작업 패널에 올린다. 모델이 멈춘 작업은 멈춤으로.
     if (!ran.isError && ran.result !== undefined) {
-      const task = backgroundTaskOf(String(e.tool), fieldsOf(e), ran.result, startedAt)
+      const found = backgroundTaskOf(String(e.tool), fieldsOf(e), ran.result, startedAt)
+      const outputFile = outputFileOf(ran.text)
+      const task = found && outputFile ? { ...found, outputFile } : found
       if (task) {
         await update($, agents, records => ({ ...records, [task.id]: task })).catch(() => undefined)
         startAgentClock($)
@@ -2684,11 +2916,10 @@ export const register: Register = (on, options) => {
       if (stopped) await patchAgent($, stopped, agent => ({ status: 'killed', endedAt: agent.endedAt ?? startedAt, activity: undefined })).catch(() => undefined)
     }
     // 턴 끝 카드용: 성공한 편집만 파일별 +/− 로 모은다
-    const tool = String(e.tool)
     if (FILE_EDITING.has(tool) && !ran.isError) {
       const fields = fieldsOf(e)
       const path = stringField(fields, 'file_path') ?? stringField(fields, 'notebook_path')
-      const stat = diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false, output: ran.result })
+      const stat = editStat
       if (path && stat) {
         await update($, pendingEdits, list => mergeEdit(list, { path, ...stat }))
       }
@@ -2845,8 +3076,17 @@ export const register: Register = (on, options) => {
   // 진행 표시: 데스크톱의 "··· Running… 2m 29s". 클레이색 점 셋이 돌고, 경과 시간은 흐리게.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
-    const { Text } = $.ui.resolve(e)
-    const [now, startedAt] = await Promise.all([$.clock.now(), read($, turnStartedAt), read($, tick)])
+    const els = $.ui.resolve(e)
+    const { Box, Text } = els
+    const [now, startedAt, , list, state, agentRecords, asked] = await Promise.all([
+      $.clock.now(),
+      read($, turnStartedAt),
+      read($, tick),
+      read($, tasks),
+      read($, turnActivity),
+      read($, agents),
+      read($, asking),
+    ])
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
     spinnerSeen = now
     if (ticker === null) {
@@ -2865,7 +3105,7 @@ export const register: Register = (on, options) => {
     const elapsed = now - (startedAt ?? spinnerFallbackStart)
     const hint = backgroundHintOf(await read($, runs))
     // 한 줄을 넘지 않게 자른다: 줄이 접혀 늘면 그 위 대화가 밀려 오르내린다.
-    return (
+    const line = (
       <Text wrap="truncate-end">
         <Text color={COLORS.clay}>{spinnerDots(now)}</Text>
         <Text color={COLORS.text}>{` ${spinnerWord(e.props.mode, e.props.message)}${e.props.suffix}`}</Text>
@@ -2873,6 +3113,17 @@ export const register: Register = (on, options) => {
         {gatheredLines() > 0 && <Text color={COLORS.muted}>{` · ${T.gathered(gatheredLines())}`}</Text>}
         {hint !== null && <Text color={COLORS.muted}>{` · ${hint}`}</Text>}
       </Text>
+    )
+    // 진행 띠는 턴 동안 스피너 바로 아래에 그린다: 스피너는 어차피 초당 두 번 다시 그려지니, 띠의 시간을 가게 하려고
+    // 입력창 위 띠 전체(아래턱·칩)를 다시 그리지 않아도 된다(명령어 수로 재면 그 다시 그리기가 턴 중 비용의 대부분이었다).
+    // 질문 카드가 떠 있으면 질문이 자리를 차지하니 띠는 숨긴다.
+    const band = startedAt !== null && asked === null ? activityBand(els, { list, state, agents: agentRecords, turnStartedAt: startedAt, now, columns: e.viewport?.columns ?? 80, onOpen: () => void openActivity($) }) : null
+    if (!band) return line
+    return (
+      <Box flexDirection="column">
+        {line}
+        {band}
+      </Box>
     )
   })
 
@@ -2930,9 +3181,10 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const below = await next(e)
-    const [info, list] = await Promise.all([read($, repo), read($, tasks)])
+    const [info, list, state, agentRecords, startedAt] = await Promise.all([read($, repo), read($, tasks), read($, turnActivity), read($, agents), read($, turnStartedAt)])
     const els = $.ui.resolve(e)
-    const plan = taskCard(els, list, e.props.bodyColumns, Math.min(TASK_ROWS, e.props.maxRows - 6))
+    // 턴 동안 진행 띠는 스피너가 그린다. 턴 밖에서는 남은 할 일이 있을 때만 단계 줄을(시간 없이) 여기에.
+    const plan = startedAt === null ? activityBand(els, { list, state, agents: agentRecords, turnStartedAt: null, now: 0, columns: e.props.bodyColumns, onOpen: () => void openActivity($) }) : null
     askBand = e.requestId
     const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
     const meter = contextMeter(els, $, await read($, usage), chipMode)
@@ -3005,7 +3257,16 @@ export const register: Register = (on, options) => {
         <Button key={`quote-turn-${card.durationMs}`} plain dimColor label="❝ quote" onPress={() => void quoteSelection($)} />
       </Box>
     )
-    if (card.files.length === 0) return head
+    // 진행 띠를 띄운 긴 턴의 셈: 엔진 줄에는 덧붙일 자리가 없어 그 아래 흐린 한 줄로.
+    const stats = card.stats ? (
+      <Box flexDirection="column">
+        {head}
+        <Text color={COLORS.muted} wrap="truncate-end">{`  ${T.turnStats(card.stats)}`}</Text>
+      </Box>
+    ) : (
+      head
+    )
+    if (card.files.length === 0) return stats
     const key = `card-${card.durationMs}`
     const isOpen = (await read($, open))[key] ?? false
     const added = card.files.reduce((sum, file) => sum + file.added, 0)
@@ -3039,7 +3300,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        {head}
+        {stats}
         <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
           <Box justifyContent="space-between">
             <Text color={COLORS.text} weight="semibold">
@@ -3060,6 +3321,32 @@ export const register: Register = (on, options) => {
         </Box>
       </Box>
     )
+  })
+
+  // /desk-activity: 이번(끝났으면 지난) 턴에 무엇이 언제 돌았는지. 위는 메인·에이전트·백그라운드의 시간 막대,
+  // 아래는 설명 글과 호출의 흐름, 이 턴의 에이전트와 백그라운드 작업(도는 셸은 출력 끝 줄).
+  on('ui.render', { component: 'Pane', requestId: ACTIVITY_PANE }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text } = els
+    // 턴이나 이 턴이 띄운 일이 도는 동안은 패널 시계(2초)로 다시 그려 막대와 시간이 간다.
+    const [log, records, startedAt] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityClock)])
+    if (log === null) return <Text color={COLORS.muted}>{T.activityNone}</Text>
+    const now = await $.clock.now()
+    activitySeen = now
+    // 도는 것이 있을 때만 시계를 건다(멈춘 뒤 마지막 한 번 그릴 때 다시 걸지 않게).
+    if (activityTimer === null && (startedAt !== null || Object.values(records).some(agent => isLive(agent.status)))) startActivityClock($)
+    const columns = Math.max(30, e.props.bodyColumns)
+    const turnEnd = log.endedAt ?? now
+    const inTurn = (agent: AgentRecord) => (agent.startedAt ?? 0) >= log.startedAt - 1000 && (agent.startedAt ?? 0) <= turnEnd
+    const all = [...orderAgents(records).live, ...orderAgents(records).done].filter(inTurn).reverse()
+    const turnAgents = all.filter(agent => (agent.kind ?? 'agent') === 'agent')
+    const shells = all.filter(agent => agent.kind === 'shell' || agent.kind === 'monitor')
+    const tail = await shellTail($, shells, now)
+    // 턴이 끝났어도 이 턴에 띄운 에이전트·셸이 아직 돌면 지금까지, 끝났으면 가장 늦게 끝난 때까지 시간 축을 늘린다.
+    const spawned = [...turnAgents, ...shells]
+    const end = spawned.some(agent => isLive(agent.status)) ? now : Math.max(turnEnd, ...spawned.map(agent => agent.endedAt ?? turnEnd))
+    return activityPane(els, { log, now, end, columns, turnAgents, shells, tail, openAgent: id => void openAgents($, id) })
   })
 
   // 세션 패널: 프로젝트별로 묶은 최근 세션. 현재 세션은 클레이색 ●.
@@ -4331,44 +4618,339 @@ async function chinBand($: EngineInterface, els: Elements['terminal'], info: Rep
   )
 }
 
-// 데스크톱의 계획 카드: 끝난 일 ✓(흐리게), 하는 중 ◉(클레이, 진행형 문구), 남은 일 ○.
-const TASK_ROWS = 6
-const TASK_MARKS = {
-  completed: { mark: '✓', color: COLORS.success, text: COLORS.muted },
-  in_progress: { mark: '◉', color: COLORS.clay, text: COLORS.text },
-  pending: { mark: '○', color: COLORS.muted, text: COLORS.text },
+// 입력창 위 진행 띠(plan-progress 를 대신한다). 윗줄은 할 일 단계 칸(✓ 끝난 일·◉ 하는 중·○ 남은 일),
+// 아랫줄은 지금 도는 일(도구 호출·에이전트·Bash 가 띄운 프로세스, 도구가 없으면 응답 중).
+// 윗줄은 남은 할 일이 있을 때, 아랫줄은 턴이 NOW_AFTER_MS 를 넘겼거나 할 일이 있을 때만. 턴이 끝나면 아랫줄은 접힌다.
+export type BandInput = {
+  list: ReadonlyArray<TaskItem>
+  state: ActivityState
+  agents: Readonly<Record<string, AgentRecord>>
+  turnStartedAt: number | null
+  now: number
+  columns: number
+  // 띠를 누르면 /desk-activity 패널을 연다.
+  onOpen?: () => void
+}
+
+const STRIP_STYLE = {
+  completed: { mark: COLORS.success, text: COLORS.muted },
+  in_progress: { mark: COLORS.clay, text: COLORS.text },
+  pending: { mark: COLORS.muted, text: COLORS.muted },
+  more: { mark: COLORS.muted, text: COLORS.muted },
 } as const
 
-export function taskCard(els: Elements['terminal'], list: ReadonlyArray<TaskItem>, columns: number, rows: number) {
+export function activityBand(els: Elements['terminal'], input: BandInput) {
   const { Box, Text } = els
-  const { shown, hidden } = visibleTasks(list, Math.max(2, rows))
-  if (shown.length === 0) return null
+  const { list, state, now, turnStartedAt } = input
+  const hasTasks = list.length > 0 && list.some(item => item.status !== 'completed')
+  // 할 일 도구가 없으면(Claude 5 모델) 턴 동안 모델의 설명 글을 단계로.
+  const say = !hasTasks && turnStartedAt !== null ? (state.say ?? null) : null
+  const hasPlan = hasTasks || say !== null
+  const isLong = turnStartedAt !== null && now - turnStartedAt >= NOW_AFTER_MS
+  const hasNow = turnStartedAt !== null && (isLong || hasPlan)
+  if (!hasPlan && !hasNow) return null
+  const width = Math.max(24, input.columns - 2)
   const done = list.filter(item => item.status === 'completed').length
-  const width = Math.max(24, Math.min(columns, 72))
-  return (
-    <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
-      <Box columnGap={1}>
-        <Text color={COLORS.text} weight="semibold">
-          Tasks
-        </Text>
-        <Text color={COLORS.muted}>{`${done}/${list.length}`}</Text>
-      </Box>
-      {shown.map(item => {
-        const style = TASK_MARKS[item.status]
-        const label = item.status === 'in_progress' ? (item.activeForm ?? item.subject) : item.subject
+  const count = say ? T.bandStep(say.count) : `${done}/${list.length}`
+  const since = state.taskSince ?? {}
+  const label = (item: TaskItem) => {
+    const text = item.activeForm ?? item.subject
+    const at = since[item.id]
+    return at === undefined || turnStartedAt === null ? text : `${text} ${formatElapsed(now - at)}`
+  }
+  const room = width - cellWidth(count) - 2
+  const parts = say ? sayStrip(say.text, say.count - 1, room) : hasTasks ? stepStrip(list, room, label) : []
+  const strip = hasPlan
+    ? parts.map((part, index) => {
+        const style = STRIP_STYLE[part.kind]
+        const [mark, ...rest] = part.text.split(' ')
         return (
-          <Text wrap="truncate-end">
-            <Text color={style.color}>{`${style.mark} `}</Text>
-            <Text color={style.text} weight={item.status === 'in_progress' ? 'semibold' : undefined}>
-              {label}
-            </Text>
+          <Text>
+            {index > 0 ? '  ' : ''}
+            <Text color={style.mark}>{part.kind === 'more' ? part.text : mark}</Text>
+            {part.kind !== 'more' && (
+              <Text color={style.text} weight={part.kind === 'in_progress' ? 'semibold' : undefined}>
+                {` ${rest.join(' ')}`}
+              </Text>
+            )}
           </Text>
         )
-      })}
-      {hidden > 0 && <Text color={COLORS.muted}>{`+${hidden} more`}</Text>}
+      })
+    : null
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      {strip && (
+        <Box columnGap={2} width={width}>
+          <Box flexGrow={1}>
+            <Text wrap="truncate-end">{strip as never}</Text>
+          </Box>
+          <Text color={COLORS.muted}>{count}</Text>
+        </Box>
+      )}
+      {hasNow &&
+        (input.onOpen ? (
+          <els.Button key="band-now" plain onPress={input.onOpen}>
+            <Text wrap="truncate-end">{nowLine(els, input) as never}</Text>
+          </els.Button>
+        ) : (
+          <Text wrap="truncate-end">{nowLine(els, input) as never}</Text>
+        ))}
     </Box>
   )
 }
+
+// "지금" 줄의 글 조각들.
+function nowLine(els: Elements['terminal'], input: BandInput) {
+  const { Text } = els
+  const { state, now } = input
+  const running = state.calls ?? []
+  const first = running[0]
+  if (!first) {
+    const from = state.idleSince ?? input.turnStartedAt ?? now
+    return [<Text color={COLORS.muted}>{`${T.bandResponding} · ${formatElapsed(now - from)}`}</Text>]
+  }
+  const more = running.length > 1 ? <Text color={COLORS.muted}>{`  +${running.length - 1}`}</Text> : null
+  if (isAgentTool(first.tool)) {
+    const live = orderAgents(input.agents).live
+    const shown = live.slice(0, 2).map((agent, index) => (
+      <Text>
+        {index > 0 ? '   ' : ''}
+        <Text color={COLORS.link}>{agent.type}</Text>
+        <Text color={COLORS.muted}>{` ${agent.activity ?? T.bandThinking} · ${T.bandTools(agent.toolUses)}${agent.startedAt ? ` · ${formatElapsed(now - agent.startedAt)}` : ''}`}</Text>
+      </Text>
+    ))
+    if (shown.length > 0) {
+      return [...shown, live.length > 2 ? <Text color={COLORS.muted}>{`   +${live.length - 2}`}</Text> : null]
+    }
+  }
+  const proc = first.tool === 'Bash' ? state.proc : null
+  const quiet = proc?.quietSince != null && now - proc.quietSince >= QUIET_AFTER_MS ? now - proc.quietSince : null
+  return [
+    <Text color={COLORS.clay}>▶ </Text>,
+    <Text color={COLORS.text}>{first.label}</Text>,
+    <Text color={COLORS.muted}>{` · ${formatElapsed(now - first.startedAt)}`}</Text>,
+    proc ? <Text color={COLORS.muted}>{` · ${proc.name}${proc.cpu === null ? '' : ` ${proc.cpu}%`}`}</Text> : null,
+    quiet === null ? null : proc?.isNetwork ? (
+      <Text color={COLORS.muted}>{` · ${T.bandNoIo(formatElapsed(quiet))}`}</Text>
+    ) : (
+      <Text color={COLORS.warning} weight="semibold">{` · ${T.bandQuiet(formatElapsed(quiet))}`}</Text>
+    ),
+    more,
+  ]
+}
+
+// ── /desk-activity 패널 ──
+const LANE_LABEL = 11
+const LANE_AGENTS = 4
+const FLOW_ROWS = 60
+// 막대 색: 가장 길게 이어지는 명령은 진행 띠의 ▶ 와 같은 강조색, 나머지는 서로 다른 테마 색(글자색 검정은 쓰지 않는다).
+const KIND_COLOR: Record<LaneSegment['kind'], string> = {
+  explore: COLORS.link,
+  edit: COLORS.success,
+  test: 'merged',
+  command: COLORS.clay,
+  agent: 'planMode',
+  other: COLORS.muted,
+  idle: COLORS.muted,
+  none: COLORS.muted,
+}
+
+// 도는 백그라운드 셸의 출력 끝 줄: 다시 그릴 때마다 읽지 않게 3초에 한 번만 출력 파일을 읽는다.
+let tailCache: { id: string; at: number; text: string | null } | null = null
+
+async function shellTail($: EngineInterface, shells: ReadonlyArray<AgentRecord>, now: number): Promise<{ id: string; text: string } | null> {
+  const shell = shells.find(item => isLive(item.status) && item.outputFile)
+  if (!shell?.outputFile) return null
+  if (tailCache?.id !== shell.id || now - tailCache.at >= PROC_POLL_MS) {
+    const raw = await $.fs.read(shell.outputFile).catch(() => null)
+    const last = typeof raw === 'string' ? raw.trimEnd().split('\n').pop()?.trim() : undefined
+    tailCache = { id: shell.id, at: now, text: last || null }
+  }
+  return tailCache.text === null ? null : { id: shell.id, text: tailCache.text }
+}
+
+type PaneInput = {
+  log: ActivityLog
+  now: number
+  end: number
+  columns: number
+  turnAgents: ReadonlyArray<AgentRecord>
+  shells: ReadonlyArray<AgentRecord>
+  tail: { id: string; text: string } | null
+  openAgent: (id: string) => void
+}
+
+export function activityPane(els: Elements['terminal'], input: PaneInput) {
+  const { Box, Text } = els
+  const { log, now, end, columns } = input
+  const width = Math.max(10, columns - LANE_LABEL)
+  const main = log.events.filter(event => event.loop === undefined)
+  const turnEnd = log.endedAt ?? now
+  const lane = (name: string, segments: LaneSegment[], key: string) => (
+    <Box key={key}>
+      <Text color={COLORS.muted}>{`${padCells(clipWidth(name, LANE_LABEL - 1), LANE_LABEL)}`}</Text>
+      <Text>
+        {segments.map(segment => (
+          <Text color={KIND_COLOR[segment.kind]}>{segment.text}</Text>
+        ))}
+      </Text>
+    </Box>
+  )
+  const lanes = [
+    lane(T.laneMain, laneSegments(main, { start: log.startedAt, end: turnEnd }, log.startedAt, end, width), 'lane-main'),
+    ...input.turnAgents.slice(-LANE_AGENTS).map(agent =>
+      lane(
+        agent.type,
+        laneSegments(
+          log.events.filter(event => event.loop === agent.id),
+          { start: agent.startedAt ?? log.startedAt, end: agent.endedAt ?? end },
+          log.startedAt,
+          end,
+          width,
+        ),
+        `lane-${agent.id}`,
+      ),
+    ),
+    ...(input.shells.length > 0
+      ? [
+          lane(
+            T.laneBackground,
+            laneSegments(
+              input.shells.map(shell => ({ kind: 'command' as ActivityKind, start: shell.startedAt ?? log.startedAt, end: shell.endedAt })),
+              { start: 0, end: 0 },
+              log.startedAt,
+              end,
+              width,
+            ),
+            'lane-bg',
+          ),
+        ]
+      : []),
+  ]
+  const total = formatElapsed(end - log.startedAt)
+  const axis = `${' '.repeat(LANE_LABEL)}0${' '.repeat(Math.max(1, width - 1 - total.length))}${total}`
+  const kinds: ActivityKind[] = ['explore', 'edit', 'test', 'command', 'agent']
+  const legend = (
+    <Text>
+      {' '.repeat(LANE_LABEL)}
+      {kinds.map(kind => (
+        <Text>
+          <Text color={KIND_COLOR[kind]}>{KIND_GLYPH[kind]}</Text>
+          <Text color={COLORS.muted}>{` ${T.kindName[kind]}  `}</Text>
+        </Text>
+      ))}
+      <Text color={COLORS.muted}>{`─ ${T.bandResponding}`}</Text>
+    </Text>
+  )
+  const commands = main.filter(event => event.tool === 'Bash')
+  const failed = commands.filter(event => event.isError).length
+  const files = new Set(main.filter(event => event.kind === 'edit' && !event.isError).map(event => event.label)).size
+  const facts = [
+    log.says.length > 0 ? T.bandStep(log.says.length) : '',
+    commands.length > 0 ? T.turnStats({ commands: commands.length, failed, agents: 0, tasksDone: 0, tasksTotal: 0 }) : '',
+    files > 0 ? T.activityFiles(files) : '',
+  ].filter(Boolean)
+  const rows = flowRows(log).slice(-FLOW_ROWS)
+  const at = (row: FlowRow) => <Text color={COLORS.muted}>{`${clockOf(row.at - log.startedAt)}  `}</Text>
+  const flow = rows.map(row => {
+    if (row.kind === 'say') {
+      return (
+        <Text wrap="truncate-end">
+          {at(row)}
+          <Text color={COLORS.clay}>◉ </Text>
+          <Text color={COLORS.text} weight="semibold">{row.text}</Text>
+        </Text>
+      )
+    }
+    if (row.kind === 'explore') {
+      return (
+        <Text wrap="truncate-end">
+          {at(row)}
+          <Text color={KIND_COLOR.explore}>{`${KIND_GLYPH.explore} `}</Text>
+          <Text color={COLORS.muted}>{row.text}</Text>
+        </Text>
+      )
+    }
+    if (row.kind === 'edit') {
+      return (
+        <Text wrap="truncate-end">
+          {at(row)}
+          <Text color={row.isError ? COLORS.danger : KIND_COLOR.edit}>{`${KIND_GLYPH.edit} `}</Text>
+          <Text color={COLORS.text}>{row.text}</Text>
+          {(row.added > 0 || row.removed > 0) && <Text>{' '}</Text>}
+          {row.added > 0 && <Text color={COLORS.success}>{`+${row.added} `}</Text>}
+          {row.removed > 0 && <Text color={COLORS.danger}>{`−${row.removed}`}</Text>}
+        </Text>
+      )
+    }
+    const mark = row.ms === null ? '▶' : row.isError ? '✗' : row.kind === 'agent' ? '◆' : '✓'
+    const markColor = row.ms === null ? COLORS.clay : row.isError ? COLORS.danger : row.kind === 'agent' ? COLORS.warning : COLORS.success
+    return (
+      <Text wrap="truncate-end">
+        {at(row)}
+        <Text color={markColor}>{`${mark} `}</Text>
+        {row.kind === 'test' && <Text color={KIND_COLOR.test}>{`${T.kindName.test} `}</Text>}
+        <Text color={COLORS.text}>{row.text}</Text>
+        <Text color={COLORS.muted}>{` · ${formatElapsed(row.ms ?? now - row.at)}`}</Text>
+      </Text>
+    )
+  })
+  const agentRow = (agent: AgentRecord) => {
+    const live = isLive(agent.status)
+    const failedAgent = agent.status === 'failed' || agent.status === 'killed'
+    const isAgent = (agent.kind ?? 'agent') === 'agent'
+    const facts = [agent.activity && live ? agent.activity : undefined, isAgent ? T.bandTools(agent.toolUses) : undefined, agentElapsed(agent, now)].filter(Boolean).join(' · ')
+    return rowButton(
+      els,
+      { key: `activity-agent-${agent.id}`, onPress: () => input.openAgent(agent.id) },
+      '',
+      <Text color={live ? COLORS.clay : failedAgent ? COLORS.danger : COLORS.success}>{live ? '▶ ' : failedAgent ? '✗ ' : '✓ '}</Text>,
+      <Text color={COLORS.text}>{`${KIND_LABEL(agent)} `}</Text>,
+      <Text color={COLORS.muted}>{`${agent.description} · ${facts}`}</Text>,
+    )
+  }
+  const section = (title: string) => <Text color={COLORS.text} weight="semibold">{title}</Text>
+  return (
+    <Box flexDirection="column" rowGap={1}>
+      <Box columnGap={2} width={columns}>
+        <Box flexGrow={1}>
+          <Text color={COLORS.text} weight="semibold">{`${log.endedAt === null ? T.activityThisTurn : T.activityLastTurn} · ${formatElapsed(turnEnd - log.startedAt)}`}</Text>
+        </Box>
+        <Text color={COLORS.muted} wrap="truncate-end">{facts.join(' · ')}</Text>
+      </Box>
+      <Box flexDirection="column">
+        {lanes}
+        <Text color={COLORS.muted}>{axis}</Text>
+        {legend}
+      </Box>
+      {flow.length > 0 && (
+        <Box flexDirection="column">
+          {section(T.activityFlow)}
+          {flow}
+        </Box>
+      )}
+      {input.turnAgents.length > 0 && (
+        <Box flexDirection="column">
+          {section(T.activityAgents)}
+          {input.turnAgents.map(agentRow)}
+        </Box>
+      )}
+      {input.shells.length > 0 && (
+        <Box flexDirection="column">
+          {section(T.laneBackground)}
+          {input.shells.map(shell => (
+            <Box flexDirection="column">
+              {agentRow(shell)}
+              {input.tail?.id === shell.id && <Text color={COLORS.muted} wrap="truncate-end">{`  └ ${input.tail.text}`}</Text>}
+            </Box>
+          ))}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+const padCells = (text: string, width: number) => text + ' '.repeat(Math.max(0, width - cellWidth(text)))
 
 // 터미널은 Box 배경을 칠하지 않으므로 말풍선의 모든 칸을 글자 바탕으로 칠한다.
 // 양 끝 칸은 줄 위치로 고른다: 한 줄이면 Nerd Font 반원(  )으로 알약 모양, 여러 줄이면

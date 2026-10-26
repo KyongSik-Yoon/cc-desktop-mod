@@ -148,6 +148,12 @@ export function backgroundTaskOf(tool: string, input: Record<string, unknown>, r
   return null
 }
 
+// 백그라운드로 넘긴 Bash 의 결과 글("… Output is being written to: /tmp/…/tasks/<id>.output")에서 출력 파일.
+// 끝남 알림을 기다리지 않고 도는 동안 끝 줄을 읽으려고.
+export function outputFileOf(text: unknown): string | undefined {
+  return typeof text === 'string' ? /written to:?\s*(\S+\.output)\b/.exec(text)?.[1] : undefined
+}
+
 export type TaskNotice = { id: string; status?: string; outputFile?: string; summary?: string }
 
 // 작업이 끝났다는 알림 글(<task-notification> 묶음, 여러 개일 수 있다)에서 id·상태·출력 파일·요약을 읽는다.

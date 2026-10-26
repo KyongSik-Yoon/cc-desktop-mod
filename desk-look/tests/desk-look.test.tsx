@@ -4,7 +4,7 @@ import { describe, expect, mock, test, type TestBody } from 'claude-code/testing
 import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
-import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, parseNotices, stepTokens, tailOf } from '../hooks/agents'
+import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
@@ -648,7 +648,7 @@ test('tmux 안 kitty: 썸네일과 모서리를 파일 이름 대신 바이트�
   on('fs.exists', ($, e) => ({ value: (e as { path?: string }).path === dir }) as never)
   on('session.id', () => ({ value: 's1' }))
   on('process.run', ($, e) => {
-    if (e.argv[0] === 'tmux') asked.push(e.argv)
+    if (e.argv[0] === 'tmux') asked.push([...e.argv])
     const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'od' ? header.join(' ') : e.argv[0] === 'tmux' ? 'kitty(0.35.1)\ton\t1\t0\n' : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -849,7 +849,8 @@ test('진행 표시 글자', KO, () => {
   expect([0, 500, 1000, 1500].map(spinnerDots)).toEqual(['●··', '·●·', '··●', '●··'])
 })
 
-import { computeTasks, visibleTasks } from '../hooks/tasks'
+import { computeTasks } from '../hooks/tasks'
+import { callProcesses, childPids, clockOf, etimesOf, firstSentence, flowRows, ioBytes, isCallRoot, kindOf, laneSegments, procView, sayStrip, statPid, statRow, statTicks, stepStrip, turnNarration, uptimeTicks } from '../hooks/activity'
 
 test('할 일 목록 다시 세우기와 보일 줄', KO, () => {
   const ok = (id: string, result: unknown) => ({ tool_use_id: id, text: 'ok', isError: false, result })
@@ -884,16 +885,323 @@ test('할 일 목록 다시 세우기와 보일 줄', KO, () => {
     { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't', tool: 'TodoWrite', input: { todos: [{ content: '가', status: 'completed', activeForm: '가 중' }, { content: '나', status: 'pending', activeForm: '나 중' }] } }] },
   ])
   expect(todos.map(item => item.subject)).toEqual(['가', '나'])
+})
 
-  const many = Array.from({ length: 9 }, (_, index) => ({
-    id: String(index),
-    subject: `일 ${index}`,
-    status: (index < 5 ? 'completed' : index === 5 ? 'in_progress' : 'pending') as 'completed' | 'in_progress' | 'pending',
-  }))
-  const view = visibleTasks(many, 6)
-  expect(view.shown.map(item => item.id)).toEqual(['3', '4', '5', '6', '7', '8'])
-  expect(view.hidden).toBe(3)
-  expect(visibleTasks(many.map(item => ({ ...item, status: 'completed' as const })), 6).shown).toEqual([])
+describe('진행 띠', () => {
+  test('도구 호출 뒤에 claude 아래 생긴 셸만 뿌리로, 말단을 이름으로', () => {
+    const rows = [
+      { pid: 200, ppid: 100, etimes: 8000, name: 'node' }, // 먼저 떠 있던 MCP 서버
+      { pid: 300, ppid: 100, etimes: 5, name: 'bash' },
+      { pid: 301, ppid: 300, etimes: 4, name: 'ssh' },
+      { pid: 302, ppid: 300, etimes: 2, name: 'tee' },
+      { pid: 410, ppid: 100, etimes: 1, name: 'git' }, // desk-look 이 같은 때 띄운 git
+    ]
+    const tree = callProcesses(rows, 100, 6)
+    expect(tree.pids).toEqual([300, 301, 302])
+    expect(tree.leaves.map(row => row.name)).toEqual(['tee', 'ssh'])
+    expect(callProcesses(rows, 100, 0).pids).toEqual([])
+    expect(isCallRoot({ etimes: 1, name: 'git' }, 6)).toBe(false)
+  })
+
+  test('/proc 의 stat·io 를 읽는다(이름에 괄호·공백이 있어도)', () => {
+    const stat = '4242 (my (odd) name) S 1 4242 4242 0 -1 4194304 10 0 0 0 750 71 0 0 20 0 1 0 100'
+    expect(statTicks(stat)).toBe(821)
+    expect(statPid(stat)).toBe(4242)
+    expect(statRow(stat)).toEqual({ pid: 4242, name: 'my (odd) name', ppid: 1, startTicks: 100, ticks: 821 })
+    expect(statRow('')).toBeNull()
+    expect(uptimeTicks('12345.67 9999.00\n')).toBe(1234567)
+    expect(uptimeTicks('')).toBeNull()
+    expect(etimesOf(1234567, 1234067)).toBe(5)
+    expect(childPids('300 301 \n')).toEqual([300, 301])
+    expect(childPids('')).toEqual([])
+    expect(statTicks('')).toBeNull()
+    expect(statPid('')).toBeNull()
+    expect(ioBytes('rchar: 100\nwchar: 23\nsyscr: 5\n')).toBe(123)
+    expect(ioBytes('')).toBeNull()
+  })
+
+  test('CPU 는 두 번째 표본부터, 움직임이 없으면 조용해진 시각을 이어 간다', () => {
+    const first = procView('java', null, { at: 0, ticks: 0, io: 0 }, null)
+    expect(first).toEqual({ name: 'java', cpu: null, quietSince: null, isNetwork: false })
+    const busy = procView('java', { at: 0, ticks: 0, io: 0 }, { at: 3000, ticks: 291, io: 0 }, first)
+    expect(busy.cpu).toBe(97)
+    expect(busy.quietSince).toBeNull()
+    const still = procView('java', { at: 3000, ticks: 291, io: 0 }, { at: 6000, ticks: 291, io: 0 }, busy)
+    expect(still.quietSince).toBe(3000)
+    const stillMore = procView('java', { at: 6000, ticks: 291, io: 0 }, { at: 9000, ticks: 291, io: 0 }, still)
+    expect(stillMore.quietSince).toBe(3000)
+    // ssh 는 CPU 가 없어도 입출력이 있으면 움직이는 것이고, 네트워크 명령이라 경고 대상이 아니다
+    const remote = procView('ssh', { at: 0, ticks: 5, io: 10 }, { at: 3000, ticks: 5, io: 80 }, null)
+    expect(remote).toEqual({ name: 'ssh', cpu: 0, quietSince: null, isNetwork: true })
+  })
+
+  test('단계 칸: 넘치면 끝난 일·남은 일을 접고 하는 중인 일을 줄인다', () => {
+    const item = (id: string, subject: string, status: 'completed' | 'in_progress' | 'pending') => ({ id, subject, status })
+    const list = [item('1', '준비', 'completed'), item('2', '적재', 'completed'), item('3', '커서 재조회 검증', 'in_progress'), item('4', '정리', 'pending'), item('5', '보고', 'pending')]
+    const label = () => '커서 재조회 검증 8m 2s'
+    expect(stepStrip(list, 200, label).map(part => part.text)).toEqual(['✓ 준비', '✓ 적재', '◉ 커서 재조회 검증 8m 2s', '○ 정리', '○ 보고'])
+    // 다 펴면 58칸, 끝난 일을 접으면 47칸, 남은 일까지 접으면 43칸
+    expect(stepStrip(list, 50, label).map(part => part.text)).toEqual(['✓ 2', '◉ 커서 재조회 검증 8m 2s', '○ 정리', '○ 보고'])
+    expect(stepStrip(list, 45, label).map(part => part.text)).toEqual(['✓ 2', '◉ 커서 재조회 검증 8m 2s', '○ 정리', '+1'])
+    const narrow = stepStrip(list, 30, label)
+    expect(narrow.map(part => part.kind)).toEqual(['completed', 'in_progress', 'pending', 'more'])
+    expect(narrow[1]?.text.endsWith('…')).toBe(true)
+    expect(narrow.reduce((sum, part) => sum + cellWidth(part.text) + 2, 0)).toBeLessThanOrEqual(30)
+  })
+
+  test('할 일 도구가 없으면 이번 턴의 가장 늦은 설명 글 첫 문장을 단계로', () => {
+    const said = (text: string) => ({ role: 'assistant' as const, text, toolUses: [] })
+    const prompt = (text: string) => ({ role: 'user' as const, text, toolUses: [] })
+    const result = { role: 'user' as const, text: '', toolUses: [], toolResults: [{ tool_use_id: 'x', text: 'ok', isError: false, result: null }] }
+    expect(turnNarration([prompt('지난 턴'), said('지난 설명.'), prompt('돌려 줘'), said('먼저 스키마를 볼게요.'), result, said(''), said('이제 **.12** 에서 돌릴게요. 1부는 스크래치에 넣어요.\n- 다음'), { ...said(''), toolUses: [{ tool_use_id: 'b1', tool: 'Bash', input: {} }] }])).toEqual({
+      text: '이제 .12 에서 돌릴게요.',
+      count: 2,
+      ids: ['b1'],
+    })
+    expect(turnNarration([prompt('돌려 줘'), result])).toBeNull()
+    expect(firstSentence('## 결과\n본문')).toBe('결과')
+    expect(firstSentence('v1.2 버전을 올려요')).toBe('v1.2 버전을 올려요')
+    expect(sayStrip('이제 돌릴게요.', 2, 80).map(part => part.text)).toEqual(['✓ 2', '◉ 이제 돌릴게요.'])
+    expect(sayStrip('이제 .12 에서 돌릴게요. 아주 긴 설명이 이어집니다', 0, 20)[0]?.text.endsWith('…')).toBe(true)
+  })
+
+  test('하는 중인 할 일의 시간은 이번 턴부터 잰다(턴 사이에 쉰 시간은 빼고)', KO, async ($, on) => {
+    let now = 0
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('session.start', ($, e) => e as never)
+    on('command.register', () => ({ value: undefined as never }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-band</Text>
+    })
+    on('session.messages', () => ({
+      value: [
+        { role: 'assistant', text: '', toolUses: [{ tool_use_id: 't', tool: 'TodoWrite', input: { todos: [{ content: '준비', status: 'completed' }, { content: '검증', status: 'in_progress', activeForm: '검증 중' }] } }] },
+      ] as never,
+    }))
+    await $.session.start({ source: 'resume', cwd: '/repo', surface: 'terminal' } as never)
+    await wait(30)
+    now = 2 * 3600_000
+    await $.turn.start({ text: '이어서', turnId: 't2' } as never)
+    now += 5000
+    // 턴 동안의 진행 띠는 스피너 아래에 그린다
+    const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never })
+    const drawn = JSON.stringify(await band.drawn())
+    expect(drawn).toContain('검증 중 5s')
+    expect(drawn).toContain('1/2')
+    await band.unmount()
+  })
+
+  test('활동 패널 계산: 종류, 시간 막대, 흐름 묶기, 시각', () => {
+    expect(kindOf('Grep')).toBe('explore')
+    expect(kindOf('Write')).toBe('edit')
+    expect(kindOf('Agent')).toBe('agent')
+    expect(kindOf('Bash', 'cd x && bun test foo')).toBe('test')
+    expect(kindOf('Bash', 'claude plugin test desk-look')).toBe('test')
+    expect(kindOf('Bash', 'ssh .12 ./verify.sh')).toBe('command')
+    expect(kindOf('mcp__x__y')).toBe('other')
+    // 10칸: 0~2 탐색, 2~3 쉼(응답), 3~ 명령(아직 도는 중)
+    const segments = laneSegments(
+      [
+        { kind: 'explore', start: 0, end: 1900 },
+        { kind: 'command', start: 3000 },
+      ],
+      { start: 0, end: 10_000 },
+      0,
+      10_000,
+      10,
+    )
+    expect(segments.map(segment => [segment.kind, segment.text])).toEqual([
+      ['explore', '░░'],
+      ['idle', '─'],
+      ['command', '━━━━━━━'],
+    ])
+    // 긴 명령 도중의 짧은 편집은 명령에 묻히지 않는다
+    expect(
+      laneSegments(
+        [
+          { kind: 'command', start: 0, end: 10_000 },
+          { kind: 'edit', start: 5000, end: 5100 },
+        ],
+        { start: 0, end: 10_000 },
+        0,
+        10_000,
+        10,
+      ).map(segment => [segment.kind, segment.text]),
+    ).toEqual([
+      ['command', '━━━━━'],
+      ['edit', '▓'],
+      ['command', '━━━━'],
+    ])
+    // 살아 있던 구간 밖은 빈칸
+    expect(laneSegments([], { start: 5000, end: 6000 }, 0, 10_000, 10).map(segment => [segment.kind, segment.text])).toEqual([
+      ['none', '     '],
+      ['idle', '──'],
+      ['none', '   '],
+    ])
+    const log = {
+      startedAt: 0,
+      endedAt: null,
+      says: [{ at: 100, text: '먼저 볼게요.' }, { at: 5000, text: '이제 돌릴게요.' }],
+      events: [
+        { id: '1', tool: 'Read', label: 'Read a.ts', kind: 'explore' as const, start: 100, end: 200 },
+        { id: '2', tool: 'Grep', label: 'Grep x', kind: 'explore' as const, start: 300, end: 400 },
+        { id: '3', tool: 'Read', label: 'Read b.ts', kind: 'explore' as const, start: 500, end: 600 },
+        { id: '4', tool: 'Edit', label: 'a.ts', kind: 'edit' as const, start: 1000, end: 1100, added: 3, removed: 1 },
+        { id: '5', tool: 'Edit', label: 'a.ts', kind: 'edit' as const, start: 1200, end: 1300, added: 2, removed: 0 },
+        { id: '6', tool: 'Read', label: 'Read sub', kind: 'explore' as const, start: 1250, loop: 'agent-1' },
+        { id: '7', tool: 'Bash', label: 'bun test', kind: 'test' as const, start: 2000, end: 4000, isError: true },
+        { id: '8', tool: 'Bash', label: 'verify', kind: 'command' as const, start: 6000 },
+      ],
+    }
+    expect(flowRows(log).map(row => [row.kind, row.text])).toEqual([
+      ['say', '먼저 볼게요.'],
+      ['explore', 'Read 2 · Grep'],
+      ['edit', 'a.ts'],
+      ['test', 'bun test'],
+      ['say', '이제 돌릴게요.'],
+      ['command', 'verify'],
+    ])
+    const rows = flowRows(log)
+    expect(rows[2]).toMatchObject({ added: 5, removed: 1 })
+    expect(rows[3]).toMatchObject({ ms: 2000, isError: true })
+    expect(rows[5]).toMatchObject({ ms: null })
+    expect(outputFileOf('Command running in background with ID: b1. Output is being written to: /tmp/claude-1000/p/s/tasks/b1.output')).toBe('/tmp/claude-1000/p/s/tasks/b1.output')
+    expect(outputFileOf('done')).toBeUndefined()
+    expect(clockOf(125_000)).toBe('02:05')
+    expect(clockOf(3_725_000)).toBe('1:02:05')
+  })
+
+  test('/desk-activity 패널: 턴의 막대·흐름·명령, 끝나면 지난 턴, 띠를 누르면 열림', KO, async ($, on) => {
+    let now = 1_000_000
+    let finish: () => void = () => undefined
+    const gate = new Promise<void>(resolve => (finish = resolve))
+    const opened: string[] = []
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('ui.open', ($, e) => {
+      opened.push((e as { id: string }).id)
+      return { value: { isPlaced: true } } as never
+    })
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('turn.complete', () => ({ text: '끝' }) as never)
+    on('tool.call', async ($, e) => {
+      if ((e as { tool: string }).tool === 'Bash') await gate
+      return { result: { stdout: 'ok', stderr: '', interrupted: false } } as never
+    })
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-band</Text>
+    })
+    const paneProps = { title: '활동', isFocused: true, bodyColumns: 70 } as never
+    let pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    expect(JSON.stringify(await pane.drawn())).toContain('아직')
+    await pane.unmount()
+    await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'cursor' } as never)
+    now += 2000
+    const ran = $.tool.call({ tool: 'Bash', command: 'bun test', description: '테스트 돌리기' } as never)
+    await wait(20)
+    now += 20_000
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    const running = JSON.stringify(await pane.drawn())
+    expect(running).toContain('이번 턴 · 22s')
+    expect(running).toContain('메인')
+    expect(running).toContain('━')
+    expect(running).toContain('테스트 돌리기')
+    expect(running).toContain('▶ ')
+    expect(running).toContain('Grep')
+    await pane.unmount()
+    // 띠의 "지금" 줄(턴 동안 스피너 아래)을 누르면 패널이 열린다
+    const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never })
+    await band.press({ key: 'band-now' })
+    await wait(20)
+    expect(opened).toContain('desk-activity')
+    await band.unmount()
+    finish()
+    await ran
+    await wait(20)
+    await $.turn.complete({ durationMs: 25_000, reason: 'answer', answer: '끝', turnId: 't1' } as never)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    const ended = JSON.stringify(await pane.drawn())
+    expect(ended).toContain('지난 턴 · 25s')
+    expect(ended).toContain('✓ ')
+    await pane.unmount()
+    // 도구 없이 글로만 답한 턴(백그라운드 끝남 알림 등)은 앞 턴 기록을 덮지 않고, 그 사이 에이전트 호출은 앞 턴에 합친다
+    await $.turn.start({ text: '알림', turnId: 't2' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'late', agentId: 'a9' } as never)
+    now += 2000
+    await $.turn.complete({ durationMs: 2000, reason: 'answer', answer: '알겠어요', turnId: 't2' } as never)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    expect(JSON.stringify(await pane.drawn())).toContain('지난 턴 · 25s')
+    await pane.unmount()
+  })
+
+  test('긴 턴에는 도는 명령을 띄우고, 끝나면 접고 턴 끝 줄에 셈을 남긴다', KO, async ($, on) => {
+    let now = 1_000_000
+    let finish: () => void = () => undefined
+    const gate = new Promise<void>(resolve => (finish = resolve))
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('turn.complete', () => ({ text: '돌렸어요' }) as never)
+    on('tool.call', async () => {
+      await gate
+      return { result: { stdout: 'ok', stderr: '', interrupted: false } } as never
+    })
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-band</Text>
+    })
+    on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>Baked for 30s</Text>
+    })
+    const props = { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never
+    await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+    const ran = $.tool.call({ tool: 'Bash', command: 'ssh .12 ./verify.sh', description: '커서 재조회 검증' } as never)
+    await wait(20)
+    // 10초 전에는 "지금" 줄이 없다
+    now += 5000
+    const spinnerProps = { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never
+    let band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: spinnerProps })
+    expect(JSON.stringify(await band.drawn())).not.toContain('커서 재조회 검증')
+    await band.unmount()
+    now += 15000
+    band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: spinnerProps })
+    const running = JSON.stringify(await band.drawn())
+    expect(running).toContain('커서 재조회 검증')
+    expect(running).toContain(' · 20s')
+    await band.unmount()
+    finish()
+    await ran
+    await wait(20)
+    band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: spinnerProps })
+    expect(JSON.stringify(await band.drawn())).toContain('응답 중')
+    await band.unmount()
+    await $.turn.complete({ durationMs: 30000, reason: 'answer', answer: '돌렸어요', turnId: 't1' } as never)
+    // 턴이 끝나면 띠는 접힌다(입력창 위에도 남지 않는다)
+    const after = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props })
+    expect(JSON.stringify(await after.drawn())).not.toContain('응답 중')
+    await after.unmount()
+    const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 30000 } })
+    expect(JSON.stringify(await row.drawn())).toContain('명령 1')
+    await row.unmount()
+  })
 })
 
 import { answerOf, askNotice, numberProblem, parseQuestions } from '../hooks/ask'
