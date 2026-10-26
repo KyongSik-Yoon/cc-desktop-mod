@@ -114,6 +114,22 @@ describe('응답 렌더링', () => {
     await reply.unmount()
   })
 
+  test('따옴표·괄호 안의 외톨이 \\ 는 엔진처럼 남긴다', KO, async $ => {
+    const line = `Q1 "\\" Q2 (\\) Q3 a(\\) Q4 (\\)b Q5 **b**(\\) Q6 [\\] Q7 '\\' Q8 {\\} Q9 \\*(\\) Q10 (\\)(\\)\n\nQ11 [x(\\)](https://x.y)`
+    const reply = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: line, isFirstOfReply: true },
+    })
+    const strings = (node: unknown): string =>
+      typeof node === 'string' ? node : Array.isArray(node) ? node.map(strings).join('') : node && typeof node === 'object' && 'children' in node ? strings(node.children) : ''
+    // 엔진 2.1.311 기본 그림과 같다: 글자·숫자에 붙었거나 다른 토큰 뒤의 여는 괄호면 이스케이프로 읽는다
+    expect(strings(await reply.drawn())).toContain(`Q1 "\\" Q2 (\\) Q3 a() Q4 ()b Q5 b() Q6 [\\] Q7 '\\' Q8 {\\} Q9 *() Q10 (\\)(\\)Q11 x()`)
+    await reply.unmount()
+  })
+
   test('mermaid 는 박스 문자 그림으로, 한글 폭을 맞춰 그린다', KO, async $ => {
     const reply = await $.ui.mount({
       plugin: 'desk-look',

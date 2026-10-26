@@ -211,8 +211,23 @@ export function parseBlocks(markdown: string): Block[] {
 // \ 뒤 문장부호는 글자 그대로(CommonMark). 링크 글자에도 \] 가 들어갈 수 있다.
 const INLINE = /\\([!-/:-@[-`{-~])|`([^`]+)`|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*\s][^*]*?)\*|\[((?:\\.|[^\]\\])+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|<(https?:\/\/[^>\s]+)>|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/
 
-export function parseInline(text: string): Inline[] {
+// 따옴표·괄호 안의 외톨이 \ 는 이스케이프가 아니라 글자다: "\" (\) [\]. 엔진(2.1.311)과 같은 조건으로,
+// 여는 쪽이 글자·숫자에 붙었거나, 닫는 쪽 뒤에 글자가 이어지거나, 여는 쪽이 다른 토큰 바로 뒤면 이스케이프로 읽는다.
+const WRAP_OPEN: Record<string, string> = { '"': '"', "'": "'", ')': '(', ']': '[', '}': '{', '>': '<' }
+type Piece = { kind: 'text' | 'kept' | 'other'; raw: string }
+
+function keepsBackslash(close: string, after: string, pieces: Piece[]): boolean {
+  const open = WRAP_OPEN[close]
+  const last = pieces.at(-1)
+  if (open === undefined || last?.kind !== 'text' || !last.raw.endsWith(open)) return false
+  if (/[\p{L}\p{N}].$/u.test(last.raw) || /^[\p{L}\p{N}\\*_`~]/u.test(after)) return false
+  const before = pieces.at(-2)
+  return last.raw !== open || before === undefined || before.kind === 'kept'
+}
+
+export function parseInline(text: string, inLink = false): Inline[] {
   const out: Inline[] = []
+  const pieces: Piece[] = []
   let rest = text
   while (rest.length > 0) {
     const match = INLINE.exec(rest)
@@ -222,14 +237,18 @@ export function parseInline(text: string): Inline[] {
     }
     if (match.index > 0) {
       out.push({ kind: 'text', text: rest.slice(0, match.index) })
+      pieces.push({ kind: 'text', raw: rest.slice(0, match.index) })
     }
     const [whole, escaped, code, bold1, bold2, strike, italic, linkText, linkHref, angleUrl, bareUrl] = match
-    if (escaped !== undefined) out.push({ kind: 'text', text: escaped })
+    const isKept = escaped !== undefined && !inLink && keepsBackslash(escaped, rest.slice(match.index + whole.length), pieces)
+    pieces.push({ kind: isKept ? 'kept' : 'other', raw: whole })
+    if (isKept) out.push({ kind: 'text', text: whole })
+    else if (escaped !== undefined) out.push({ kind: 'text', text: escaped })
     else if (code !== undefined) out.push({ kind: 'code', text: code })
-    else if (bold1 !== undefined || bold2 !== undefined) out.push({ kind: 'bold', children: parseInline(bold1 ?? bold2 ?? '') })
-    else if (strike !== undefined) out.push({ kind: 'strike', children: parseInline(strike) })
-    else if (italic !== undefined) out.push({ kind: 'italic', children: parseInline(italic) })
-    else if (linkText !== undefined && linkHref !== undefined) out.push({ kind: 'link', href: linkHref, children: parseInline(linkText) })
+    else if (bold1 !== undefined || bold2 !== undefined) out.push({ kind: 'bold', children: parseInline(bold1 ?? bold2 ?? '', inLink) })
+    else if (strike !== undefined) out.push({ kind: 'strike', children: parseInline(strike, inLink) })
+    else if (italic !== undefined) out.push({ kind: 'italic', children: parseInline(italic, inLink) })
+    else if (linkText !== undefined && linkHref !== undefined) out.push({ kind: 'link', href: linkHref, children: parseInline(linkText, true) })
     else {
       const url = angleUrl ?? bareUrl ?? whole
       out.push({ kind: 'link', href: url, children: [{ kind: 'text', text: url }] })
