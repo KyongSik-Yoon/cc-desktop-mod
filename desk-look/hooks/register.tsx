@@ -17,7 +17,7 @@ import type { AskReply } from './ask'
 import { gather, gatheredLines } from './gather'
 import { computeTasks } from './tasks'
 import { KIND_GLYPH, LOG_EVENTS, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
-import type { FlowRow, LaneSegment, ProcRow } from './activity'
+import type { FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, parseSurface } from './theme'
 import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
@@ -78,6 +78,8 @@ const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as S
 const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
 const liveSessions = atom({ plugin: 'desk-look', key: 'liveSessions' } as const, {} as Record<string, LiveSession>)
 const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as const, null as number | null)
+// 진행 띠를 턴이 끝난 뒤에도 남겨 둔 동안, 그 턴이 끝난 시각. 닫거나(✕) bandAfterTurn 시간이 지나거나 새 턴이 시작되면 비운다.
+const bandDoneAt = atom({ plugin: 'desk-look', key: 'bandDoneAt' } as const, null as number | null)
 // 질문 카드 상태. ask.tsx 의 것과 같은 키다(상태 원본은 파일마다 선언해야 한다).
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
@@ -161,8 +163,9 @@ let predicted: PredictedCall[] = []
 let procTimer: Timer | null = null
 let procSample: ProcSample | null = null
 let claudePid: number | null | undefined
-// 새 턴이 시작되기 전의 /desk-activity 기록. 새 턴이 도구 없이 끝나면(글로만 답한 턴, 백그라운드 작업 끝남 알림) 되살린다.
-let previousLog: ActivityLog | null = null
+// 시작했지만 아직 메인 작업(도구 호출·호출 앞 설명)이 없는 턴의 시작 시각. /desk-activity 기록은 첫 메인 작업이 올 때
+// 이 턴으로 바꾼다: 그 전에는 지난 턴을 그대로 보이고, 글로만 답한 턴이나 백그라운드 끝남 알림 턴은 기록을 건드리지 않는다.
+let pendingLogStart: number | null = null
 // 패널 시계: 막대와 시간은 2초 단위면 충분하다(스피너처럼 초당 두 번 그리면 턴 중 비용이 크게 는다).
 const ACTIVITY_TICK = 2000
 let activityTimer: Timer | null = null
@@ -1692,8 +1695,19 @@ async function pollProc($: EngineInterface) {
 // 다음 턴이 시작될 때까지 쌓는다(턴이 띄운 백그라운드 에이전트는 턴보다 오래 돈다).
 const logLabel = (tool: string, input: unknown) => (FILE_EDITING.has(tool) ? summarize(tool, input) : callLabel(tool, input))
 
+// 기다리던 턴이 있으면 꺼낸다: 그 턴의 빈 기록을 열 시작 시각(메인 작업이 처음 왔을 때만 부른다).
+function takeLogStart(): ActivityLog | null {
+  const startedAt = pendingLogStart
+  pendingLogStart = null
+  return startedAt === null ? null : { startedAt, endedAt: null, events: [], says: [] }
+}
+
 async function logCall($: EngineInterface, event: ActivityLog['events'][number]) {
-  await update($, activityLog, log => (log === null || (log.endedAt !== null && event.loop === undefined) ? log : { ...log, events: [...log.events, event].slice(-LOG_EVENTS) }))
+  const fresh = event.loop === undefined ? takeLogStart() : null
+  await update($, activityLog, current => {
+    const log = fresh ?? current
+    return log === null || (log.endedAt !== null && event.loop === undefined) ? log : { ...log, events: [...log.events, event].slice(-LOG_EVENTS) }
+  })
 }
 
 async function settleLog($: EngineInterface, id: string) {
@@ -1708,7 +1722,10 @@ async function patchLog($: EngineInterface, id: string, patch: { isError: boolea
 // 설명 글은 그 메시지가 기록에 붙을 때(호출이 이미 시작된 뒤) 오므로, 같은 메시지 호출의 가장 이른 시작으로 시각을 당긴다.
 async function logSay($: EngineInterface, text: string, ids: ReadonlyArray<string>) {
   const now = await $.clock.now()
-  await update($, activityLog, log => {
+  // 호출이 붙지 않은 글(턴 끝 답, 글로만 답한 턴)은 새 턴 기록을 열지 않는다.
+  const fresh = ids.length > 0 ? takeLogStart() : null
+  await update($, activityLog, current => {
+    const log = fresh ?? current
     if (log === null || log.endedAt !== null) return log
     const last = log.says[log.says.length - 1]
     const at = Math.min(last?.text === text ? last.at : now, ...log.events.filter(event => ids.includes(event.id)).map(event => event.start))
@@ -2593,11 +2610,21 @@ export function bubbleSide(options: Record<string, unknown>): 'left' | 'right' {
   return options.bubbleSide === 'right' ? 'right' : 'left'
 }
 
+// 턴이 끝난 뒤 진행 띠를 남겨 두는 시간(설정 메뉴의 bandAfterTurn). 0 은 바로 접고, Infinity 는 ✕ 로 닫을 때까지.
+export function bandStayMs(options: Record<string, unknown>): number {
+  const value = options.bandAfterTurn
+  if (value === 'off') return 0
+  if (value === 'keep') return Infinity
+  const seconds = Number(value)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 30_000
+}
+
 export const register: Register = (on, options) => {
   const side = bubbleSide(options)
   const edge = side === 'right' ? 'flex-end' : 'flex-start'
   const chipMode = contextChipMode(options)
   const showPr = options.prBar !== 'off'
+  const bandStay = bandStayMs(options)
   // 화면 언어: 설정이 en·ko 면 그것, auto 면 세션이 시작될 때 Claude Code /config 의 language 를 따른다.
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
@@ -2733,12 +2760,12 @@ export const register: Register = (on, options) => {
     await update($, previewWritten, () => null)
     const now = await $.clock.now()
     await update($, turnStartedAt, () => now)
+    await update($, bandDoneAt, () => null)
     // 진행 띠의 셈은 턴마다 새로. 하는 중인 할 일도 이 턴 시작부터 잰다(턴 사이에 쉰 시간은 빼고).
     stopProcWatch()
     const openTasks = await read($, tasks)
     await update($, turnActivity, () => ({ ...IDLE_ACTIVITY, taskSince: taskSinceOf(openTasks, {}, now), idleSince: now }))
-    previousLog = await read($, activityLog)
-    await update($, activityLog, () => ({ startedAt: now, endedAt: null, events: [], says: [] }))
+    pendingLogStart = now
     // 프롬프트가 열린 묶음을 닫는다. 끝내 기록에 오르지 못한 예측(중단된 스트림)도 여기서 버린다.
     runCursor = null
     predicted = []
@@ -2758,19 +2785,16 @@ export const register: Register = (on, options) => {
       }
       stopProcWatch()
       await update($, turnActivity, state => ({ ...state, calls: [], proc: null, idleSince: null }))
-      const kept = previousLog
-      previousLog = null
-      await update($, activityLog, log => {
-        if (log === null) return log
-        // 메인 대화가 도구를 하나도 부르지 않은 턴(글로만 답한 턴, 백그라운드 끝남 알림)은 앞 턴을 남기고,
-        // 그 사이 앞 턴의 에이전트가 부른 호출은 앞 턴 기록에 합친다.
-        if (kept !== null && !log.events.some(event => event.loop === undefined)) {
-          return { ...kept, events: [...kept.events, ...log.events].slice(-LOG_EVENTS) }
-        }
-        return { ...log, endedAt: log.startedAt + e.durationMs }
-      })
+      // 메인 작업이 없던 턴(글로만 답한 턴, 백그라운드 끝남 알림)은 지난 턴 기록을 그대로 둔다.
+      if (pendingLogStart !== null) pendingLogStart = null
+      else await update($, activityLog, log => (log === null ? log : { ...log, endedAt: log.startedAt + e.durationMs }))
       await update($, pendingEdits, () => [])
       await update($, turnStartedAt, () => null)
+      if (bandStay > 0) {
+        const endedAt = await $.clock.now()
+        await update($, bandDoneAt, () => endedAt)
+        if (Number.isFinite(bandStay)) $.clock.after(bandStay, () => void update($, bandDoneAt, at => (at === endedAt ? null : at)).catch(() => undefined))
+      }
       void refreshUsage($).catch(() => undefined)
       if (showPr) void refreshPr($, false).catch(() => undefined)
       // 이번 턴에 쓴 문서가 아직 패널에 없으면 연다.
@@ -3211,10 +3235,23 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const below = await next(e)
-    const [info, list, state, agentRecords, startedAt] = await Promise.all([read($, repo), read($, tasks), read($, turnActivity), read($, agents), read($, turnStartedAt)])
+    const [info, list, state, agentRecords, startedAt, doneAt] = await Promise.all([read($, repo), read($, tasks), read($, turnActivity), read($, agents), read($, turnStartedAt), read($, bandDoneAt)])
     const els = $.ui.resolve(e)
-    // 턴 동안 진행 띠는 스피너가 그린다. 턴 밖에서는 남은 할 일이 있을 때만 단계 줄을(시간 없이) 여기에.
-    const plan = startedAt === null ? activityBand(els, { list, state, agents: agentRecords, turnStartedAt: null, now: 0, columns: e.props.bodyColumns, onOpen: () => void openActivity($) }) : null
+    // 턴 동안 진행 띠는 스피너가 그린다. 턴 밖에서는 끝난 띠를 남겨 둔 동안(bandAfterTurn) 그 단계 줄을, 아니면 남은 할 일이 있을 때만
+    // 단계 줄을(시간 없이) 여기에.
+    const plan =
+      startedAt === null
+        ? activityBand(els, {
+            list,
+            state,
+            agents: agentRecords,
+            turnStartedAt: null,
+            now: 0,
+            columns: e.props.bodyColumns,
+            onOpen: () => void openActivity($),
+            ...(doneAt !== null ? { onClose: () => void update($, bandDoneAt, () => null) } : {}),
+          })
+        : null
     askBand = e.requestId
     const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
     const meter = contextMeter(els, $, await read($, usage), chipMode)
@@ -4660,6 +4697,8 @@ export type BandInput = {
   columns: number
   // 띠를 누르면 /desk-activity 패널을 연다.
   onOpen?: () => void
+  // 턴이 끝난 띠를 남겨 둔 동안: 마지막 단계까지 끝난 것으로 그리고 줄 끝에 ✕ 를 둔다.
+  onClose?: () => void
 }
 
 const STRIP_STYLE = {
@@ -4672,9 +4711,10 @@ const STRIP_STYLE = {
 export function activityBand(els: Elements['terminal'], input: BandInput) {
   const { Box, Text } = els
   const { list, state, now, turnStartedAt } = input
-  const hasTasks = list.length > 0 && list.some(item => item.status !== 'completed')
+  const isDone = input.onClose !== undefined
+  const hasTasks = list.length > 0 && (isDone || list.some(item => item.status !== 'completed'))
   // 할 일 도구가 없으면(Claude 5 모델) 턴 동안 모델의 설명 글을 단계로.
-  const say = !hasTasks && turnStartedAt !== null ? (state.say ?? null) : null
+  const say = !hasTasks && (turnStartedAt !== null || isDone) ? (state.say ?? null) : null
   const hasPlan = hasTasks || say !== null
   const isLong = turnStartedAt !== null && now - turnStartedAt >= NOW_AFTER_MS
   const hasNow = turnStartedAt !== null && (isLong || hasPlan)
@@ -4688,8 +4728,9 @@ export function activityBand(els: Elements['terminal'], input: BandInput) {
     const at = since[item.id]
     return at === undefined || turnStartedAt === null ? text : `${text} ${formatElapsed(now - at)}`
   }
-  const room = width - cellWidth(count) - 2
-  const parts = say ? sayStrip(say.text, say.count - 1, room) : hasTasks ? stepStrip(list, room, label) : []
+  const room = width - cellWidth(count) - 2 - (isDone ? 3 : 0)
+  const sayParts = say ? sayStrip(say.text, say.count - 1, room) : []
+  const parts = say ? (isDone ? sayParts.map(finishPart) : sayParts) : hasTasks ? stepStrip(list, room, label) : []
   const strip = hasPlan
     ? parts.map((part, index) => {
         const style = STRIP_STYLE[part.kind]
@@ -4715,6 +4756,7 @@ export function activityBand(els: Elements['terminal'], input: BandInput) {
             <Text wrap="truncate-end">{strip as never}</Text>
           </Box>
           <Text color={COLORS.muted}>{count}</Text>
+          {input.onClose && <els.Button key="band-close" plain dimColor label="✕" onPress={input.onClose} />}
         </Box>
       )}
       {hasNow &&
@@ -4728,6 +4770,9 @@ export function activityBand(els: Elements['terminal'], input: BandInput) {
     </Box>
   )
 }
+
+// 끝난 턴의 마지막 설명은 하는 중(◉)이 아니라 끝난 것(✓)으로.
+const finishPart = (part: StripPart): StripPart => (part.kind === 'in_progress' ? { kind: 'completed', text: `✓${part.text.slice(1)}` } : part)
 
 // "지금" 줄의 글 조각들.
 function nowLine(els: Elements['terminal'], input: BandInput) {
