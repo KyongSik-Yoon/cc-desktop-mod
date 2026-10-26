@@ -4970,7 +4970,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
       </Text>
     )
   })
-  const agentRow = (agent: AgentRecord) => {
+  const turnAgentRow = (agent: AgentRecord) => {
     const live = isLive(agent.status)
     const failedAgent = agent.status === 'failed' || agent.status === 'killed'
     const isAgent = (agent.kind ?? 'agent') === 'agent'
@@ -5007,7 +5007,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
       {input.turnAgents.length > 0 && (
         <Box flexDirection="column">
           {section(T.activityAgents)}
-          {input.turnAgents.map(agentRow)}
+          {input.turnAgents.map(turnAgentRow)}
         </Box>
       )}
       {input.shells.length > 0 && (
@@ -5015,7 +5015,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
           {section(T.laneBackground)}
           {input.shells.map(shell => (
             <Box flexDirection="column">
-              {agentRow(shell)}
+              {turnAgentRow(shell)}
               {input.tail?.id === shell.id && <Text color={COLORS.muted} wrap="truncate-end">{`  └ ${input.tail.text}`}</Text>}
             </Box>
           ))}
