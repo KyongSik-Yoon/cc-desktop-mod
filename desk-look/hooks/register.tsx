@@ -1076,6 +1076,21 @@ async function saveComment($: EngineInterface, draft: CommentDraft, lines: DiffL
   await update($, lineComments, list => [...list, { id, patch: draft.patch, path: draft.path, scope: draft.scope, end: lineRef(end), lines, body }])
 }
 
+// 2.1.311 $.prompt.paint: 입력창의 인용 줄(> …)을 대화 기록의 인용처럼. 표시는 흐리게, 글은 기울여 흐린 색.
+export function quoteDecorations(text: string) {
+  const runs: { start: number; end: number; dimColor?: boolean; italic?: boolean; color?: string }[] = []
+  let offset = 0
+  for (const line of text.split('\n')) {
+    const mark = /^>\s?/.exec(line)
+    if (mark) {
+      runs.push({ start: offset, end: offset + mark[0].length, color: COLORS.border })
+      if (line.length > mark[0].length) runs.push({ start: offset + mark[0].length, end: offset + line.length, italic: true, color: COLORS.muted })
+    }
+    offset += line.length + 1
+  }
+  return runs
+}
+
 // "Claude에게 맡기기": 입력창이 비어 있으면 채우고, 쓰던 글이 있으면 뒤에 붙인다.
 async function fillPrompt($: EngineInterface, text: string, done = T.filled) {
   const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
@@ -2701,6 +2716,21 @@ export const register: Register = (on, options) => {
     const done = await next(e)
     if (e.reason === 'resume' || e.reason === 'clear') $.clock.after(300, () => refreshSessionState($, showPr))
     return done
+  })
+
+  // 입력창이 바뀔 때마다 인용 줄을 다시 칠한다. 칠할 것이 없으면 지운다(빈 목록).
+  on('prompt.change', async ($, e, next) => {
+    const done = await next(e)
+    const decorations = quoteDecorations(e.text)
+    void $.prompt.paint({ text: e.text, decorations }).catch(() => undefined)
+    return done
+  })
+  // 타이핑·붙여넣기는 prompt.change 가 아니라 prompt.edit 로 온다. 편집이 만든 상자를 칠한다.
+  on('prompt.edit', async ($, e, next) => {
+    const box = await next(e)
+    const decorations = quoteDecorations(box.text)
+    if (decorations.length > 0 || quoteDecorations(e.text).length > 0) void $.prompt.paint({ text: box.text, decorations }).catch(() => undefined)
+    return box
   })
 
   // 테마를 바꿨을 수 있으니 프롬프트마다 다시 읽는다(타이머를 기다리지 않게).

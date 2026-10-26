@@ -28,7 +28,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - `/desk-context`: Context breakdown, usage limits and session cost
 - `/desk-sessions [number]`: Recent sessions by project, with search; switch to one
 - `/desk-fold`: Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position
-- `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it. If you were already writing, the quote goes above your draft (after any earlier quotes) and the caret stays where you were typing
+- `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it. If you were already writing, the quote goes above your draft (after any earlier quotes) and the caret stays where you were typing. In the prompt, `>` lines (typed, pasted or inserted) look like quotes: the mark dimmed, the text italic and muted
 - `/desk-update`: Update desk-look, and desk-asana and desk-slack if installed, to the latest version
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
