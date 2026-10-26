@@ -78,15 +78,3 @@ export function computeTasks(messages: ReadonlyArray<SessionMessage>): TaskItem[
   }
   return list.filter(item => item.subject !== '')
 }
-
-// 띠에 보일 줄: 다 끝났으면 아무것도. 너무 길면 끝난 일부터 빼고, 그래도 길면 뒤쪽 대기 일을 접는다.
-export function visibleTasks(list: ReadonlyArray<TaskItem>, rows: number): { shown: TaskItem[]; hidden: number } {
-  if (list.length === 0 || list.every(item => item.status === 'completed')) return { shown: [], hidden: 0 }
-  if (list.length <= rows) return { shown: [...list], hidden: 0 }
-  const open = list.filter(item => item.status !== 'completed')
-  const done = list.filter(item => item.status === 'completed')
-  const keepDone = Math.max(0, Math.min(done.length, rows - open.length))
-  const kept = new Set([...done.slice(done.length - keepDone), ...open.slice(0, rows)])
-  const shown = list.filter(item => kept.has(item)).slice(0, rows)
-  return { shown, hidden: list.length - shown.length }
-}

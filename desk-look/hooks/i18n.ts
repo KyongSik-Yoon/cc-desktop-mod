@@ -276,6 +276,34 @@ const ko = {
   askTitle: 'Claude 질문',
   // 답 글 블록째 보여주기: 붙잡고 있는 글
   gathered: (lines: number) => `${lines}줄 모으는 중`,
+  // 입력창 위 진행 띠와 턴 끝 줄의 요약
+  bandResponding: '응답 중',
+  bandThinking: '생각 중',
+  bandTools: (count: number) => `도구 ${count}`,
+  bandStep: (count: number) => `단계 ${count}`,
+  // /desk-activity 패널
+  paneActivity: '활동',
+  cmdActivity: '이번 턴에 무엇이 언제 돌았는지: 메인·에이전트·백그라운드 시간 막대와 설명 글·호출의 흐름 패널을 연다',
+  activityOpened: '활동 패널을 열었어요.',
+  activityNone: '아직 이 세션에서 끝났거나 도는 턴이 없어요.',
+  activityThisTurn: '이번 턴',
+  activityLastTurn: '지난 턴',
+  activityFlow: '흐름',
+  activityAgents: '에이전트',
+  activityFiles: (count: number) => `편집 ${count}파일`,
+  laneMain: '메인',
+  laneBackground: '백그라운드',
+  kindName: { explore: '탐색', edit: '편집', test: '테스트', command: '명령', agent: '위임', other: '기타' } as Record<'explore' | 'edit' | 'test' | 'command' | 'agent' | 'other', string>,
+  bandQuiet: (time: string) => `! 변화 없음 ${time}`,
+  bandNoIo: (time: string) => `입출력 없음 ${time}`,
+  turnStats: (stats: { commands: number; failed: number; agents: number; tasksDone: number; tasksTotal: number }) =>
+    [
+      stats.commands > 0 ? `명령 ${stats.commands}${stats.failed > 0 ? ` (실패 ${stats.failed})` : ''}` : '',
+      stats.agents > 0 ? `에이전트 ${stats.agents}` : '',
+      stats.tasksTotal > 0 ? `할 일 ${stats.tasksDone}/${stats.tasksTotal}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
 }
 
 export type Strings = typeof ko
@@ -537,6 +565,32 @@ const en: Strings = {
   moreQuestions: (first, more) => `${first} (+${more} more)`,
   askTitle: 'Claude question',
   gathered: lines => `${lines} line${lines === 1 ? '' : 's'} gathered`,
+  bandResponding: 'Responding',
+  bandThinking: 'thinking',
+  bandTools: count => `${count} tool${count === 1 ? '' : 's'}`,
+  bandStep: count => `step ${count}`,
+  paneActivity: 'Activity',
+  cmdActivity: 'Open a pane of what ran when this turn: time bars for the main conversation, agents and background tasks, and the flow of Claude\'s notes and calls',
+  activityOpened: 'Opened the activity pane.',
+  activityNone: 'No turn has run in this session yet.',
+  activityThisTurn: 'This turn',
+  activityLastTurn: 'Last turn',
+  activityFlow: 'Flow',
+  activityAgents: 'Agents',
+  activityFiles: count => `${count} file${count === 1 ? '' : 's'} edited`,
+  laneMain: 'Main',
+  laneBackground: 'Background',
+  kindName: { explore: 'explore', edit: 'edit', test: 'test', command: 'command', agent: 'agent', other: 'other' },
+  bandQuiet: time => `! no change ${time}`,
+  bandNoIo: time => `no I/O ${time}`,
+  turnStats: stats =>
+    [
+      stats.commands > 0 ? `${stats.commands} command${stats.commands === 1 ? '' : 's'}${stats.failed > 0 ? ` (${stats.failed} failed)` : ''}` : '',
+      stats.agents > 0 ? `${stats.agents} agent${stats.agents === 1 ? '' : 's'}` : '',
+      stats.tasksTotal > 0 ? `tasks ${stats.tasksDone}/${stats.tasksTotal}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
 }
 
 export const T: Strings = { ...en }

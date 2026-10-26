@@ -62,7 +62,43 @@ export type AskQuestion = {
 // shownAt: 지금 질문을 띄운 시각(ms). 질문이 바뀐 직후의 숫자 키는 무시한다.
 export type AskState = { id: string; dir: string; questions: AskQuestion[]; step: number; picks: string[][]; texts: string[]; shownAt: number }
 
-export type TurnCard = { durationMs: number; files: TurnEdit[]; text?: string }
+// stats: 진행 띠를 띄운 긴 턴의 요약(명령 수·실패·에이전트·할 일). 짧은 턴과 옛 카드는 없다.
+export type TurnStats = { commands: number; failed: number; agents: number; tasksDone: number; tasksTotal: number }
+export type TurnCard = { durationMs: number; files: TurnEdit[]; text?: string; stats?: TurnStats }
+
+// 진행 띠의 "지금" 줄: 메인 대화에서 도는 도구 호출, 도구가 끝나 모델이 응답을 쓰기 시작한 시각,
+// Bash 가 띄운 프로세스의 모습, 하는 중인 할 일마다 시작 시각, 이번 턴의 셈.
+export type ActivityCall = { id: string; tool: string; label: string; startedAt: number }
+export type ActivityProc = { name: string; cpu: number | null; quietSince: number | null; isNetwork: boolean }
+// /desk-activity 패널의 턴 기록: 도구 호출마다 한 줄(loop 는 서브에이전트 id, 메인이면 없음)과 모델이 쓴 설명 글.
+// endedAt 은 턴이 끝난 시각(끝난 뒤에도 다음 턴까지 지난 턴으로 보여 준다).
+export type ActivityKind = 'explore' | 'edit' | 'command' | 'test' | 'agent' | 'other'
+export type ActivityEvent = {
+  id: string
+  loop?: string
+  tool: string
+  label: string
+  kind: ActivityKind
+  start: number
+  end?: number
+  isError?: boolean
+  added?: number
+  removed?: number
+}
+export type ActivityLog = { startedAt: number; endedAt: number | null; events: ActivityEvent[]; says: { at: number; text: string }[] }
+
+// say: 할 일 도구가 없을 때 윗줄에 쓰는 이번 턴의 가장 늦은 설명 글(첫 문장)과 설명 수.
+export type ActivitySay = { text: string; count: number }
+export type ActivityState = {
+  calls: ActivityCall[]
+  say?: ActivitySay | null
+  idleSince: number | null
+  proc: ActivityProc | null
+  taskSince: Record<string, number>
+  commands: number
+  failed: number
+  agents: number
+}
 
 // 미리보기 패널에 열린 문서. 못 읽었으면 error 에 사유.
 export type PreviewFile = { path: string; text: string; error?: string }
@@ -201,6 +237,12 @@ declare module 'claude-code' {
       tick: number
       // 지금의 할 일 목록.
       tasks: TaskItem[]
+      // 입력창 위 진행 띠의 "지금" 줄.
+      activity: ActivityState
+      // /desk-activity 패널: 이번(또는 지난) 턴의 기록. 아직 턴이 없으면 null.
+      activityLog: ActivityLog | null
+      // /desk-activity 패널을 다시 그리게 하는 시계(ms).
+      activityClock: number
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
       ask: AskState | null
       // 마지막 사람 입력이 온 곳: 터미널(composer) 또는 Remote Control(bridge). 아직 없으면 null.

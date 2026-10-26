@@ -10,8 +10,8 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 **At a glance**
 
 - **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
-- **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage, running background tasks and, with desk-slack, unread Slack messages, and a task checklist
-- **Six side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage, running background tasks and, with desk-slack, unread Slack messages, and a progress band that shows the current step and what runs now
+- **Seven side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), what ran this turn (`/desk-activity`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
 - **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
 - **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
@@ -21,6 +21,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 ## Commands
 
 - `/desk-diff [file|branch|commits]`: Diff pane: uncommitted changes, the whole branch, or per commit
+- `/desk-activity`: What ran this turn: time bars and the flow of Claude's notes and calls
 - `/desk-tasks [number]`: Background tasks pane: agents, background shells and monitors
 - `/desk-pr`: The current branch's pull request or merge request, with a merge button
 - `/desk-preview [file]`: Markdown preview pane: a document drawn like the transcript
@@ -61,7 +62,7 @@ Each item reads terminal default → desk-look.
 - **PR chip**: The current branch's pull request: `#12 ✓ 5/5`, `✗ 1` failing, `● 3/5` running, `◆ 2` unresolved review threads. GitLab merge requests show as `!7` with pipeline jobs and unresolved discussions. Click it for the `/desk-pr` pane
 - **Context chip**: Once context passes half, `◑ 62%` (caution color from 75%, warning color from 90%). Click it for the `/desk-context` pane
 - **Tasks chip**: `1 shell still running` → While background tasks run, `⋯ 2`. Click it for the `/desk-tasks` pane
-- **Checklist**: Tool lines → A card above the prompt, `Tasks 2/5` (✓ done, ◉ in progress, ○ to do). Only in sessions that have `TodoWrite` or `TaskCreate`
+- **Progress band**: Nothing while you wait → Two lines above the prompt while a turn runs. The upper line is the current step: the task list from `TodoWrite` or `TaskCreate` (`✓ 2  ◉ Verifying 8m 2s  ○ Clean up +1   2/5`), or, where Claude Code leaves those tools out (Claude 5 models), the first sentence Claude wrote before its latest tool call (`✓ 2  ◉ Now running it on .12.   step 3`). The lower line is what runs now: the tool call and its time and, for a shell command, the program it started and its CPU (`▶ Verify cursor reads · 8m 2s · java 97%`; Linux), or `Responding` while Claude writes. When that program has used no CPU and no I/O for 3 minutes, `! no change 3m 10s` (network clients like `ssh` show it dim, since the remote may be working). Click the lower line for `/desk-activity`. The lower line appears after 10 seconds or as soon as the upper line has a step, and the band folds when the turn ends; a longer turn leaves a dim `3 commands (1 failed) · 2 agents · tasks 5/5` under its end-of-turn line
 - **Progress**: `✻ Simmering… (12s · ↓ 300 tokens)` → `●·· Running…  2m 29s` (a word that matches the work, clay-colored dots)
 - **Mode indicator**: Dim text at the bottom right of the prompt → A pill chip (with the omarchy theme)
 - **Hint line**: `? for shortcuts` → While a question card is open, ends with the keys that answer it (`pick by number · 9 default dialog · Esc cancel`)
@@ -89,6 +90,14 @@ Per-file diffs in three scopes, like the desktop diff panel:
 - Line comments, like the desktop diff panel's: click a line number to open a comment field under it, click another line number in the same file to make it a range, and press Enter to keep the comment (it can run over several lines: type a new line as in the prompt). Kept comments stay under their lines (`✕` removes one) and as a `✎ N` chip in the chin band, and go with your next prompt as context Claude reads (the file and lines, the lines themselves, and your comment), then clear. Slash commands don't take them. Needs a known theme, like the drawing above
 
 ![Line comments in /desk-diff: a kept comment on lines 19–20, an open comment field on line 12, picked line numbers in blue](docs/comments.png)
+
+### `/desk-activity`: what ran this turn
+
+Opened with `/desk-activity` or by clicking the lower line of the progress band. It shows the current turn, or the last one once it ends (a turn that only answers a background-task notice keeps the one before):
+
+- **Time bars**: one for the main conversation, one per agent the turn started and one for its background shells, across the turn (and on until what the turn started has finished): `░` explore, `▓` edit, `▒` test (short events, drawn over a long command), `━` command or agent (colored apart), `─` Claude responding
+- **Flow**: Claude's notes (`◉`, the first sentence before its calls) and its calls in order, with the time since the turn began: reads and searches folded into one line (`Read 6 · Grep 3`), edits per file with `+N −M`, commands and tests with `✓`, `✗` or `▶` (running) and their time
+- **Agents** and **Background**: what the turn started, with status, tool uses and time; a running background shell shows the last line of its output. Click one for it in `/desk-tasks`
 
 ### `/desk-tasks [number]`: background tasks
 
