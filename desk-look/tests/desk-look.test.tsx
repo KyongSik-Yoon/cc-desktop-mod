@@ -10,7 +10,7 @@ import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
-import { currentHead, headAt, quoteInto } from '../hooks/register'
+import { bandStayMs, currentHead, headAt, quoteInto } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -998,6 +998,71 @@ describe('진행 띠', () => {
     await band.unmount()
   })
 
+  test('턴이 끝나면 윗줄은 끝난 단계로 bandAfterTurn 동안 남고 ✕ 로 닫는다', { options: { language: 'ko', bandAfterTurn: '60' } }, async ($, on) => {
+    const timers: Array<{ ms: number; fire: () => void }> = []
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: 1_000_000 }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('clock.after', ($, e) => new Promise(resolve => timers.push({ ms: e.ms, fire: () => resolve({ value: undefined }) })) as never)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('turn.complete', () => ({ text: '끝' }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    on('session.messages', () => ({
+      value: [
+        { role: 'user', text: '돌려 줘', toolUses: [] },
+        { role: 'assistant', text: '스키마를 볼게요.', toolUses: [] },
+        { role: 'assistant', text: '이제 돌릴게요. 길어요.', toolUses: [{ tool_use_id: 'b1', tool: 'Bash', input: {} }] },
+      ] as never,
+    }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-band</Text>
+    })
+    const props = { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never
+    const above = async () => {
+      const mounted = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props })
+      const drawn = JSON.stringify(await mounted.drawn())
+      return { mounted, drawn }
+    }
+    await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+    await $.session.append({ message: { type: 'assistant', role: 'assistant', content: [] } } as never)
+    await wait(30)
+    await $.turn.complete({ durationMs: 20_000, reason: 'answer', answer: '끝', turnId: 't1' } as never)
+    let { mounted, drawn } = await above()
+    expect(drawn).toContain('" 이제 돌릴게요."')
+    expect(drawn).not.toContain('◉')
+    expect(drawn).toContain('단계 2')
+    expect(timers.some(timer => timer.ms === 60_000)).toBe(true)
+    await mounted.press({ key: 'band-close' })
+    await mounted.unmount()
+    ;({ mounted, drawn } = await above())
+    expect(drawn).not.toContain('이제 돌릴게요.')
+    await mounted.unmount()
+    // 시간이 다 되어도 닫힌다
+    await $.turn.start({ text: '또', turnId: 't2' } as never)
+    await $.session.append({ message: { type: 'assistant', role: 'assistant', content: [] } } as never)
+    await wait(30)
+    await $.turn.complete({ durationMs: 20_000, reason: 'answer', answer: '끝', turnId: 't2' } as never)
+    ;({ mounted, drawn } = await above())
+    expect(drawn).toContain('" 이제 돌릴게요."')
+    await mounted.unmount()
+    timers.filter(timer => timer.ms === 60_000).forEach(timer => timer.fire())
+    await wait(30)
+    ;({ mounted, drawn } = await above())
+    expect(drawn).not.toContain('이제 돌릴게요.')
+    await mounted.unmount()
+  })
+
+  test('bandAfterTurn: off 는 바로, keep 은 닫을 때까지, 기본 30초', () => {
+    expect(bandStayMs({ bandAfterTurn: 'off' })).toBe(0)
+    expect(bandStayMs({ bandAfterTurn: 'keep' })).toBe(Infinity)
+    expect(bandStayMs({ bandAfterTurn: '10' })).toBe(10_000)
+    expect(bandStayMs({})).toBe(30_000)
+  })
+
   test('활동 패널 계산: 종류, 시간 막대, 흐름 묶기, 시각', () => {
     expect(kindOf('Grep')).toBe('explore')
     expect(kindOf('Write')).toBe('edit')
@@ -1140,10 +1205,24 @@ describe('진행 띠', () => {
     // 도구 없이 글로만 답한 턴(백그라운드 끝남 알림 등)은 앞 턴 기록을 덮지 않고, 그 사이 에이전트 호출은 앞 턴에 합친다
     await $.turn.start({ text: '알림', turnId: 't2' } as never)
     await $.tool.call({ tool: 'Grep', pattern: 'late', agentId: 'a9' } as never)
+    // 턴이 도는 동안에도 메인 작업이 오기 전에는 지난 턴이 그대로 보인다(프롬프트를 치자마자 비지 않는다)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    expect(JSON.stringify(await pane.drawn())).toContain('지난 턴 · 25s')
+    await pane.unmount()
     now += 2000
     await $.turn.complete({ durationMs: 2000, reason: 'answer', answer: '알겠어요', turnId: 't2' } as never)
     pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
     expect(JSON.stringify(await pane.drawn())).toContain('지난 턴 · 25s')
+    await pane.unmount()
+    // 다음 턴이 도구를 부르면 그 턴으로 바뀌고, 시간은 턴 시작부터 잰다
+    await $.turn.start({ text: '또', turnId: 't3' } as never)
+    now += 3000
+    await $.tool.call({ tool: 'Glob', pattern: '*.ts' } as never)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    const third = JSON.stringify(await pane.drawn())
+    expect(third).toContain('이번 턴 · 3s')
+    expect(third).toContain('Glob')
+    expect(third).not.toContain('테스트 돌리기')
     await pane.unmount()
   })
 
