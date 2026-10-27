@@ -258,6 +258,8 @@ declare module 'claude-code' {
       activityLog: ActivityLog | null
       // /desk-activity 패널을 다시 그리게 하는 시계(ms).
       activityClock: number
+      // /desk-activity 패널 몸통의 첫 줄(머리 아래를 패널이 스스로 스크롤한다). 끝을 따라가면 Number.MAX_SAFE_INTEGER.
+      activityTop: number
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
       ask: AskState | null
       // 마지막 사람 입력이 온 곳: 터미널(composer) 또는 Remote Control(bridge). 아직 없으면 null.
