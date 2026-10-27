@@ -1623,17 +1623,31 @@ async function refreshGraphics($: EngineInterface) {
 }
 
 let inHerdr = false
+// 마지막으로 pgrep 으로 판정했을 때 herdr-client.sock 에 붙어 있던 연결과 그 판정.
+let herdrSeen: { clients: string; remote: boolean } | null = null
 
-// 원격 클라이언트는 이 기계의 bridge 프로세스(`herdr remote-client-bridge`)로 붙는다. pgrep 은 한 번에 CPU 60ms 라
+// 원격 클라이언트는 이 기계의 bridge 프로세스(`herdr remote-client-bridge`, 이름 있는 세션은 `herdr --session <이름> remote-client-bridge`)로 붙는다. pgrep 은 한 번에 CPU 60~110ms 라
 // 타이머로 훑지 않고 세션을 열 때와 프롬프트를 보낼 때만 보며, herdr 밖이거나 어차피 그림을 안 그리면 보지 않는다. 그래서 원격으로 막 붙었으면 첫 프롬프트를 보낼 때까지는
 // 전의 모습이고, 보낸 말풍선도 판정이 올 때까지 잠깐 전의 모습으로 그려졌다가 다시 그려진다.
+// bridge 도 로컬 클라이언트처럼 herdr-client.sock 에 붙으므로, 그 연결이 지난 판정 때 그대로면 붙거나 떨어진 클라이언트가 없어
+// pgrep 없이 넘어간다(/proc/net/unix 읽기는 CPU 2ms). 못 읽거나(/proc 없는 macOS) 소켓 줄이 없으면 늘 pgrep 으로 본다.
+// /clear·/resume 은 atom 만 기본값으로 비우므로 지난 판정이 지금 atom 과 같은지도 본다.
 async function refreshHerdrRemote($: EngineInterface) {
   if (!inHerdr || (await read($, graphics)) === null) return
-  const ran = await $.process.run(['pgrep', '-f', '^\\S*herdr remote-client-bridge'], { timeoutMs: 3000 }).catch(() => null)
+  const clients = herdrClientsOf(await $.fs.read('/proc/net/unix').catch(() => ''))
+  if (clients && herdrSeen?.clients === clients && herdrSeen.remote === (await read($, herdrRemote))) return
+  const ran = await $.process.run(['pgrep', '-f', '^\\S*herdr( --session \\S+)? remote-client-bridge'], { timeoutMs: 3000 }).catch(() => null)
   // pgrep 은 찾으면 0, 없으면 1. 실패는 판정하지 않는다.
   if (!ran || (ran.exitCode !== 0 && ran.exitCode !== 1)) return
   const remote = ran.exitCode === 0
+  herdrSeen = clients ? { clients, remote } : null
   if ((await read($, herdrRemote)) !== remote) await update($, herdrRemote, () => remote)
+}
+
+// /proc/net/unix 한 줄은 `Num RefCount Protocol Flags Type St Inode Path` 이고, 서버가 받아 준 연결도 듣는 소켓의 경로를 달고 나온다.
+// 그래서 herdr-client.sock 줄의 inode 들(듣는 소켓 하나 포함)이 붙은 클라이언트다. 개수만 보면 원격이 나가고 로컬이 들어온 걸 놓친다.
+function herdrClientsOf(table: string): string {
+  return table.split('\n').filter(line => line.endsWith('/herdr-client.sock')).map(line => line.trim().split(/\s+/)[6]).sort().join(' ')
 }
 
 // 엔진처럼 이 창(TMUX_PANE)의 바깥 터미널과 그림 통과 설정을 tmux 에 묻는다. 못 물으면 null(그리지 않는다).

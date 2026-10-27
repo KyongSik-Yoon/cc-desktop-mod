@@ -629,6 +629,18 @@ test('iTerm2 3.5 전체 화면: 모서리는 rgba, 썸네일은 PNG 바이트로
   await main.unmount()
 })
 
+// herdr 서버의 /proc/net/unix: herdr-client.sock 듣는 소켓, 받아 준 클라이언트 연결들, API 소켓
+function unixTable(clients: string[]) {
+  const row = (flags: string, st: string, inode: string, path: string) => `0000000000000000: 00000002 00000000 ${flags} 0001 ${st} ${inode} ${path}`
+  return [
+    'Num       RefCount Protocol Flags    Type St Inode Path',
+    row('00010000', '01', '63497', '/home/t/.config/herdr/herdr-client.sock'),
+    ...clients.map(inode => row('00000000', '03', inode, '/home/t/.config/herdr/herdr-client.sock')),
+    row('00010000', '01', '46072', '/home/t/.config/herdr/herdr.sock'),
+    '',
+  ].join('\n')
+}
+
 test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없이(글리프 모서리, 썸네일은 엔진 └ [Image #N] 줄) 그린다', KO, async ($, on) => {
   const env: Record<string, string> = { HOME: '/home/t', COLORTERM: 'truecolor', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1', CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }
   const header = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 1, 234, 0, 0, 1, 42]
@@ -640,6 +652,7 @@ test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없�
     const path = String((e as { path?: string }).path ?? e)
     if (path.endsWith('colors.toml')) return { value: 'mode = "dark"\nbackground = "#1a1a1a"\n' } as never
     if (path === '/home/t/.config/herdr/config.toml') return { value: '[experimental]\nkitty_graphics = true\n' } as never
+    if (path === '/proc/net/unix') return { value: unixTable(bridge ? ['62751', '70001'] : ['62751']) } as never
     throw new Error('ENOENT')
   })
   on('fs.list', ($, e) => {
@@ -673,31 +686,74 @@ test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없�
     await wait(10)
     drawn = JSON.stringify(await bubble.drawn())
   }
-  expect(asked[0]).toEqual(['pgrep', '-f', '^\\S*herdr remote-client-bridge'])
+  expect(asked[0]).toEqual(['pgrep', '-f', '^\\S*herdr( --session \\S+)? remote-client-bridge'])
   expect(drawn).not.toContain('"rgba"')
   expect(drawn).toContain('\u{1FB41}')
   expect(drawn).toContain('\u{1FB5D}')
   // 썸네일 없이 말풍선 글에서 [Image #3] 만 빠진다
   expect(drawn).not.toContain('"source"')
   expect(drawn).not.toContain('Image #3')
-  // 원격이 떨어진 뒤 다음 프롬프트에서 다시 보고, 그려 둔 말풍선도 둥근 그림 모서리와 썸네일로 다시 그린다
-  bridge = false
+  // herdr-client.sock 연결이 그대로면 다음 프롬프트에서 pgrep 을 다시 돌리지 않는다
   await $.turn.start({ text: '다음', turnId: 't2' } as never)
+  await wait(50)
+  expect(asked).toHaveLength(1)
+  // 원격이 떨어져 연결이 바뀐 뒤 다음 프롬프트에서 다시 보고, 그려 둔 말풍선도 둥근 그림 모서리와 썸네일로 다시 그린다
+  bridge = false
+  await $.turn.start({ text: '그다음', turnId: 't3' } as never)
   for (let tries = 0; tries < 50 && !drawn.includes('"rgba"'); tries++) {
     await wait(10)
     drawn = JSON.stringify(await bubble.drawn())
   }
+  expect(asked).toHaveLength(2)
   expect(drawn).toContain('"rgba"')
   expect(drawn).toContain('"file"')
   expect(drawn).not.toContain('\u{1FB41}')
   await bubble.unmount()
 })
 
+test('herdr-client.sock 연결을 못 읽으면(/proc 없음, 소켓 줄 없음) 프롬프트마다 pgrep 으로 원격 접속을 본다', KO, async ($, on) => {
+  const env: Record<string, string> = { HOME: '/home/t', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1', CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }
+  let table: string | null = null
+  const asked: string[][] = []
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    const path = String((e as { path?: string }).path ?? e)
+    if (path === '/home/t/.config/herdr/config.toml') return { value: '[experimental]\nkitty_graphics = true\n' } as never
+    if (path === '/proc/net/unix' && table !== null) return { value: table } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.list', () => {
+    throw new Error('ENOENT')
+  })
+  on('fs.exists', () => ({ value: false }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('process.run', ($, e) => {
+    if (e.argv[0] === 'pgrep') asked.push([...e.argv])
+    return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  await wait(50)
+  await $.turn.start({ text: '안녕', turnId: 't1' } as never)
+  await wait(50)
+  // 읽기는 되지만(빈 /proc 읽기 같은) herdr-client.sock 줄이 없으면 같은 목록이라고 넘기지 않는다
+  table = unixTable([]).split('\n').filter(line => !line.includes('herdr-client.sock')).join('\n')
+  await $.turn.start({ text: '다음', turnId: 't2' } as never)
+  await wait(50)
+  await $.turn.start({ text: '그다음', turnId: 't3' } as never)
+  await wait(50)
+  expect(asked).toHaveLength(4)
+})
+
 test('herdr 안이라도 그림이 꺼져 있으면(kitty_graphics 없음) 원격 접속을 보지 않는다', KO, async ($, on) => {
   const env: Record<string, string> = { HOME: '/home/t', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1', CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }
   const asked: string[][] = []
   on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
-  on('fs.read', () => {
+  on('fs.read', ($, e) => {
+    asked.push(['read', String((e as { path?: string }).path ?? e)])
     throw new Error('ENOENT')
   })
   on('fs.list', () => {
@@ -716,7 +772,7 @@ test('herdr 안이라도 그림이 꺼져 있으면(kitty_graphics 없음) 원�
   await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
   await $.turn.start({ text: '안녕', turnId: 't1' } as never)
   await wait(50)
-  expect(asked.filter(argv => argv[0] === 'pgrep')).toEqual([])
+  expect(asked.filter(argv => argv[0] === 'pgrep' || argv[1] === '/proc/net/unix')).toEqual([])
 })
 
 test('tmux 안 그림: 통과 설정과 바깥 터미널을 tmux 에 물어 엔진과 같은 때 그린다(2.1.310)', KO, async () => {
