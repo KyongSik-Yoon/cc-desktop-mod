@@ -269,6 +269,8 @@ declare module 'claude-code' {
       folded: FoldedPane[] | null
       // 지금 화면 언어(desk-asana·desk-slack 이 따른다).
       lang: 'en' | 'ko'
+      // 아래턱 ✉ 칩을 누른 횟수(desk-slack 이 바뀔 때 Slack 패널을 연다).
+      slackOpen: number
       // 지금 브랜치의 PR(PR 바·/desk-pr 패널).
       pr: PrState | null
       // /desk-diff 패널이 보여 주는 범위와 그 diff.

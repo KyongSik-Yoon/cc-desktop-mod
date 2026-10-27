@@ -1231,6 +1231,8 @@ describe('진행 띠', () => {
     expect(running).toContain('테스트 돌리기')
     expect(running).toContain('▶ ')
     expect(running).toContain('Grep')
+    // 범례의 기타(▪)는 그 턴에 기타 도구가 있을 때만
+    expect(running).not.toContain('기타')
     await pane.unmount()
     // 띠의 "지금" 줄(턴 동안 스피너 아래)을 누르면 패널이 열린다
     const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never })
@@ -1263,11 +1265,14 @@ describe('진행 띠', () => {
     await $.turn.start({ text: '또', turnId: 't3' } as never)
     now += 3000
     await $.tool.call({ tool: 'Glob', pattern: '*.ts' } as never)
+    await $.tool.call({ tool: 'mcp__slack__read', channel: 'C1' } as never)
     pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
     const third = JSON.stringify(await pane.drawn())
     expect(third).toContain('이번 턴 · 3s')
     expect(third).toContain('Glob')
     expect(third).not.toContain('테스트 돌리기')
+    expect(third).toContain('▪')
+    expect(third).toContain(' 기타 ')
     await pane.unmount()
   })
 
@@ -2682,7 +2687,7 @@ test('/desk-fold: desk-asana 패널만 열려 있어도 접고, 접은 뒤 다�
   expect(shown).toBe(true)
 })
 
-test('아래턱 ✉ 칩: desk-slack 의 안 읽은 수를 읽고, 누르면 /desk-slack', KO, async ($, on) => {
+test('아래턱 ✉ 칩: desk-slack 의 안 읽은 수를 읽고, 누르면 slackOpen 을 올려 desk-slack 이 턴 중에도 바로 연다', KO, async ($, on) => {
   on('process.run', gitStub as never)
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -2692,6 +2697,9 @@ test('아래턱 ✉ 칩: desk-slack 의 안 읽은 수를 읽고, 누르면 /des
   on('state.get', { plugin: 'desk-slack', key: 'unread' }, () => ({ value: { value: count, version: count } }) as never)
   const commands: string[] = []
   on('command.run', ($, e: { command: string }) => (commands.push(e.command), { text: '' }) as never)
+  // $.command.run 은 턴이 끝날 때까지 줄을 서서 쓰지 않는다
+  const pressed: unknown[] = []
+  on('state.set', { plugin: 'desk-look', key: 'slackOpen' }, ($, e, next) => (pressed.push(e.value), next(e)))
   const mountBand = () =>
     $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
   let band = await mountBand()
@@ -2702,7 +2710,8 @@ test('아래턱 ✉ 칩: desk-slack 의 안 읽은 수를 읽고, 누르면 /des
   expect(JSON.stringify(await band.drawn())).toContain('✉')
   await band.press({ key: 'slack-chip' })
   await wait(20)
-  expect(commands).toContain('desk-slack')
+  expect(pressed).toEqual([1])
+  expect(commands).not.toContain('desk-slack')
   await band.unmount()
 })
 
