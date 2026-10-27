@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { Chunk, Elements, EngineInterface, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
+import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
 
-import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo } from '../types'
+import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
@@ -20,8 +20,8 @@ import { KIND_GLYPH, LOG_EVENTS, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_A
 import type { FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, gray256, parseSurface } from './theme'
-import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
-import type { ContextChipMode } from './usage'
+import { limitName, contextChipMode, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage, barRuns, cacheShares, chartColumns, chartRows, chartTop, columnOf, compactionPoints, hhmm, sparkline, splitOf, sumSplits, turnCosts } from './usage'
+import type { BarPart, BarRun, ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
 import type { MergeAction, MergeResult, Ran } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matchesPath, parseCommits, scopeLabel, scopeOf } from './gitview'
@@ -157,6 +157,13 @@ let spinnerFallbackStart = 0
 
 // 스트림이 막 엔진에 넘긴 도구 호출: 기록(session.append)에 나오기 전까지 묶음에 미리 넣어 둔다.
 let runCursor: RunCursor = null
+// 컨텍스트 패널의 세션 흐름. 패널을 닫아 둬도 쌓이지만 따로 묻거나 그리지 않는다:
+// 메인 턴이 끝날 때 칩을 위해 이미 읽은 값을 메모리에 한 점 적을 뿐이다(상태에 쓰지 않으니 다시 그리는 것도 없다).
+// 플러그인을 다시 올리면 비고, 창 안에서 세션을 바꾸면 refreshSessionState 가 비운다.
+const CONTEXT_POINTS = 400
+const CONTEXT_COMPACTIONS = 50
+let contextPoints: ContextPoint[] = []
+let contextCompactions: ContextCompaction[] = []
 let predicted: PredictedCall[] = []
 // 진행 띠가 Bash 가 띄운 프로세스를 읽는 시계와 직전 표본. claudePid 는 /proc/self/stat 에서 한 번 읽고,
 // /proc 이 없으면(macOS) null 로 두어 다시 읽지 않는다.
@@ -580,17 +587,29 @@ export function fitView(view: DiffView): DiffView {
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 // 컨텍스트 칩의 숫자: 인자 없는 usage() 는 상태 줄의 값이라 공짜다. 턴이 끝날 때마다 다시 읽는다.
-async function refreshUsage($: EngineInterface) {
+// 메인 턴이 끝나서 읽을 때(ended)는 읽은 값을 세션 흐름에 한 점 더한다.
+async function refreshUsage($: EngineInterface, ended?: { usage?: ModelUsage }) {
   const [raw, now] = await Promise.all([$.session.usage(), $.clock.now()])
   const next = toUsage(raw, now)
+  if (ended) contextPoints = [...contextPoints, { at: now, tokens: next.tokens, percent: next.percent, costUsd: next.costUsd, turn: splitOf(ended.usage) }].slice(-CONTEXT_POINTS)
   if (!sameJson({ ...(await read($, usage)), at: 0 }, { ...next, at: 0 })) await update($, usage, () => next)
 }
 
 // 패널을 열 때만 항목별 내역을 계산한다. summary 는 로컬 추정이라 API 요청이 없다(full 은 도구마다 요청).
-async function refreshBreakdown($: EngineInterface) {
-  const [raw, now] = await Promise.all([$.session.usage({ breakdown: 'summary' }), $.clock.now()])
-  await update($, usage, () => toUsage(raw, now))
-  await update($, usageBreakdown, () => toBreakdown(raw, now))
+// 내역을 칩 값보다 먼저 쓴다: 칩 값이 먼저 바뀌면 그 사이 그림이 내역을 오래됐다고 보고 한 번 더 계산했다.
+// 열기·↻·그림이 함께 부르면 도는 계산 하나를 나눠 받는다.
+let breakdownRun: Promise<void> | null = null
+function refreshBreakdown($: EngineInterface): Promise<void> {
+  breakdownRun ??= (async () => {
+    const [raw, now] = await Promise.all([$.session.usage({ breakdown: 'summary' }), $.clock.now()])
+    await update($, usageBreakdown, () => toBreakdown(raw, now))
+    // 칩 값은 바뀌었을 때만 쓴다: 같은 값을 다시 쓰면 패널과 아래턱이 한 번 더 그려진다.
+    const next = toUsage(raw, now)
+    if (!sameJson({ ...(await read($, usage)), at: 0 }, { ...next, at: 0 })) await update($, usage, () => next)
+  })().finally(() => {
+    breakdownRun = null
+  })
+  return breakdownRun
 }
 
 // 2.1.311 Pane backgroundColor: omarchy 테마를 읽을 수 있으면 desk 패널 바탕을 말풍선 회색으로.
@@ -616,6 +635,235 @@ function rowButton(els: Els, props: RowButtonProps, label: string, ...rest: unkn
       {label}
       {parts as never}
     </Button>
+  )
+}
+
+// 막대 덩어리(barRuns)를 한 줄 안의 Text 로. 색이 없는 덩어리는 빈칸이다.
+function barTexts(els: Els, key: string, runs: ReadonlyArray<BarRun>) {
+  const { Text } = els
+  return runs.map((run, index) => (
+    <Text key={`${key}-${index}`} {...(run.color ? { color: run.color as never } : {})} {...(run.background ? { backgroundColor: run.background as never } : {})}>
+      {run.text}
+    </Text>
+  ))
+}
+
+// 컨텍스트 막대의 조각: 쓰는 항목(엔진이 /context 에 칠하는 색), 남은 자리(옅은 선 ─), 압축 여유분(┄).
+// 내역을 아직 못 읽었으면 칩의 % 하나로.
+function windowParts(detail: UsageBreakdown | null, percent: number): BarPart[] {
+  if (!detail) return [{ value: Math.min(100, percent), color: COLORS.clay }, { value: Math.max(0, 100 - percent), color: COLORS.border, glyph: '─' }]
+  const of = (kind: string) => detail.categories.filter(category => category.kind === kind)
+  return [
+    ...of('used').map(category => ({ value: category.tokens, color: category.color })),
+    ...of('free').map(category => ({ value: category.tokens, color: COLORS.border, glyph: '─' })),
+    ...of('buffer').map(category => ({ value: category.tokens, color: COLORS.muted, glyph: '┄' })),
+  ]
+}
+
+// 항목별 내역: 표시·이름·가로 막대(가장 큰 항목이 꽉 찬 길이)·토큰·창에서 차지하는 몫. 남은 자리와 압축 여유분은 막대 없이.
+function categoryRows(els: Els, detail: UsageBreakdown, columns: number) {
+  const { Box, Text } = els
+  const order = ['used', 'free', 'buffer']
+  const rows = [...detail.categories].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))
+  const nameWidth = Math.min(20, Math.max(0, ...rows.map(row => cellWidth(row.name))))
+  const barWidth = Math.min(20, columns - nameWidth - 16)
+  const top = Math.max(1, ...rows.filter(row => row.kind === 'used').map(row => row.tokens))
+  return (
+    <Box flexDirection="column">
+      <Text color={COLORS.muted}>{T.breakdown(detail.model)}</Text>
+      {rows.map(row => {
+        const isUsed = row.kind === 'used'
+        const share = detail.max > 0 ? Math.round((row.tokens / detail.max) * 100) : 0
+        return (
+          <Box key={`cat-${row.name}`} columnGap={1}>
+            <Text color={(isUsed ? row.color : COLORS.muted) as never}>{row.kind === 'free' ? '─' : row.kind === 'buffer' ? '┄' : '■'}</Text>
+            <Text color={isUsed ? COLORS.text : COLORS.muted}>{padCells(clip(row.name, nameWidth), nameWidth)}</Text>
+            {barWidth >= 4 && <Text>{isUsed ? (barTexts(els, `cat-bar-${row.name}`, barRuns([{ value: row.tokens, color: row.color }], top, barWidth)) as never) : ' '.repeat(barWidth)}</Text>}
+            <Text color={COLORS.muted}>{formatTokens(row.tokens).padStart(6)}</Text>
+            <Text color={COLORS.muted}>{`${share}%`.padStart(4)}</Text>
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
+// 컨텍스트에 실린 것: MCP 서버, 메모리 파일, 스킬, 커스텀 에이전트. 묶음마다 접혀 있고 누르면 펼친다.
+// 묶음 토큰은 목록에서 더한 값이라 위 항목별 줄과 조금 다를 수 있다(둘 다 추정). 이름으로 항목 줄을 찾지 않는다.
+const LOADED_ROWS = 8
+type LoadedRow = { key: string; name: string; note?: string; tokens: number }
+
+function loadedGroups(els: Els, $: EngineInterface, detail: UsageBreakdown, openState: Record<string, boolean>, columns: number, home: string | undefined) {
+  const { Box, Text } = els
+  const servers = detail.mcpServers ?? []
+  const files = detail.memoryFiles ?? []
+  const skills = detail.skills ?? null
+  const agentList = detail.agents ?? []
+  const sum = (list: ReadonlyArray<{ tokens: number }>) => list.reduce((total, item) => total + item.tokens, 0)
+  const tilde = (path: string) => (home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)
+  const groups: Array<{ id: string; label: string; tokens: number; rows: LoadedRow[] }> = [
+    ...(servers.length > 0
+      ? [{ id: 'mcp', label: T.loadedMcp(servers.reduce((total, server) => total + server.tools, 0), servers.length, servers.reduce((total, server) => total + server.onDemand, 0)), tokens: sum(servers), rows: servers.map(server => ({ key: server.name, name: server.name, note: T.mcpServer(server.tools, server.onDemand), tokens: server.tokens })) }]
+      : []),
+    ...(files.length > 0 ? [{ id: 'memory', label: T.loadedMemory(files.length), tokens: sum(files), rows: files.map(file => ({ key: file.path, name: file.type, note: tilde(file.path), tokens: file.tokens })) }] : []),
+    ...(skills && skills.total > 0 ? [{ id: 'skills', label: T.loadedSkills(skills.included, skills.total), tokens: skills.tokens, rows: skills.list.map(skill => ({ key: skill.name, name: skill.name, tokens: skill.tokens })) }] : []),
+    ...(agentList.length > 0 ? [{ id: 'agents', label: T.loadedAgents(agentList.length), tokens: sum(agentList), rows: agentList.map(agent => ({ key: agent.name, name: agent.name, tokens: agent.tokens })) }] : []),
+  ]
+  if (groups.length === 0) return null
+  return (
+    <Box flexDirection="column">
+      <Text color={COLORS.muted}>{T.loadedTitle}</Text>
+      {groups.map(group => {
+        const isOpen = openState[`context:${group.id}`] ?? false
+        return (
+          <Box key={`loaded-${group.id}`} flexDirection="column">
+            <Box>
+              <Box flexGrow={1} flexShrink={1} overflow="hidden">
+                {rowButton(els, { key: `context-group-${group.id}`, onPress: () => void toggle($, `context:${group.id}`) }, isOpen ? '⌄ ' : '› ', <Text color={COLORS.text}>{clip(group.label, columns - 10)}</Text>)}
+              </Box>
+              {group.tokens > 0 && <Text color={COLORS.muted}>{formatTokens(group.tokens).padStart(7)}</Text>}
+            </Box>
+            {isOpen &&
+              group.rows.slice(0, LOADED_ROWS).map(row => (
+                <Box key={`loaded-${group.id}-${row.key}`}>
+                  <Box flexGrow={1} flexShrink={1} overflow="hidden" columnGap={1} paddingLeft={2}>
+                    <Text color={COLORS.text} wrap="truncate-end">
+                      {row.name}
+                    </Text>
+                    {row.note && (
+                      <Text color={COLORS.muted} wrap="truncate-middle">
+                        {row.note}
+                      </Text>
+                    )}
+                  </Box>
+                  {row.tokens > 0 && <Text color={COLORS.muted}>{formatTokens(row.tokens).padStart(7)}</Text>}
+                </Box>
+              ))}
+            {isOpen && group.rows.length > LOADED_ROWS && <Text color={COLORS.muted}>{`  ${T.moreItems(group.rows.length - LOADED_ROWS)}`}</Text>}
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
+// 이 세션의 흐름: 턴이 끝날 때마다의 채움 그래프(┈ 자동 압축 높이, ▲ 압축), 캐시(지난 턴·기록된 턴), 턴마다 비용.
+// 모두 턴 끝에 이미 읽은 값이라 턴마다 바뀌어도 따로 묻지 않는다.
+// 다시 올린 뒤나 /resume 뒤에는 그때부터 쌓으니 제목에 시작 시각을 단다.
+const CHART_ROWS = 4
+const CHART_GUTTER = 5
+
+function sessionFlow(els: Els, live: UsageInfo | null, detail: UsageBreakdown | null, columns: number) {
+  const { Box, Text } = els
+  const points = contextPoints
+  const first = points[0]
+  const last = points[points.length - 1]
+  const marks = compactionPoints(points, contextCompactions)
+  const width = Math.max(8, columns - CHART_GUTTER)
+  const values = points.map(point => (point.percent === null ? null : Math.min(100, point.percent)))
+  const chart = chartColumns(values, width)
+  const top = chartTop(values)
+  const compactPercent = live && detail?.compactAt != null && live.window > 0 ? (detail.compactAt / live.window) * 100 : null
+  const guide = compactPercent !== null && compactPercent <= top ? compactPercent : null
+  const levelColor = { muted: COLORS.clay, warning: COLORS.warning, danger: COLORS.danger, fill: COLORS.border, guide: COLORS.border, empty: null } as const
+  const markerLine = marks.length > 0 ? chart.map((_, column) => (marks.some(index => columnOf(index, points.length, width) === column) ? '▲' : ' ')).join('') : null
+  const timeLine = first && last && points.length > 1 ? hhmm(first.at) + ' '.repeat(Math.max(1, width - 10)) + hhmm(last.at) : null
+  const turns = points.flatMap(point => (point.turn ? [point.turn] : []))
+  const lastTurn = turns[turns.length - 1]
+  const lastShare = lastTurn ? cacheShares(lastTurn) : null
+  const turnShare = turns.length > 1 ? cacheShares(sumSplits(turns)) : null
+  const costs = turnCosts(points)
+  const labelWidth = Math.max(cellWidth(T.cacheTitle), cellWidth(T.costTitle))
+  const sparkWidth = Math.max(4, Math.min(24, columns - labelWidth - 32))
+  const lastCost = costs[costs.length - 1]
+  return (
+    <Box flexDirection="column" rowGap={1}>
+      <Box flexDirection="column">
+        <Text color={COLORS.muted}>{first ? [T.sessionFlow(hhmm(first.at), points.length), marks.length > 0 ? T.compactions(marks.length) : null].filter(Boolean).join(' · ') : T.flowEmpty}</Text>
+        {first &&
+          chartRows(chart, CHART_ROWS, top, guide).map((runs, row) => (
+            <Text key={`flow-row-${row}`}>
+              <Text color={COLORS.muted}>{`${(row === 0 ? `${top}%` : row === CHART_ROWS - 1 ? '0%' : '').padStart(CHART_GUTTER - 1)}│`}</Text>
+              {runs.map((run, index) => {
+                const color = levelColor[run.level]
+                return (
+                  <Text key={`flow-${row}-${index}`} {...(color ? { color } : {})}>
+                    {run.text}
+                  </Text>
+                )
+              })}
+            </Text>
+          ))}
+        {markerLine && <Text color={COLORS.warning}>{' '.repeat(CHART_GUTTER) + markerLine}</Text>}
+        {timeLine && <Text color={COLORS.muted}>{' '.repeat(CHART_GUTTER) + timeLine}</Text>}
+      </Box>
+      {(lastShare || live?.costUsd != null) && (
+        <Box flexDirection="column">
+          {lastShare && (
+            <Box columnGap={1}>
+              <Text color={COLORS.muted}>{padCells(T.cacheTitle, labelWidth)}</Text>
+              <Text>
+                {
+                  barTexts(
+                    els,
+                    'cache-bar',
+                    barRuns(
+                      [
+                        { value: lastShare.read, color: COLORS.success },
+                        { value: lastShare.write, color: COLORS.link },
+                        { value: lastShare.fresh, color: COLORS.border },
+                      ],
+                      100,
+                      10,
+                    ),
+                  ) as never
+                }
+              </Text>
+              <Text color={COLORS.muted}>{T.cacheLast(lastShare.read, lastShare.write, lastShare.fresh)}</Text>
+            </Box>
+          )}
+          {lastShare && turnShare && <Text color={COLORS.muted}>{' '.repeat(labelWidth + 12) + T.cacheTurns(turnShare.read, turns.length)}</Text>}
+          {live?.costUsd != null && (
+            <Box columnGap={1}>
+              <Text color={COLORS.muted}>{padCells(T.costTitle, labelWidth)}</Text>
+              <Text color={COLORS.text}>{`$${live.costUsd.toFixed(2)}`}</Text>
+              {costs.length >= 2 && <Text color={COLORS.clay}>{sparkline(costs.slice(-sparkWidth))}</Text>}
+              {costs.length >= 2 && <Text color={COLORS.muted}>{T.costPerTurn}</Text>}
+              {lastCost !== undefined && <Text color={COLORS.muted}>{`· ${T.costLast(lastCost.toFixed(2))}`}</Text>}
+            </Box>
+          )}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+// 사용 한도: 이름·가는 막대(━ 쓴 몫, ─ 남은 몫)·%·초기화까지.
+const LIMIT_BAR = 14
+
+function limitRows(els: Els, live: UsageInfo) {
+  const { Box, Text } = els
+  const nameWidth = Math.max(...live.limits.map(limit => cellWidth(limitName(limit.kind))))
+  return (
+    <Box flexDirection="column">
+      <Text color={COLORS.muted}>{T.limits}</Text>
+      {live.limits.map(limit => {
+        const left = resetIn(limit.resetsAt, live.at)
+        const level = meterLevel(limit.percentUsed)
+        const filled = Math.min(LIMIT_BAR, Math.max(0, Math.round((limit.percentUsed / 100) * LIMIT_BAR)))
+        return (
+          <Box key={`limit-${limit.kind}`} columnGap={1}>
+            <Text color={COLORS.text}>{padCells(limitName(limit.kind), nameWidth)}</Text>
+            <Text>
+              <Text color={level === 'muted' ? COLORS.clay : COLORS[level]}>{'━'.repeat(filled)}</Text>
+              <Text color={COLORS.border}>{'─'.repeat(LIMIT_BAR - filled)}</Text>
+            </Text>
+            <Text color={COLORS.text}>{`${limit.percentUsed}%`.padStart(4)}</Text>
+            {left && <Text color={COLORS.muted}>{T.resetsIn(left)}</Text>}
+          </Box>
+        )
+      })}
+    </Box>
   )
 }
 
@@ -1425,6 +1673,8 @@ async function listImages($: EngineInterface): Promise<Record<string, ImageInfo>
 
 // 세션마다 비워지는 상태를 다시 채운다: 세션이 시작될 때(플러그인을 다시 올릴 때 포함)와 창 안에서 다른 세션으로 넘어간 뒤.
 function refreshSessionState($: EngineInterface, showPr: boolean) {
+  contextPoints = []
+  contextCompactions = []
   void refreshDiff($).catch(() => undefined)
   void refreshUsage($).catch(() => undefined)
   if (showPr) void refreshPr($, false).catch(() => undefined)
@@ -2729,6 +2979,17 @@ export const register: Register = (on, options) => {
     return done
   })
 
+  // 압축은 컨텍스트 패널의 세션 흐름에 ▲ 로 남긴다. 압축이 일어날 때만 불려 평소엔 하는 일이 없다.
+  // precompute 는 아무것도 바꾸지 않고, 에이전트의 압축은 메인 대화의 창이 아니다.
+  on('session.compact', async ($, e, next) => {
+    const done = await next(e)
+    if (e.agentId === undefined && e.trigger !== 'precompute' && done.skip === undefined) {
+      const at = await $.clock.now()
+      contextCompactions = [...contextCompactions, { at, trigger: e.trigger, before: done.tokensBefore ?? null, after: done.tokensAfter ?? null }].slice(-CONTEXT_COMPACTIONS)
+    }
+    return done
+  })
+
   // 입력창이 바뀔 때마다 인용 줄을 다시 칠한다. 칠할 것이 없으면 지운다(빈 목록).
   on('prompt.change', async ($, e, next) => {
     const done = await next(e)
@@ -2836,7 +3097,7 @@ export const register: Register = (on, options) => {
         await update($, bandDoneAt, () => endedAt)
         if (Number.isFinite(bandStay)) $.clock.after(bandStay, () => void update($, bandDoneAt, at => (at === endedAt ? null : at)).catch(() => undefined))
       }
-      void refreshUsage($).catch(() => undefined)
+      void refreshUsage($, { usage: e.usage }).catch(() => undefined)
       if (showPr) void refreshPr($, false).catch(() => undefined)
       // 이번 턴에 쓴 문서가 아직 패널에 없으면 연다.
       const doc = await read($, previewWritten)
@@ -3759,13 +4020,20 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const [live, detail] = await Promise.all([read($, usage), read($, usageBreakdown)])
+    const els = $.ui.resolve(e) as Els
+    const { Box, Text, Button } = els
+    const [live, detail, openState, home] = await Promise.all([read($, usage), read($, usageBreakdown), read($, open), $.env.get('HOME').catch(() => undefined)])
+    // 항목별 내역은 열 때와 ↻ 때만 계산한다(턴마다 다시 계산하면 열린 동안 턴이 13% 더 들었다).
+    // 그림이 부르는 것은 내역이 없을 때(창 안에서 세션이 바뀜)와 0.62.0 전에 계산해 목록이 없을 때 한 번뿐이다.
+    if (live && (!detail || detail.mcpServers === undefined)) void refreshBreakdown($).catch(() => undefined)
     const percent = live?.percent ?? null
-    const width = Math.max(10, Math.min((e.viewport?.columns ?? 60) - 6, 40))
-    const nameWidth = Math.max(0, ...(detail?.categories ?? []).map(category => cellWidth(category.name)))
-    const used = detail?.categories.filter(category => category.kind !== 'free') ?? []
-    const free = detail?.categories.find(category => category.kind === 'free')
+    const columns = Math.max(24, ((e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 60) - 1)
+    const summary = [
+      live?.tokens != null ? T.tokensOf(formatTokens(live.tokens), formatTokens(live.window)) : live ? T.windowTokens(formatTokens(live.window)) : null,
+      detail?.compactAt != null ? T.autoCompact(formatTokens(detail.compactAt)) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ')
 
     return (
       <Box flexDirection="column" rowGap={1}>
@@ -3780,49 +4048,14 @@ export const register: Register = (on, options) => {
           <Text color={COLORS.muted}>{T.noUsage}</Text>
         ) : (
           <Box flexDirection="column">
-            <Text color={COLORS[meterLevel(percent)]}>{meterBar(percent, width)}</Text>
-            <Text color={COLORS.muted}>
-              {[
-                live?.tokens != null ? T.tokensOf(formatTokens(live.tokens), formatTokens(live.window)) : T.windowTokens(formatTokens(live?.window ?? 0)),
-                detail?.compactAt != null ? T.autoCompact(formatTokens(detail.compactAt)) : null,
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </Text>
+            <Text key="context-bar">{barTexts(els, 'context-bar', barRuns(windowParts(detail, percent), detail?.max ?? 100, columns))}</Text>
+            <Text color={COLORS.muted}>{summary}</Text>
           </Box>
         )}
-        {detail && (
-          <Box flexDirection="column">
-            <Text color={COLORS.muted}>{T.breakdown(detail.model)}</Text>
-            {[...used, ...(free ? [free] : [])].map(category => (
-              <Box key={`cat-${category.name}`} columnGap={1}>
-                <Text color={(category.kind === 'free' ? COLORS.muted : category.color) as never}>{category.kind === 'free' ? '□' : '■'}</Text>
-                <Text color={category.kind === 'free' ? COLORS.muted : COLORS.text}>{category.name + ' '.repeat(Math.max(0, nameWidth - cellWidth(category.name)))}</Text>
-                <Text color={COLORS.muted}>{formatTokens(category.tokens).padStart(6)}</Text>
-                <Text color={COLORS.muted}>{`${detail.max > 0 ? Math.round((category.tokens / detail.max) * 100) : 0}%`.padStart(4)}</Text>
-              </Box>
-            ))}
-          </Box>
-        )}
-        {live && live.limits.length > 0 && (
-          <Box flexDirection="column">
-            <Text color={COLORS.muted}>{T.limits}</Text>
-            {live.limits.map(limit => {
-              const left = resetIn(limit.resetsAt, live.at)
-              const name = limitName(limit.kind)
-              const limitWidth = Math.max(...live.limits.map(item => cellWidth(limitName(item.kind))))
-              return (
-                <Box key={`limit-${limit.kind}`} columnGap={1}>
-                  <Text color={COLORS.text}>{name + ' '.repeat(Math.max(0, limitWidth - cellWidth(name)))}</Text>
-                  <Text color={COLORS[meterLevel(limit.percentUsed)]}>{meterBar(limit.percentUsed, 10)}</Text>
-                  <Text color={COLORS.text}>{`${limit.percentUsed}%`.padStart(4)}</Text>
-                  {left && <Text color={COLORS.muted}>{T.resetsIn(left)}</Text>}
-                </Box>
-              )
-            })}
-          </Box>
-        )}
-        {live?.costUsd != null && <Text color={COLORS.muted}>{T.sessionCost(live.costUsd.toFixed(2))}</Text>}
+        {detail && categoryRows(els, detail, columns)}
+        {detail && loadedGroups(els, $, detail, openState, columns, home)}
+        {sessionFlow(els, live, detail, columns)}
+        {live && live.limits.length > 0 && limitRows(els, live)}
       </Box>
     )
   })

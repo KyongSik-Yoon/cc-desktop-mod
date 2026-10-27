@@ -1,0 +1,1266 @@
+<!doctype html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>desk-look for Claude Code</title>
+<meta name="description" content="desk-look is a Claude Code plugin that redraws the terminal to look and work like the Code tab of the Claude desktop app: prompt bubbles, folded tool calls, full-width tables, mermaid diagrams, a status band and seven side panes.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="desk-look for Claude Code">
+<meta property="og:description" content="Make the Claude Code terminal look like the Claude desktop app.">
+<meta property="og:url" content="https://kyongsik-yoon.github.io/cc-desktop-mod/">
+<meta property="og:image" content="https://kyongsik-yoon.github.io/cc-desktop-mod/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#F3F2EE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#181715" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Crect width='256' height='256' rx='56' fill='%23262624'/%3E%3Crect x='28' y='40' width='200' height='176' rx='18' fill='%23F5F4EF'/%3E%3Crect x='44' y='60' width='78' height='20' rx='10' fill='%23DDDAD1'/%3E%3Crect x='44' y='96' width='64' height='7' rx='3.5' fill='%23A29E94'/%3E%3Crect x='44' y='112' width='72' height='7' rx='3.5' fill='%23A29E94'/%3E%3Crect x='44' y='128' width='52' height='7' rx='3.5' fill='%23A29E94'/%3E%3Crect x='44' y='176' width='84' height='20' rx='10' fill='%23E6E3DB'/%3E%3Crect x='136' y='40' width='2' height='176' fill='%23D3D0C7'/%3E%3Crect x='148' y='62' width='66' height='16' rx='3' fill='%23D6EDD3'/%3E%3Crect x='148' y='84' width='66' height='16' rx='3' fill='%23D6EDD3'/%3E%3Crect x='148' y='106' width='66' height='16' rx='3' fill='%23F5D5D2'/%3E%3Crect x='148' y='170' width='66' height='16' rx='3' fill='%23D6EDD3'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:ital,wght@0,400;0,600;0,700;1,400&family=Martian+Mono:wdth,wght@75..100,400..700&display=swap">
+<script>
+  // Pick the language before the first paint: a saved choice, else the browser's.
+  (function () {
+    var lang = 'en'
+    try { lang = localStorage.getItem('desk-look-site-lang') || '' } catch (e) { lang = '' }
+    if (lang !== 'en' && lang !== 'ko') lang = /^ko\b/i.test(navigator.language || '') ? 'ko' : 'en'
+    document.documentElement.dataset.lang = lang
+    document.documentElement.lang = lang
+  })()
+</script>
+<style>
+/* Layout: terminal sheets laid on a ground of character cells; text runs left-aligned in one column, stages run wide. */
+:root {
+  --ground: #F3F2EE;
+  --sheet: #FCFCFA;
+  --pane: #F1F1EF;
+  --ink: #1E1D1A;
+  --ink-2: #57544D;
+  --ink-3: #8A867D;
+  --rule: #DAD7CE;
+  --bubble: #E7E5DF;
+  --add: #2D7A3A;
+  --add-bg: #D6EDD3;
+  --del: #B3362E;
+  --del-bg: #F6D6D2;
+  --code: #B02A3E;
+  --code-bg: #EDEBE6;
+  --note: #4B58D2;
+  --clay: #D97757;
+  --mode: #8448D0;
+  --mode-bg: #EFE6FA;
+  --cmd-bg: #262624;
+  --cmd-fg: #F5F4EF;
+  --cmd-dim: #A29E94;
+  --dot: rgba(30, 29, 26, .09);
+  --shadow: 0 1px 0 rgba(30, 29, 26, .04), 0 30px 70px -40px rgba(60, 45, 30, .45);
+  --shot-filter: none;
+
+  --display: "Martian Mono", "IBM Plex Sans KR", ui-monospace, "SF Mono", Menlo, monospace;
+  --body: "IBM Plex Sans", "IBM Plex Sans KR", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", "IBM Plex Sans KR", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sysmono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+
+  --fs-xs: .78rem;
+  --fs-s: .875rem;
+  --fs-m: 1.0625rem;
+  --fs-l: 1.25rem;
+  --fs-h2: clamp(1.55rem, 1.1rem + 1.6vw, 2.35rem);
+  --fs-h1: clamp(2.05rem, 1.2rem + 3.3vw, 3.7rem);
+  --r: 6px;
+  --gutter: max(20px, env(safe-area-inset-left, 0px));
+  --gutter-r: max(20px, env(safe-area-inset-right, 0px));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #181715; --sheet: #22211F; --pane: #2A2927; --ink: #ECEAE3; --ink-2: #B4B0A7; --ink-3: #85817A;
+    --rule: #3B3935; --bubble: #3A3936; --add: #7FCB8A; --add-bg: #1F3B26; --del: #F28D83; --del-bg: #48221F;
+    --code: #F29CA8; --code-bg: #34322E; --note: #949EF4; --clay: #E58C6B; --mode: #BC95F2; --mode-bg: #33284A;
+    --cmd-bg: #0F0F0E; --cmd-fg: #ECEAE3; --cmd-dim: #85817A; --dot: rgba(236, 234, 227, .07);
+    --shadow: 0 1px 0 rgba(0, 0, 0, .3), 0 30px 70px -40px rgba(0, 0, 0, .8); --shot-filter: brightness(.9);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #181715; --sheet: #22211F; --pane: #2A2927; --ink: #ECEAE3; --ink-2: #B4B0A7; --ink-3: #85817A;
+  --rule: #3B3935; --bubble: #3A3936; --add: #7FCB8A; --add-bg: #1F3B26; --del: #F28D83; --del-bg: #48221F;
+  --code: #F29CA8; --code-bg: #34322E; --note: #949EF4; --clay: #E58C6B; --mode: #BC95F2; --mode-bg: #33284A;
+  --cmd-bg: #0F0F0E; --cmd-fg: #ECEAE3; --cmd-dim: #85817A; --dot: rgba(236, 234, 227, .07);
+  --shadow: 0 1px 0 rgba(0, 0, 0, .3), 0 30px 70px -40px rgba(0, 0, 0, .8); --shot-filter: brightness(.9);
+  color-scheme: dark;
+}
+
+/* Language: both languages sit side by side in the markup; the root picks one. */
+:root:not([data-lang="ko"]) body [lang="ko"] { display: none !important; }
+:root[data-lang="ko"] body [lang="en"] { display: none !important; }
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 var(--fs-m)/1.6 var(--body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+:root[data-lang="ko"] body { word-break: keep-all; overflow-wrap: anywhere; }
+/* Martian Mono's space is a full mono cell; tighten it between Hangul words. */
+:root[data-lang="ko"] :is(.hero h1, .h2, .facts dt, .spec h3, .panel h3, .cols h3) { word-spacing: -.3em; }
+img { max-width: 100%; display: block; }
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: .2em; }
+a:hover { text-decoration-color: var(--clay); }
+:focus-visible { outline: 2px solid var(--note); outline-offset: 3px; border-radius: 3px; }
+code, kbd { font-family: var(--mono); font-size: .9em; }
+kbd {
+  display: inline-block; min-width: 1.6em; padding: 0 .4em; text-align: center;
+  border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px;
+  background: var(--sheet); color: var(--ink); line-height: 1.5;
+}
+p code, li code, dd code { color: var(--code); background: var(--code-bg); padding: .05em .35em; border-radius: 3px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+p { margin: 0; text-wrap: pretty; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+
+.wrap {
+  width: 100%; max-width: 1200px; margin-inline: auto;
+  padding-left: var(--gutter); padding-right: var(--gutter-r);
+}
+.eyebrow {
+  font: 500 var(--fs-xs)/1 var(--mono); letter-spacing: .06em; text-transform: lowercase;
+  color: var(--ink-3); display: flex; align-items: center; gap: .6em;
+}
+.eyebrow::before { content: ""; width: .62em; height: 1.1em; background: var(--clay); border-radius: 1px; }
+.h2 { font: 600 var(--fs-h2)/1.15 var(--display); font-stretch: 75%; letter-spacing: -.025em; }
+.lead { color: var(--ink-2); font-size: var(--fs-l); line-height: 1.55; max-width: 62ch; }
+.sec { padding-block: clamp(64px, 5rem + 4vw, 136px); }
+.sec-head { display: grid; gap: 18px; margin-bottom: clamp(32px, 4vw, 56px); max-width: 860px; }
+
+/* ── Top bar ─────────────────────────────────────────── */
+.top { padding-block: 18px; }
+.top .wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; margin-right: auto; }
+.brand svg { width: 30px; height: 30px; flex: none; }
+.brand b { font: 600 1.05rem/1 var(--display); font-stretch: 87.5%; letter-spacing: -.02em; }
+.brand span { color: var(--ink-3); font-size: var(--fs-s); }
+.nav { display: flex; align-items: center; gap: 22px; font-size: var(--fs-s); flex-wrap: wrap; }
+.nav a { text-decoration: none; color: var(--ink-2); }
+.nav a:hover { color: var(--ink); }
+.lang { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; padding: 2px; background: var(--sheet); }
+.lang button {
+  font: 500 var(--fs-xs)/1 var(--body); border: 0; background: none; color: var(--ink-3);
+  padding: 6px 10px; border-radius: 999px; cursor: pointer;
+}
+.lang button[aria-pressed="true"] { background: var(--bubble); color: var(--ink); }
+@media (max-width: 720px) { .nav .nav-sec { display: none; } }
+
+/* ── Hero ────────────────────────────────────────────── */
+.hero { position: relative; padding-block: clamp(28px, 4vw, 64px) clamp(8px, 2vw, 24px); }
+.hero::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(var(--dot) 1.1px, transparent 1.3px);
+  background-size: 11px 21px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 35%, transparent 85%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 35%, transparent 85%);
+}
+.hero-head { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 28px 56px; align-items: end; }
+.hero-head > * { min-width: 0; }
+@media (max-width: 980px) { .hero-head { grid-template-columns: minmax(0, 1fr); } }
+.hero h1 {
+  font: 600 var(--fs-h1)/1.08 var(--display); font-stretch: 75%; letter-spacing: -.03em; margin-top: 18px;
+}
+.hl-bubble {
+  background: var(--bubble); border-radius: .55em; padding: 0 .22em;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
+.caret {
+  display: inline-block; width: .48em; height: .86em; margin-left: .14em; vertical-align: -.06em;
+  background: var(--clay); animation: blink 1.1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.hero-side { display: grid; gap: 22px; padding-bottom: .4em; }
+.hero-side .lead { font-size: var(--fs-m); line-height: 1.6; }
+.cta { display: grid; gap: 10px; }
+.cta-note { font-size: var(--fs-xs); color: var(--ink-3); }
+.cta-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: var(--fs-s); }
+.cta-row a { color: var(--ink-2); }
+
+.cmd {
+  display: flex; align-items: center; gap: 12px; min-width: 0;
+  background: var(--cmd-bg); color: var(--cmd-fg); border-radius: 10px; padding: 10px 10px 10px 16px;
+  font: 400 var(--fs-s)/1.5 var(--mono);
+}
+.cmd code { flex: 1; min-width: 0; overflow-wrap: anywhere; background: none; color: inherit; padding: 0; font-size: 1em; }
+.cmd .pr { color: var(--clay); flex: none; }
+.copy {
+  flex: none; font: 500 var(--fs-xs)/1 var(--mono); color: var(--cmd-dim); background: none;
+  border: 1px solid color-mix(in srgb, var(--cmd-dim) 45%, transparent); border-radius: 6px; padding: 7px 9px; cursor: pointer;
+}
+.copy:hover { color: var(--cmd-fg); border-color: var(--cmd-dim); }
+.copy[data-done] { color: var(--cmd-fg); }
+
+/* ── The stage: one terminal, two drawings ──────────── */
+.stage-wrap { margin-top: clamp(36px, 4.5vw, 64px); }
+.window {
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.titlebar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--rule);
+  font: 400 var(--fs-xs)/1.2 var(--mono); color: var(--ink-3);
+}
+.seg { display: inline-flex; background: var(--ground); border: 1px solid var(--rule); border-radius: 8px; padding: 3px; gap: 2px; }
+.seg button {
+  font: 500 var(--fs-xs)/1 var(--mono); border: 0; background: none; color: var(--ink-3);
+  padding: 7px 11px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.seg button[aria-pressed="true"] { background: var(--sheet); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.seg button[aria-pressed="true"] .tick { color: var(--clay); }
+
+.screen {
+  --p: 1;
+  --rows: 35;
+  position: relative; overflow: hidden;
+  font-size: clamp(10px, .5rem + .5vw, 13.5px);
+  height: calc(var(--rows) * 1.55em + 2.2em);
+}
+@media (max-width: 760px) { .screen { --rows: 42; } }
+.screen::after {
+  content: ""; position: absolute; inset: 0 0 auto; height: 2.4em; z-index: 3; pointer-events: none;
+  background: linear-gradient(var(--sheet), color-mix(in srgb, var(--sheet) 0%, transparent));
+}
+.layer {
+  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 1.1em 1.6em; background: var(--sheet); overflow: hidden;
+}
+.layer > * { flex-shrink: 0; }
+.layer-desk { clip-path: inset(0 calc((1 - var(--p)) * 100%) 0 0); }
+.seam {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--p) * 100%); width: 2px; margin-left: -1px; z-index: 4;
+  background: var(--clay); box-shadow: 0 0 18px 2px color-mix(in srgb, var(--clay) 55%, transparent);
+  opacity: 0; transition: opacity .25s; pointer-events: none;
+}
+.screen.sweeping .seam { opacity: 1; }
+.stage-cap {
+  display: flex; gap: 10px 18px; align-items: baseline; flex-wrap: wrap; margin-top: 16px;
+  font-size: var(--fs-s); color: var(--ink-2); max-width: 90ch;
+}
+.stage-cap b { font: 600 var(--fs-xs)/1 var(--mono); color: var(--ink); white-space: nowrap; }
+.hero-stage[data-state="desk"] [data-when="stock"],
+.hero-stage[data-state="stock"] [data-when="desk"] { display: none; }
+
+/* ── Terminal type: shared by every recreation ───────── */
+.term { font-family: var(--mono); line-height: 1.55; color: var(--ink); font-variant-ligatures: none; }
+.term p, .term div { margin: 0; }
+.term .sp { margin-top: 1.55em; }
+.term .dim { color: var(--ink-3); }
+.term .clay { color: var(--clay); }
+.term b { font-weight: 700; }
+
+/* Stock Claude Code */
+.row, .res { display: grid; grid-template-columns: 2ch minmax(0, 1fr); white-space: pre-wrap; }
+.res { padding-left: 2ch; grid-template-columns: 3ch minmax(0, 1fr); }
+.row .ok { color: var(--add); }
+.s-user { display: grid; grid-template-columns: 2ch minmax(0, 1fr); color: var(--ink-2); white-space: pre-wrap; }
+.s-code { color: var(--note); }
+.dl { display: grid; grid-template-columns: 4ch 2ch minmax(0, 1fr); margin-left: 5ch; white-space: pre; overflow: hidden; }
+.dl .n { color: var(--ink-3); text-align: right; padding-right: 1ch; }
+.dl.add { background: var(--add-bg); }
+.dl.del { background: var(--del-bg); }
+.dl.add .sg { color: var(--add); }
+.dl.del .sg { color: var(--del); }
+/* The web font's subsets carry no box-drawing or block glyphs, so runs of them use the system mono to keep every cell one width. */
+pre.grid, .bars, .glyphs { font-family: var(--sysmono); }
+pre.grid { margin: 0; margin-left: 2ch; font-size: inherit; line-height: 1.17; color: var(--ink-2); white-space: pre; overflow: hidden; }
+pre.src { margin: 0; font: inherit; color: var(--ink-2); white-space: pre; }
+.quote { margin-left: 2ch; color: var(--ink-3); font-style: italic; white-space: pre-wrap; }
+.inputbox {
+  display: grid; grid-template-columns: 2ch minmax(0, 1fr);
+  border-top: 1px solid var(--ink-3); border-bottom: 1px solid var(--ink-3); padding: .2em 0;
+}
+.cur { display: inline-block; width: .6em; height: 1.15em; vertical-align: -.2em; background: var(--ink); margin-left: 1px; }
+.modeline { color: var(--mode); padding-left: 2ch; margin-top: .3em; }
+
+/* desk-look */
+.k-bubble {
+  background: var(--bubble); border-radius: .95em; padding: .35em 1.6ch; max-width: 84ch; align-self: flex-start;
+  white-space: pre-wrap;
+}
+.k-fold { color: var(--ink-3); }
+.chip { display: inline-block; padding: 0 .7ch; font-variant-numeric: tabular-nums; }
+.chip.a { background: var(--add-bg); color: var(--add); }
+.chip.d { background: var(--del-bg); color: var(--del); }
+.term code { font-size: 1em; color: var(--code); background: var(--code-bg); padding: 0 .6ch; border-radius: 0; }
+.k-table { border-collapse: separate; border-spacing: 0; border: 1px solid var(--rule); border-radius: 5px; width: min(100%, 84ch); }
+.k-table th, .k-table td { text-align: left; padding: .2em 1ch; font-weight: 400; }
+.k-table th { background: var(--bubble); }
+.k-table tr + tr td, .k-table thead + tbody tr:first-child td { border-top: 1px solid var(--rule); }
+.k-table td code { margin-left: -.3ch; }
+.k-alert { border: 1.5px solid var(--note); border-radius: 5px; padding: .35em 1.5ch; }
+.k-alert b { color: var(--note); }
+.k-copy { text-align: right; color: var(--ink-3); white-space: pre; }
+.k-card {
+  border: 1px solid var(--rule); border-radius: 5px; padding: .35em 1.5ch; width: min(100%, 52ch);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 0;
+}
+.k-card > span:nth-child(3n+1) { padding-right: 2ch; }
+.k-card .chip { text-align: right; }
+.k-chin {
+  display: flex; align-items: center; gap: 2ch; background: var(--bubble); border-radius: 999px;
+  padding: 0 1.4ch; color: var(--ink-2); white-space: nowrap; overflow: hidden;
+}
+.k-chin .grow { flex: 1; }
+.k-chin svg { width: 1em; height: 1em; vertical-align: -.15em; margin-right: .7ch; fill: currentColor; }
+.k-mode { display: inline-block; background: var(--mode-bg); color: var(--mode); border-radius: 999px; padding: 0 1.2ch; }
+.k-chips { display: flex; align-items: center; gap: 1ch; }
+.k-row { display: flex; align-items: center; gap: .5em 1.2ch; flex-wrap: wrap; }
+.k-row .k-chin { flex: 1 1 30ch; min-width: 0; }
+.pill {
+  display: inline-block; border-radius: 999px; padding: 0 1ch; background: var(--bubble); color: var(--ink-2); white-space: nowrap;
+}
+
+/* ── Facts strip ─────────────────────────────────────── */
+.facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px 36px; margin-top: clamp(40px, 5vw, 72px); }
+@media (max-width: 980px) { .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .facts { grid-template-columns: minmax(0, 1fr); } }
+.facts dt { font: 600 var(--fs-s)/1.3 var(--display); font-stretch: 87.5%; letter-spacing: -.01em; padding-top: 14px; border-top: 1px solid var(--rule); }
+.facts dd { margin: 8px 0 0; font-size: var(--fs-s); color: var(--ink-2); line-height: 1.55; }
+
+/* ── Transcript specimens ─────────────────────────────── */
+.specs { display: grid; gap: 0; border-top: 1px solid var(--rule); }
+.spec {
+  display: grid; grid-template-columns: 11rem minmax(0, 1fr) 2.5rem minmax(0, 1.2fr); gap: 0 18px;
+  padding-block: 28px; border-bottom: 1px solid var(--rule); align-items: start;
+}
+.spec > * { min-width: 0; }
+.spec h3 { font: 600 var(--fs-m)/1.3 var(--display); font-stretch: 87.5%; letter-spacing: -.015em; padding-top: 6px; }
+.spec .arrow { align-self: center; justify-self: center; color: var(--clay); font: 400 1.3rem/1 var(--mono); }
+.spec .note { margin-top: 12px; font-size: var(--fs-s); color: var(--ink-2); max-width: 60ch; }
+.spec .tag { font: 500 .68rem/1 var(--mono); color: var(--ink-3); letter-spacing: .05em; margin-bottom: 8px; display: block; }
+.mini { font-size: .8rem; border-radius: 8px; padding: 14px 16px; overflow-x: auto; }
+.mini.stock div { white-space: pre-wrap; }
+.mini.stock { background: color-mix(in srgb, var(--sheet) 60%, var(--ground)); border: 1px dashed var(--rule); }
+.mini.desk { background: var(--sheet); border: 1px solid var(--rule); box-shadow: 0 10px 30px -24px rgba(60, 45, 30, .6); }
+@media (max-width: 900px) {
+  .spec { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .spec .arrow { transform: rotate(90deg); justify-self: start; margin-left: 18px; }
+}
+.k-foldbtn {
+  font: inherit; color: var(--ink-3); background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+}
+.k-foldbtn:hover { color: var(--ink); }
+.k-foldbtn .chev { display: inline-block; transition: transform .2s; }
+.k-foldbtn[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.k-calls { padding-left: 2ch; margin-top: .2em; }
+.k-calls .dl { margin-left: 0; }
+.k-agent { border: 1px solid var(--rule); border-radius: 5px; padding: .4em 1.5ch; display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.k-agent .t { color: var(--ink-3); }
+.k-agent .chev { align-self: center; color: var(--ink-3); grid-row: 1 / span 3; grid-column: 2; }
+.k-ask { border: 1.5px solid color-mix(in srgb, var(--clay) 60%, var(--rule)); border-radius: 5px; padding: .5em 1.5ch; }
+.k-ask .h { color: var(--clay); }
+.k-ask .num { color: var(--note); }
+.mmd-box { border: 1px solid var(--rule); border-radius: 5px; padding: 10px; max-width: 360px; }
+.mmd { width: 100%; height: auto; display: block; }
+.mmd .edge path { fill: none; stroke: var(--ink-2); stroke-width: 1.1; }
+.mmd .head path { fill: var(--clay); }
+.mmd rect { fill: var(--sheet); stroke: var(--ink-2); stroke-width: 1.1; }
+.mmd text { font-family: var(--mono); font-size: 11px; fill: var(--ink); text-anchor: middle; dominant-baseline: central; }
+.mmd .el text { fill: var(--ink-3); font-style: italic; text-anchor: start; font-size: 10px; }
+
+/* ── Around the prompt ───────────────────────────────── */
+.show { padding: clamp(18px, 3vw, 34px); font-size: clamp(11px, .55rem + .45vw, 14px); overflow-x: auto; }
+.show-inner { min-width: 0; }
+.band-up { display: flex; gap: 2ch; white-space: nowrap; }
+.band-low { white-space: nowrap; }
+.band-up .grow { flex: 1; }
+.band-low { color: var(--ink-2); }
+.spin { color: var(--clay); letter-spacing: .05em; }
+[data-k] { transition: background-color .15s, box-shadow .15s; border-radius: 4px; }
+[data-k].lit { box-shadow: 0 0 0 2px var(--note); }
+.legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 40px; margin-top: 28px; }
+@media (max-width: 760px) { .legend { grid-template-columns: minmax(0, 1fr); } }
+.legend li {
+  display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 14px; padding: 12px 8px; border-radius: 6px;
+  border-bottom: 1px solid var(--rule); font-size: var(--fs-s); color: var(--ink-2); cursor: default;
+}
+.legend li.lit { background: var(--sheet); }
+.legend .key { font: 400 var(--fs-xs)/1.7 var(--mono); color: var(--ink); overflow-wrap: anywhere; }
+@media (max-width: 520px) { .legend li { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+
+/* ── Panes ───────────────────────────────────────────── */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 22px; }
+.tabs button {
+  font: 500 var(--fs-s)/1 var(--mono); color: var(--ink-2); background: none; border: 1px solid var(--rule);
+  padding: 9px 12px; border-radius: 8px; cursor: pointer;
+}
+.tabs button:hover { color: var(--ink); border-color: var(--ink-3); }
+.tabs button[aria-selected="true"] { background: var(--cmd-bg); color: var(--cmd-fg); border-color: var(--cmd-bg); }
+.panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.75fr); gap: 28px 48px; align-items: start; }
+.panel[hidden] { display: none; }
+@media (max-width: 900px) { .panel { grid-template-columns: minmax(0, 1fr); } }
+.panel h3 { font: 600 var(--fs-l)/1.25 var(--display); font-stretch: 87.5%; letter-spacing: -.02em; }
+.panel .txt { display: grid; gap: 14px; align-content: start; padding-top: 6px; }
+.panel .txt p { color: var(--ink-2); }
+.keys { display: grid; gap: 8px; font-size: var(--fs-s); color: var(--ink-2); margin-top: 4px; }
+.keys li { display: flex; gap: 10px; align-items: baseline; }
+.dock {
+  display: grid; grid-template-columns: 30% minmax(0, 1fr); height: clamp(380px, 38vw, 540px);
+  border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; background: var(--sheet); box-shadow: var(--shadow);
+}
+.dock .conv { padding: 22px 16px; display: flex; flex-direction: column; gap: 9px; border-right: 1px solid var(--rule); }
+.dock .conv i { display: block; height: 7px; border-radius: 4px; background: var(--rule); }
+.dock .conv i.b { height: 16px; width: 70%; background: var(--bubble); border-radius: 999px; margin-bottom: 6px; }
+.dock .conv i.s { margin-top: 10px; }
+.dock .conv i.f { background: color-mix(in srgb, var(--rule) 55%, transparent); }
+.dock .conv i.c { height: 34px; width: 80%; background: none; border: 1px solid var(--rule); border-radius: 5px; margin-top: auto; }
+.dock .pane { position: relative; overflow: hidden; background: #F3F3F2; filter: var(--shot-filter); }
+.dock .pane img { width: 100%; height: 100%; object-fit: contain; object-position: left top; }
+.dock .pane img.crop { object-fit: cover; }
+.dock .pane.rec { filter: none; }
+/* The context pane screenshot is portrait: a taller frame, and its own pane gray behind it. */
+.dock.tall { height: clamp(460px, 52vw, 720px); grid-template-columns: 16% minmax(0, 1fr); }
+.dock .pane.ctx { background: #E4E4E4; }
+@media (max-width: 640px) { .dock.tall { height: 560px; } }
+.dock .pane.rec { background: var(--pane); overflow: auto; }
+@media (max-width: 640px) { .dock { grid-template-columns: minmax(0, 1fr); height: 420px; } .dock .conv { display: none; } }
+.rec .term { font-size: clamp(10.5px, .5rem + .35vw, 12.5px); padding: 18px 20px; }
+.bars { display: grid; grid-template-columns: 8ch minmax(0, 1fr); column-gap: 1ch; white-space: pre; }
+.bars span:nth-child(odd) { color: var(--ink-3); }
+.c-ex { color: var(--ink-3); } .c-ed { color: var(--add); } .c-te { color: var(--note); }
+.c-cm { color: var(--clay); } .c-ag { color: var(--mode); } .c-re { color: var(--ink-3); }
+.flow { display: grid; grid-template-columns: 5ch 2ch minmax(0, 1fr); white-space: pre-wrap; }
+.flow .t { color: var(--ink-3); }
+.btn-t { display: inline-block; border: 1px solid var(--ink-3); border-radius: 4px; padding: 0 1ch; color: var(--ink); }
+.btn-t.dark { background: var(--ink); color: var(--sheet); border-color: var(--ink); }
+.st { display: inline-block; padding: 0 .9ch; border-radius: 999px; font-size: .92em; }
+.st.work { background: color-mix(in srgb, var(--clay) 22%, transparent); color: var(--clay); }
+.st.bg { border: 1px solid var(--rule); color: var(--ink-3); }
+.st.need { background: color-mix(in srgb, var(--note) 18%, transparent); color: var(--note); }
+.srow { display: grid; grid-template-columns: minmax(0, 1fr) 4ch 13ch; gap: 1.5ch; padding-left: 2ch; align-items: baseline; }
+.srow > :nth-child(2) { text-align: right; }
+.srow > :nth-child(3) { justify-self: start; }
+.srow span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search { border: 1px solid var(--rule); border-radius: 5px; padding: .15em 1ch; color: var(--ink-3); background: var(--sheet); }
+
+/* ── Line comments ───────────────────────────────────── */
+.split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 40px 56px; align-items: center; }
+@media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } .split > .shot { order: 2; } }
+.shot { border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); background: #F1F1F0; }
+.shot img, .shot video { width: 100%; height: auto; display: block; filter: var(--shot-filter); }
+.steps { display: grid; gap: 22px; counter-reset: step; }
+.steps li { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 14px; color: var(--ink-2); }
+.steps li::before {
+  counter-increment: step; content: counter(step);
+  font: 600 var(--fs-s)/2.2rem var(--mono); text-align: center; color: var(--ink);
+  width: 2.2rem; height: 2.2rem; border-radius: 50%; background: var(--bubble);
+}
+.steps li > div { padding-top: .3rem; display: grid; gap: 8px; min-width: 0; }
+
+/* ── Demo, family, install, footer ───────────────────── */
+.demo figcaption { margin-top: 14px; font-size: var(--fs-s); color: var(--ink-2); max-width: 80ch; }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; }
+@media (max-width: 900px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.cols h3 { font: 600 var(--fs-m)/1.3 var(--display); font-stretch: 87.5%; letter-spacing: -.015em; padding-top: 16px; border-top: 1px solid var(--rule); margin-bottom: 10px; }
+.cols p { color: var(--ink-2); font-size: var(--fs-s); }
+.cols .cmd { margin-top: 12px; font-size: var(--fs-xs); }
+.cols .cmd + .cmd { margin-top: 8px; }
+.cols a { color: var(--ink); }
+.install { background: var(--sheet); border-block: 1px solid var(--rule); }
+.install-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 36px 64px; align-items: start; }
+@media (max-width: 900px) { .install-grid { grid-template-columns: minmax(0, 1fr); } }
+.install .steps li { color: var(--ink); }
+.install .after { display: grid; gap: 14px; color: var(--ink-2); font-size: var(--fs-s); padding-top: 18px; border-top: 1px solid var(--rule); }
+.foot { padding-block: 40px 56px; font-size: var(--fs-s); color: var(--ink-3); }
+.foot .wrap { display: flex; gap: 14px 28px; flex-wrap: wrap; align-items: center; }
+.foot nav { display: flex; gap: 20px; flex-wrap: wrap; margin-left: auto; }
+.foot a { color: var(--ink-2); text-decoration: none; }
+.foot a:hover { color: var(--ink); text-decoration: underline; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .caret { animation: none; }
+  .k-foldbtn .chev, .seam { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 256 256" aria-hidden="true"><rect width="256" height="256" rx="56" fill="#262624"/><rect x="28" y="40" width="200" height="176" rx="18" fill="#F5F4EF"/><rect x="44" y="60" width="78" height="20" rx="10" fill="#DDDAD1"/><rect x="44" y="96" width="64" height="7" rx="3.5" fill="#A29E94"/><rect x="44" y="112" width="72" height="7" rx="3.5" fill="#A29E94"/><rect x="44" y="128" width="52" height="7" rx="3.5" fill="#A29E94"/><rect x="44" y="176" width="84" height="20" rx="10" fill="#E6E3DB"/><rect x="136" y="40" width="2" height="176" fill="#D3D0C7"/><rect x="148" y="62" width="66" height="16" rx="3" fill="#D6EDD3"/><rect x="148" y="62" width="4" height="16" fill="#3E9A4A"/><rect x="148" y="84" width="66" height="16" rx="3" fill="#D6EDD3"/><rect x="148" y="84" width="4" height="16" fill="#3E9A4A"/><rect x="148" y="106" width="66" height="16" rx="3" fill="#F5D5D2"/><rect x="148" y="106" width="4" height="16" fill="#C9473F"/><rect x="158" y="134" width="46" height="6" rx="3" fill="#B7B3A9"/><rect x="158" y="148" width="38" height="6" rx="3" fill="#B7B3A9"/><rect x="148" y="170" width="66" height="16" rx="3" fill="#D6EDD3"/><rect x="148" y="170" width="4" height="16" fill="#3E9A4A"/></svg>
+      <b>desk-look</b>
+      <span lang="en">for Claude Code</span><span lang="ko">Claude Code 용</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a class="nav-sec" href="#transcript"><span lang="en">Transcript</span><span lang="ko">대화 기록</span></a>
+      <a class="nav-sec" href="#panes"><span lang="en">Panes</span><span lang="ko">패널</span></a>
+      <a class="nav-sec" href="#install"><span lang="en">Install</span><span lang="ko">설치</span></a>
+      <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod">GitHub ↗</a>
+      <span class="lang" role="group" aria-label="Language">
+        <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" data-set-lang="ko" aria-pressed="false">한국어</button>
+      </span>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ═══ Hero ═══ -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-head">
+      <div>
+        <p class="eyebrow"><span lang="en">a plugin for claude code · mit</span><span lang="ko">claude code 플러그인 · mit</span></p>
+        <h1>
+          <span lang="en">Your Claude Code terminal, drawn like the <span class="hl-bubble">desktop app</span><span class="caret" aria-hidden="true"></span></span>
+          <span lang="ko">Claude Code 터미널을 <span class="hl-bubble">데스크톱 앱</span>처럼<span class="caret" aria-hidden="true"></span></span>
+        </h1>
+      </div>
+      <div class="hero-side">
+        <p class="lead" lang="en">desk-look redraws the Claude Code CLI to look and work like the Code tab of the Claude desktop app. It changes how the screen is drawn and leaves the engine as it is.</p>
+        <p class="lead" lang="ko">desk-look 은 Claude Code CLI 를 Claude 데스크톱 앱 Code 탭처럼 보이고 동작하게 다시 그립니다. 엔진은 그대로 두고 화면을 그리는 방식만 바꿉니다.</p>
+        <div class="cta">
+          <span class="cta-note" lang="en">Paste this at the Claude Code prompt</span>
+          <span class="cta-note" lang="ko">Claude Code 입력창에 붙여 넣으세요</span>
+          <div class="cmd"><span class="pr" aria-hidden="true">❯</span><code>/plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod</code><button class="copy" type="button" data-copy="/plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod">⧉ copy</button></div>
+          <div class="cta-row">
+            <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod"><span lang="en">Source on GitHub</span><span lang="ko">GitHub 에서 소스 보기</span></a>
+            <span aria-hidden="true">·</span>
+            <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/releases"><span lang="en">Release notes</span><span lang="ko">릴리즈 노트</span></a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage-wrap hero-stage" data-state="desk">
+      <div class="window">
+        <div class="titlebar">
+          <span>~/todo-app — claude</span>
+          <span class="seg" role="group" aria-label="Drawing">
+            <button type="button" data-to="stock" aria-pressed="false">Claude Code</button>
+            <button type="button" data-to="desk" aria-pressed="true"><span class="tick">+</span> desk-look</button>
+          </span>
+        </div>
+        <div class="screen term" id="screen">
+
+          <!-- Claude Code as it ships -->
+          <div class="layer layer-stock" aria-hidden="true">
+            <div class="s-user"><span>&gt;</span><span>Add a `done &lt;n&gt;` command to todo.py that marks item n finished, and mention it in README.md. Then reply briefly with: a table of the commands, and a &gt; [!NOTE] about where the data is stored.</span></div>
+            <div class="row sp"><span>●</span><span>Reading todo.py and README.md first.</span></div>
+            <div class="row sp"><span class="ok">●</span><span><b>Read</b>(todo.py)</span></div>
+            <div class="res"><span class="dim">⎿</span><span class="dim">Read 41 lines (ctrl+o to expand)</span></div>
+            <div class="row sp"><span class="ok">●</span><span><b>Read</b>(README.md)</span></div>
+            <div class="res"><span class="dim">⎿</span><span class="dim">Read 12 lines (ctrl+o to expand)</span></div>
+            <div class="row sp"><span class="ok">●</span><span><b>Update</b>(todo.py)</span></div>
+            <div class="res"><span class="dim">⎿</span><span class="dim">Updated todo.py with 17 additions and 4 removals</span></div>
+            <div class="dl"><span class="n">30</span><span class="sg"> </span><span>    if cmd == "add":</span></div>
+            <div class="dl del"><span class="n">31</span><span class="sg">-</span><span>    else:</span></div>
+            <div class="dl add"><span class="n">31</span><span class="sg">+</span><span>    elif cmd == "done":</span></div>
+            <div class="dl add"><span class="n">32</span><span class="sg">+</span><span>        n = int(sys.argv[2])</span></div>
+            <div class="res"><span></span><span class="dim">… +14 lines (ctrl+o to expand)</span></div>
+            <div class="row sp"><span class="ok">●</span><span><b>Update</b>(README.md)</span></div>
+            <div class="res"><span class="dim">⎿</span><span class="dim">Updated README.md with 8 additions</span></div>
+            <div class="row sp"><span>●</span><span>Running it in the scratchpad so the real todos.json isn't touched.</span></div>
+            <div class="row sp"><span class="ok">●</span><span><b>Bash</b>(cd "$SCRATCH" &amp;&amp; python todo.py done 2 &amp;&amp; python todo.py list)</span></div>
+            <div class="res"><span class="dim">⎿</span><span class="dim">1 [ ] buy milk
+2 [x] write tests</span></div>
+            <div class="row sp"><span>●</span><span><span class="s-code">done &lt;n&gt;</span> now works in <span class="s-code">todo.py</span>, and <span class="s-code">README.md</span> has a Usage section that lists it. An out-of-range number and a non-number each exit with code 1.</span></div>
+            <pre class="grid sp">┌────────────┬────────────────────┐
+│ Command    │ Effect             │
+├────────────┼────────────────────┤
+│ add &lt;text&gt; │ Append a new item  │
+├────────────┼────────────────────┤
+│ list       │ Show all items     │
+├────────────┼────────────────────┤
+│ done &lt;n&gt;   │ Mark item n done   │
+└────────────┴────────────────────┘</pre>
+            <div class="quote sp">▎ [!NOTE]
+▎ Data is stored in todos.json in the current working directory.</div>
+            <div class="row sp dim"><span class="clay">✻</span><span>Baked for 12s</span></div>
+            <div class="inputbox sp"><span>&gt;</span><span>commit this<span class="cur"></span></span></div>
+            <div class="modeline">⏵⏵ accept edits on <span class="dim">(shift+tab to cycle)</span></div>
+          </div>
+
+          <!-- The same turn, drawn by desk-look -->
+          <div class="layer layer-desk">
+            <div class="k-bubble">Add a `done &lt;n&gt;` command to todo.py that marks item n finished, and mention it in README.md. Then reply briefly with: a table of the commands, and a &gt; [!NOTE] about where the data is stored.</div>
+            <p class="sp">Reading todo.py and README.md first.</p>
+            <p class="k-fold">Read 2 files, edited 2 files <span class="chip a">+25</span><span class="chip d">−4</span> ›</p>
+            <p class="sp">Running it in the scratchpad so the real todos.json isn't touched.</p>
+            <p class="k-fold">Ran a command ›</p>
+            <p class="sp"><code>done &lt;n&gt;</code> now works in <code>todo.py</code>, and <code>README.md</code> has a Usage section that lists it. An out-of-range number and a non-number each exit with code 1.</p>
+            <table class="k-table sp">
+              <thead><tr><th>Command</th><th>Effect</th></tr></thead>
+              <tbody>
+                <tr><td><code>add &lt;text&gt;</code></td><td>Append a new item</td></tr>
+                <tr><td><code>list</code> (default)</td><td>Show all items</td></tr>
+                <tr><td><code>done &lt;n&gt;</code></td><td>Mark item n finished</td></tr>
+              </tbody>
+            </table>
+            <div class="k-alert sp"><b>ⓘ Note</b><br>Data is stored in <code>todos.json</code> in the current working directory.</div>
+            <p class="k-copy">⧉ copy  ❝ quote</p>
+            <p class="dim">✻ Baked for 12s · done 10:24 AM</p>
+            <div class="k-card sp">
+              <span><b>Edited 2 files</b></span><span class="chip a">+25</span><span class="chip d">−4</span>
+              <span>todo.py</span><span class="chip a">+17</span><span class="chip d">−4</span>
+              <span>README.md</span><span class="chip a">+8</span><span class="chip d">−0</span>
+            </div>
+            <div class="k-chin sp">
+              <span><svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.6l1.6 1.6h5.8A1.5 1.5 0 0 1 15 5.1v7.4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/></svg>todo-app</span>
+              <span><svg viewBox="0 0 16 16"><path d="M5 2.2a1.8 1.8 0 0 0-.75 3.44v4.72a1.8 1.8 0 1 0 1.5 0V9.3c.4.3.9.45 1.45.45h1.6a2.4 2.4 0 0 0 2.35-1.9 1.8 1.8 0 1 0-1.53-.06 .9.9 0 0 1-.82.46H7.2c-.8 0-1.45-.65-1.45-1.45V5.64A1.8 1.8 0 0 0 5 2.2z"/></svg>main</span>
+              <span class="grow"></span>
+              <span><span class="chip a">+25</span><span class="chip d">−4</span></span>
+            </div>
+            <div class="inputbox sp"><span>❯</span><span>commit this<span class="cur"></span></span></div>
+            <div class="modeline"><span class="k-mode">⏵⏵ accept edits on</span> <span class="dim">(shift+tab to cycle)</span></div>
+          </div>
+
+          <div class="seam" aria-hidden="true"></div>
+        </div>
+      </div>
+      <p class="stage-cap">
+        <span data-when="desk"><b>+ desk-look</b> <span lang="en">The same turn: calls folded into one line, a full-width table, an alert box, and a card of the files this turn edited.</span><span lang="ko">같은 턴: 호출은 한 줄로 접히고, 표는 폭을 채우고, 알림 상자와 이번 턴에 고친 파일 카드가 붙습니다.</span></span>
+        <span data-when="stock"><b>Claude Code</b> <span lang="en">As it ships: a row and a result block per call, a grid table, a duration line at the end.</span><span lang="ko">기본 모습: 호출마다 한 줄과 결과 블록, 격자 표, 끝에 걸린 시간 한 줄.</span></span>
+      </p>
+    </div>
+
+    <dl class="facts">
+      <div>
+        <dt><span lang="en">The engine stays as it is</span><span lang="ko">엔진은 그대로</span></dt>
+        <dd lang="en">A function-hook plugin: only the drawing changes. The desktop app's own Code tab is left alone.</dd>
+        <dd lang="ko">함수 훅 플러그인이라 화면 그리기만 바꿉니다. 데스크톱 앱의 Code 탭은 건드리지 않습니다.</dd>
+      </div>
+      <div>
+        <dt><span lang="en">No network of its own</span><span lang="ko">스스로는 네트워크를 쓰지 않음</span></dt>
+        <dd lang="en">desk-look makes no network request and calls no MCP server. Pull requests come from your own <code>gh</code> or <code>glab</code>.</dd>
+        <dd lang="ko">desk-look 은 네트워크 요청도 MCP 호출도 하지 않습니다. PR 은 내 <code>gh</code>·<code>glab</code> 으로 읽습니다.</dd>
+      </div>
+      <div>
+        <dt>English · 한국어</dt>
+        <dd lang="en">Labels, panes and toasts follow Claude Code's own language setting.</dd>
+        <dd lang="ko">표시·패널·알림 문구는 Claude Code 의 언어 설정을 따릅니다.</dd>
+      </div>
+      <div>
+        <dt><span lang="en">Light and dark</span><span lang="ko">밝은 테마와 어두운 테마</span></dt>
+        <dd lang="en">Colors come from the engine's theme keys, so both themes are followed.</dd>
+        <dd lang="ko">엔진 테마 색을 쓰므로 두 테마 모두 따라갑니다.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<!-- ═══ Transcript ═══ -->
+<section class="sec" id="transcript">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span lang="en">the transcript</span><span lang="ko">대화 기록</span></p>
+      <h2 class="h2"><span lang="en">It reads like the desktop app</span><span lang="ko">데스크톱 앱처럼 읽힙니다</span></h2>
+      <p class="lead" lang="en">Each row reads terminal default → desk-look. The folded tool line below opens on click, the way the real one does.</p>
+      <p class="lead" lang="ko">줄마다 왼쪽이 터미널 기본, 오른쪽이 desk-look 입니다. 아래 접힌 도구 줄은 실제처럼 눌러서 펼 수 있습니다.</p>
+    </div>
+
+    <ol class="specs">
+      <li class="spec">
+        <h3><span lang="en">Your prompt</span><span lang="ko">프롬프트</span></h3>
+        <div><span class="tag">CLAUDE CODE</span><div class="mini stock term"><div class="s-user"><span>&gt;</span><span>Add a `done &lt;n&gt;` command to todo.py</span></div></div></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div><span class="tag">DESK-LOOK</span><div class="mini desk term"><div class="k-bubble">Add a `done &lt;n&gt;` command to todo.py</div></div>
+        <p class="note" lang="en">A gray bubble: a pill for one line, a box with rounded corners for several, on the left or the right. Pasted images show as thumbnails above it.</p>
+        <p class="note" lang="ko">회색 말풍선: 한 줄이면 알약, 여러 줄이면 모서리가 둥근 상자이고, 왼쪽·오른쪽을 고를 수 있습니다. 붙여 넣은 이미지는 그 위에 미리보기로 보입니다.</p></div>
+      </li>
+
+      <li class="spec">
+        <h3><span lang="en">Tool calls</span><span lang="ko">도구 호출</span></h3>
+        <div><span class="tag">CLAUDE CODE</span><div class="mini stock term">
+          <div class="row"><span class="ok">●</span><span><b>Read</b>(todo.py)</span></div>
+          <div class="res"><span class="dim">⎿</span><span class="dim">Read 41 lines</span></div>
+          <div class="row"><span class="ok">●</span><span><b>Read</b>(README.md)</span></div>
+          <div class="res"><span class="dim">⎿</span><span class="dim">Read 12 lines</span></div>
+          <div class="row"><span class="ok">●</span><span><b>Update</b>(todo.py)</span></div>
+          <div class="res"><span class="dim">⎿</span><span class="dim">Updated todo.py with 17 additions…</span></div>
+          <div class="row"><span class="ok">●</span><span><b>Update</b>(README.md)</span></div>
+          <div class="res"><span class="dim">⎿</span><span class="dim">Updated README.md with 8 additions</span></div>
+        </div></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div><span class="tag">DESK-LOOK</span><div class="mini desk term">
+          <button class="k-foldbtn" type="button" aria-expanded="false" aria-controls="calls1">Read 2 files, edited 2 files <span class="chip a">+25</span><span class="chip d">−4</span> <span class="chev">›</span></button>
+          <div class="k-calls" id="calls1" hidden>
+            <div class="dim">Read todo.py</div>
+            <div class="dim">Read README.md</div>
+            <div>Edited todo.py <span class="chip a">+17</span><span class="chip d">−4</span></div>
+            <div class="dl"><span class="n">30</span><span class="sg"> </span><span>    if cmd == "add":</span></div>
+            <div class="dl del"><span class="n">31</span><span class="sg">-</span><span>    else:</span></div>
+            <div class="dl add"><span class="n">31</span><span class="sg">+</span><span>    elif cmd == "done":</span></div>
+            <div class="dl add"><span class="n">32</span><span class="sg">+</span><span>        n = int(sys.argv[2])</span></div>
+            <div>Edited README.md <span class="chip a">+8</span><span class="chip d">−0</span></div>
+          </div>
+        </div>
+        <p class="note" lang="en">Consecutive calls fold into one line that expands on click. Expanded, edit diffs show right away with file line numbers and three lines of context. The ctrl+o transcript keeps the engine's full rows.</p>
+        <p class="note" lang="ko">이어지는 호출은 눌러서 펴는 한 줄로 접힙니다. 펴면 고친 diff 가 파일 줄 번호와 앞뒤 세 줄과 함께 바로 보입니다. ctrl+o 화면은 엔진의 모든 줄을 그대로 둡니다.</p></div>
+      </li>
+
+      <li class="spec">
+        <h3><span lang="en">Subagents</span><span lang="ko">서브에이전트</span></h3>
+        <div><span class="tag">CLAUDE CODE</span><div class="mini stock term">
+          <div class="row"><span class="ok">●</span><span><b>Task</b>(Check API parameters against the docs)</span></div>
+          <div class="res"><span class="dim">⎿</span><span class="dim">Done (3 tool uses · 42.9k tokens · 6s)</span></div>
+        </div></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div><span class="tag">DESK-LOOK</span><div class="mini desk term">
+          <div class="k-agent">
+            <span class="t">general-purpose</span>
+            <span>Check API parameters against the docs</span>
+            <span class="t">3 tool uses · 42.9k tokens · 6s</span>
+            <span class="chev">›</span>
+          </div>
+        </div>
+        <p class="note" lang="en">A card per agent with its type, tool count, tokens, time and changed lines. Click it for the result. Background agents still running at the end of a turn get a row each.</p>
+        <p class="note" lang="ko">에이전트마다 카드: 종류, 도구 수, 토큰, 시간, 바꾼 줄. 누르면 결과가 보입니다. 턴이 끝날 때 아직 도는 백그라운드 에이전트는 한 줄씩 남습니다.</p></div>
+      </li>
+
+      <li class="spec">
+        <h3><span lang="en">Diagrams and tables</span><span lang="ko">그림과 표</span></h3>
+        <div><span class="tag">CLAUDE CODE</span><div class="mini stock term"><pre class="src">```mermaid
+flowchart TD
+  argv --&gt; cmd
+  cmd --&gt;|add| a[add text]
+  cmd --&gt;|done| v{valid n?}
+  cmd --&gt;|other| show
+```</pre></div></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div><span class="tag">DESK-LOOK</span><div class="mini desk term"><div class="mmd-box">
+          <svg class="mmd" viewBox="0 0 296 160" role="img" aria-label="Flowchart: argv goes to cmd, which branches to add text, valid n?, and show">
+            <g class="edge"><path d="M150 34V56"/><path d="M150 86V102M50 102H246M50 102V118M150 102V118M246 102V118"/></g>
+            <g class="head"><path d="M146 56h8l-4 6z"/><path d="M46 118h8l-4 6z"/><path d="M146 118h8l-4 6z"/><path d="M242 118h8l-4 6z"/></g>
+            <rect x="122" y="10" width="56" height="24" rx="3"/>
+            <rect x="116" y="62" width="68" height="24" rx="3"/><rect x="119" y="65" width="62" height="18" rx="2"/>
+            <rect x="8" y="124" width="84" height="24" rx="3"/>
+            <rect x="106" y="124" width="88" height="24" rx="3"/><rect x="109" y="127" width="82" height="18" rx="2"/>
+            <rect x="214" y="124" width="64" height="24" rx="3"/>
+            <text x="150" y="22">argv</text><text x="150" y="74">cmd</text>
+            <text x="50" y="136">add text</text><text x="150" y="136">valid n?</text><text x="246" y="136">show</text>
+            <g class="el"><text x="54" y="111">add</text><text x="154" y="111">done</text><text x="250" y="111">other</text></g>
+          </svg>
+        </div></div>
+        <p class="note" lang="en">mermaid blocks become box diagrams with arrowheads that touch the boxes. Tables run full width with a gray header, and <code>&gt; [!NOTE]</code> becomes a box bordered in its alert color.</p>
+        <p class="note" lang="ko">mermaid 블록은 화살촉이 상자에 닿는 상자 그림이 됩니다. 표는 회색 머리줄과 함께 폭을 채우고, <code>&gt; [!NOTE]</code> 는 알림 색 테두리 상자가 됩니다.</p></div>
+      </li>
+
+      <li class="spec">
+        <h3><span lang="en">Questions</span><span lang="ko">질문</span></h3>
+        <div><span class="tag">CLAUDE CODE</span><div class="mini stock term">
+          <div class="dim">☐ Next city</div>
+          <div class="sp">Which city should the CLI support next?</div>
+          <div class="sp"><span class="clay">❯</span> 1. Osaka</div>
+          <div class="dim">     Major Kansai hub, Japan</div>
+          <div>  2. Sapporo</div>
+          <div>  3. Daegu</div>
+          <div>  4. Type something.</div>
+        </div></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div><span class="tag">DESK-LOOK</span><div class="mini desk term">
+          <div class="k-ask">
+            <div class="h">Next city</div>
+            <div><b>Which city should the CLI support next?</b></div>
+            <div class="sp"><span class="num">1</span>: <b>Osaka</b>  <span class="dim">Major Kansai hub, Japan</span></div>
+            <div><span class="num">2</span>: <b>Sapporo</b>  <span class="dim">Snowy northern Japan city</span></div>
+            <div><span class="num">3</span>: <b>Daegu</b>  <span class="dim">Hot inland Korean city</span></div>
+            <div class="sp">Other: <span class="dim">double-click to type</span></div>
+            <div><span class="num">9</span>: <span class="dim">Default dialog</span></div>
+          </div>
+        </div>
+        <p class="note" lang="en">A card right above the prompt. With an empty prompt, pick by number: <code>1</code>–<code>8</code> the options, <code>0</code> submit, <code>9</code> the default dialog. Hover an option for its preview.</p>
+        <p class="note" lang="ko">입력창 바로 위의 카드입니다. 입력창이 비어 있으면 번호로 고릅니다: <code>1</code>–<code>8</code> 선택지, <code>0</code> 제출, <code>9</code> 기본 창. 선택지에 마우스를 올리면 미리보기가 보입니다.</p></div>
+      </li>
+
+      <li class="spec">
+        <h3><span lang="en">End of turn</span><span lang="ko">턴 끝</span></h3>
+        <div><span class="tag">CLAUDE CODE</span><div class="mini stock term">
+          <div class="row dim"><span class="clay">✻</span><span>Baked for 12s</span></div>
+        </div></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div><span class="tag">DESK-LOOK</span><div class="mini desk term">
+          <p class="k-copy">⧉ copy  ❝ quote</p>
+          <p class="dim">✻ Baked for 12s · done 10:24 AM</p>
+          <div class="k-card">
+            <span><b>Edited 2 files</b></span><span class="chip a">+25</span><span class="chip d">−4</span>
+            <span>todo.py</span><span class="chip a">+17</span><span class="chip d">−4</span>
+            <span>README.md</span><span class="chip a">+8</span><span class="chip d">−0</span>
+          </div>
+        </div>
+        <p class="note" lang="en">A card of the files the turn edited; click a row to open that file in the diff pane. <code>⧉ copy</code> copies the answer and <code>❝ quote</code> puts your selection into the prompt as a quote.</p>
+        <p class="note" lang="ko">이번 턴에 고친 파일 카드입니다. 파일 줄을 누르면 diff 패널에서 그 파일이 열립니다. <code>⧉ copy</code> 는 답을 복사하고, <code>❝ quote</code> 는 고른 글을 입력창에 인용으로 넣습니다.</p></div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ═══ Around the prompt ═══ -->
+<section class="sec" id="prompt" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span lang="en">around the prompt</span><span lang="ko">입력창 둘레</span></p>
+      <h2 class="h2"><span lang="en">The whole session, one glance above the prompt</span><span lang="ko">입력창 바로 위에서 세션이 한눈에</span></h2>
+      <p class="lead" lang="en">A gray chin band like the one under the desktop prompt, chips for the pull request, context and background tasks, and a progress band while a turn runs. Each chip opens its pane.</p>
+      <p class="lead" lang="ko">데스크톱 입력창 아래 턱 같은 회색 띠, PR·컨텍스트·백그라운드 작업 칩, 턴이 도는 동안의 진행 띠가 있습니다. 칩을 누르면 그 패널이 열립니다.</p>
+    </div>
+
+    <div class="window">
+      <div class="show term" id="show">
+        <div class="show-inner">
+          <div><span class="spin" data-dots>●··</span> Running…  <span class="dim" data-tick="149">2m 29s</span></div>
+          <div class="band-up sp" data-k="up">
+            <span><span class="c-ed">✓</span> 2</span>
+            <span><span class="clay">◉</span> Verifying <span class="dim" data-tick="482">8m 2s</span></span>
+            <span class="dim">○ Clean up +1</span>
+            <span class="grow"></span>
+            <span class="dim">2/5</span>
+          </div>
+          <div class="band-low" data-k="low">▶ Verify cursor reads · <span data-tick="482">8m 2s</span> · java 97%</div>
+          <div class="k-row" style="margin-top:.5em">
+            <div class="k-chin">
+              <span data-k="repo"><svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.6l1.6 1.6h5.8A1.5 1.5 0 0 1 15 5.1v7.4a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5z"/></svg>weather-cli  <svg viewBox="0 0 16 16"><path d="M5 2.2a1.8 1.8 0 0 0-.75 3.44v4.72a1.8 1.8 0 1 0 1.5 0V9.3c.4.3.9.45 1.45.45h1.6a2.4 2.4 0 0 0 2.35-1.9 1.8 1.8 0 1 0-1.53-.06 .9.9 0 0 1-.82.46H7.2c-.8 0-1.45-.65-1.45-1.45V5.64A1.8 1.8 0 0 0 5 2.2z"/></svg>feat/hourly</span>
+              <span class="grow"></span>
+              <span data-k="diff"><span class="chip a">+48</span><span class="chip d">−6</span></span>
+            </div>
+            <div class="k-chips">
+              <span class="pill" data-k="pr">#12 <span class="c-ed">✓</span> 5/5</span>
+              <span class="pill" data-k="ctx">◑ 62%</span>
+              <span class="pill" data-k="tasks">⋯ 2</span>
+              <span class="pill" data-k="slack">✉ 3</span>
+            </div>
+          </div>
+          <div class="inputbox" style="margin-top:.5em"><span>❯</span><span><span class="cur"></span></span></div>
+          <div class="modeline"><span class="k-mode">⏵⏵ accept edits on</span> <span class="dim">(shift+tab to cycle)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <ul class="legend" id="legend">
+      <li data-for="up"><span class="key">✓ 2  ◉ Verifying</span><span><span lang="en">The current step: the task list, or the first sentence Claude wrote before its latest call (Claude 5 models).</span><span lang="ko">지금 단계: 할 일 목록, 또는 Claude 가 마지막 호출 전에 쓴 첫 문장 (Claude 5 모델).</span></span></li>
+      <li data-for="low"><span class="key">▶ … · java 97%</span><span><span lang="en">What runs now: the tool call, its time and, for a shell command, the program it started and its CPU. Click for /desk-activity.</span><span lang="ko">지금 도는 일: 도구 호출과 시간, 셸 명령이면 띄운 프로그램과 CPU. 누르면 /desk-activity.</span></span></li>
+      <li data-for="repo"><span class="key">weather-cli  feat/hourly</span><span><span lang="en">Repository and branch, on the band like the desktop prompt's chin.</span><span lang="ko">저장소와 브랜치, 데스크톱 입력창 턱처럼.</span></span></li>
+      <li data-for="diff"><span class="key">+48 −6</span><span><span lang="en">Changed lines. Click for /desk-diff; <code>✎ N</code> appears here while line comments wait.</span><span lang="ko">바뀐 줄 수. 누르면 /desk-diff, 줄 댓글이 기다리는 동안 여기 <code>✎ N</code> 이 붙습니다.</span></span></li>
+      <li data-for="pr"><span class="key">#12 ✓ 5/5</span><span><span lang="en">The branch's PR or MR: checks, <code>✗</code> failing, <code>◆</code> unresolved threads. Click for /desk-pr.</span><span lang="ko">브랜치의 PR·MR: 체크, <code>✗</code> 실패, <code>◆</code> 안 풀린 리뷰 스레드. 누르면 /desk-pr.</span></span></li>
+      <li data-for="ctx"><span class="key">◑ 62%</span><span><span lang="en">Context, once it passes half. Click for /desk-context.</span><span lang="ko">컨텍스트, 절반을 넘으면. 누르면 /desk-context.</span></span></li>
+      <li data-for="tasks"><span class="key">⋯ 2</span><span><span lang="en">Background tasks still running. Click for /desk-tasks.</span><span lang="ko">아직 도는 백그라운드 작업. 누르면 /desk-tasks.</span></span></li>
+      <li data-for="slack"><span class="key">✉ 3</span><span><span lang="en">Unread Slack messages, with the desk-slack plugin.</span><span lang="ko">안 읽은 Slack 메시지, desk-slack 플러그인이 있으면.</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══ Panes ═══ -->
+<section class="sec" id="panes" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span lang="en">side panes</span><span lang="ko">오른쪽 패널</span></p>
+      <h2 class="h2"><span lang="en">Seven panes beside the conversation</span><span lang="ko">대화 옆 패널 일곱 개</span></h2>
+      <p class="lead" lang="en">Open one with its command or a chip. They open at once, even while Claude is working, without queueing or stopping the turn. <code>/desk-fold</code> folds them away and back.</p>
+      <p class="lead" lang="ko">명령이나 칩으로 엽니다. Claude 가 일하는 중에도 턴을 멈추거나 줄 세우지 않고 바로 열립니다. <code>/desk-fold</code> 로 접었다 폅니다.</p>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Panes">
+      <button role="tab" id="t-diff" aria-controls="p-diff" aria-selected="true">/desk-diff</button>
+      <button role="tab" id="t-activity" aria-controls="p-activity" aria-selected="false" tabindex="-1">/desk-activity</button>
+      <button role="tab" id="t-tasks" aria-controls="p-tasks" aria-selected="false" tabindex="-1">/desk-tasks</button>
+      <button role="tab" id="t-pr" aria-controls="p-pr" aria-selected="false" tabindex="-1">/desk-pr</button>
+      <button role="tab" id="t-preview" aria-controls="p-preview" aria-selected="false" tabindex="-1">/desk-preview</button>
+      <button role="tab" id="t-context" aria-controls="p-context" aria-selected="false" tabindex="-1">/desk-context</button>
+      <button role="tab" id="t-sessions" aria-controls="p-sessions" aria-selected="false" tabindex="-1">/desk-sessions</button>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-diff" aria-labelledby="t-diff">
+      <div class="txt">
+        <h3><span lang="en">Diffs</span><span lang="ko">diff</span></h3>
+        <p lang="en">Uncommitted changes, the whole branch, or per commit, drawn like the desktop diff panel: a header band per file, full-width green and red rows, changed words in a darker tint. Only rows near the view are drawn, so a diff of thousands of lines scrolls as fast as a short one.</p>
+        <p lang="ko">커밋 안 한 변경, 브랜치 전체, 커밋별 diff 를 데스크톱 diff 패널처럼 그립니다: 파일마다 머리 띠, 폭을 채우는 초록·빨강 줄, 바뀐 낱말은 더 진하게. 보이는 근처 줄만 그려서 수천 줄짜리 diff 도 짧은 것처럼 스크롤됩니다.</p>
+        <ul class="keys">
+          <li><kbd>n</kbd> <kbd>p</kbd> <span lang="en">next or previous file</span><span lang="ko">다음·이전 파일</span></li>
+          <li><kbd>f</kbd> <span lang="en">filter files by path</span><span lang="ko">경로로 파일 거르기</span></li>
+          <li><kbd>z</kbd> <span lang="en">unfold or fold every file</span><span lang="ko">모든 파일 펴기·접기</span></li>
+          <li><kbd>v</kbd> <span lang="en">compare against another base branch</span><span lang="ko">다른 기준 브랜치와 비교</span></li>
+        </ul>
+      </div>
+      <div class="dock"><div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="c"></i></div><div class="pane"><img class="crop" src="diff.png" width="1728" height="1650" loading="lazy" alt="The /desk-diff pane in Branch scope: files folded or expanded, with syntax and word highlighting"></div></div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-activity" aria-labelledby="t-activity" hidden>
+      <div class="txt">
+        <h3><span lang="en">What ran this turn</span><span lang="ko">이번 턴에 돈 일</span></h3>
+        <p lang="en">Time bars for the main conversation, each agent the turn started and its background shells, then the flow of Claude's notes and calls with the time since the turn began. Click the lower line of the progress band to open it.</p>
+        <p lang="ko">메인 대화, 턴이 띄운 에이전트, 백그라운드 셸마다 시간 막대가 있고, 그 아래 Claude 의 설명 글과 호출이 턴 시작부터 잰 시간과 함께 흐릅니다. 진행 띠 아랫줄을 눌러 엽니다.</p>
+        <ul class="keys">
+          <li><span class="term glyphs"><span class="c-ex">░</span> <span class="c-ed">▓</span> <span class="c-te">▒</span> <span class="c-cm">━</span> <span class="c-re">─</span></span> <span lang="en">explore, edit, test, command, responding</span><span lang="ko">살펴보기, 고치기, 테스트, 명령, 답하기</span></li>
+        </ul>
+      </div>
+      <div class="dock"><div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="c"></i></div><div class="pane rec"><div class="term">
+        <div><b>This turn</b> <span class="dim">· 4m 12s</span></div>
+        <div class="bars sp"><span>main</span><span><span class="c-ex">░░░</span><span class="c-ed">▓▓▓▓</span><span class="c-te">▒▒</span><span class="c-cm">━━━━━━━━━</span><span class="c-re">──────</span><span class="c-ed">▓▓</span><span class="c-te">▒▒▒</span><span class="c-re">──</span></span><span>agent</span><span>     <span class="c-ag">━━━━━━━━━━━━━━</span></span><span>shells</span><span>          <span class="c-cm">━━━━━━━━━━━━━━━━━━</span></span></div>
+        <div class="flow sp"><span class="t">0:00</span><span class="clay">◉</span><span>Reading the retry code first.</span><span class="t">0:03</span><span></span><span class="dim">Read 6 · Grep 3</span><span class="t">0:41</span><span></span><span>src/retry.ts <span class="chip a">+8</span><span class="chip d">−1</span></span><span class="t">1:02</span><span class="c-ed">✓</span><span>npm test <span class="dim">6s</span></span><span class="t">1:10</span><span class="clay">◉</span><span>Now running it on the staging config.</span><span class="t">1:12</span><span class="c-cm">▶</span><span>npm run e2e <span class="dim">3m 0s</span></span></div>
+        <div class="sp"><b>Agents</b></div>
+        <div class="dim">general-purpose · Check API parameters · 3 tool uses · 6s</div>
+        <div class="sp"><b>Background</b></div>
+        <div class="dim">npm run dev · listening on :8765</div>
+      </div></div></div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-tasks" aria-labelledby="t-tasks" hidden>
+      <div class="txt">
+        <h3><span lang="en">Background tasks</span><span lang="ko">백그라운드 작업</span></h3>
+        <p lang="en">This session's agents, background shells and monitors, under Running and Done. Read an agent's transcript, open it in the main view to talk to it, or stop a task with a second press.</p>
+        <p lang="ko">이 세션의 에이전트·백그라운드 셸·모니터를 실행 중과 끝남으로 나눕니다. 에이전트 기록을 읽거나, 메인 화면에 열어 그 에이전트와 이야기하거나, 두 번 눌러 멈출 수 있습니다.</p>
+        <ul class="keys">
+          <li><kbd>z</kbd> <span lang="en">fold Done</span><span lang="ko">끝남 접기</span></li>
+          <li><kbd>c</kbd> <span lang="en">clear finished tasks</span><span lang="ko">끝난 작업 치우기</span></li>
+          <li><kbd>b</kbd> <span lang="en">back to the list</span><span lang="ko">목록으로</span></li>
+        </ul>
+      </div>
+      <div class="dock"><div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="c"></i></div><div class="pane"><img src="tasks.png" width="1520" height="1320" loading="lazy" alt="The /desk-tasks pane: a running agent, monitor and background shell, and a finished shell under Done"></div></div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-pr" aria-labelledby="t-pr" hidden>
+      <div class="txt">
+        <h3><span lang="en">Pull request</span><span lang="ko">PR</span></h3>
+        <p lang="en">The current branch's pull request through <code>gh</code>, or merge request through <code>glab</code>: state, failing and running checks, unresolved review threads. <code>Hand to Claude</code> fills the prompt with a failing check or a thread. <code>Merge</code> asks for a second press, and only at the head commit the pane showed.</p>
+        <p lang="ko">지금 브랜치의 PR(<code>gh</code>) 이나 MR(<code>glab</code>): 상태, 실패·진행 중 체크, 안 풀린 리뷰 스레드. <code>Hand to Claude</code> 는 실패한 체크나 스레드를 입력창에 채웁니다. <code>Merge</code> 는 두 번 눌러야 하고, 패널이 보여 준 head 커밋에서만 머지합니다.</p>
+        <ul class="keys"><li><kbd>r</kbd> <span lang="en">read the PR again</span><span lang="ko">PR 다시 읽기</span></li></ul>
+      </div>
+      <div class="dock"><div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="c"></i></div><div class="pane rec"><div class="term">
+        <div><b>#12 Retry with backoff</b>  <span class="st need">Open</span></div>
+        <div class="dim">main ← feat/retry  <span class="chip a">+48</span><span class="chip d">−6</span></div>
+        <div class="dim">Review required · Mergeable</div>
+        <div class="sp"><b>Checks</b> <span class="dim">4/5</span></div>
+        <div style="padding-left:2ch"><span class="clay">●</span> e2e (ubuntu-latest) <span class="dim">running 2m</span></div>
+        <div style="padding-left:2ch" class="dim"><span class="c-ed">✓</span> 4 passed ›</div>
+        <div class="sp"><b>Review threads</b> <span class="dim">1</span></div>
+        <div style="padding-left:2ch"><span class="c-ag">◆</span> src/retry.ts:19</div>
+        <div style="padding-left:4ch" class="dim">Cap the delay at 5 seconds so a long run of failures never waits minutes</div>
+        <div style="padding-left:4ch;margin-top:.3em"><span class="btn-t">Hand to Claude</span></div>
+        <div class="sp"><span class="btn-t dark">Merge when checks pass</span></div>
+      </div></div></div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-preview" aria-labelledby="t-preview" hidden>
+      <div class="txt">
+        <h3><span lang="en">Markdown preview</span><span lang="ko">마크다운 미리보기</span></h3>
+        <p lang="en">A document Claude writes in a turn opens here when the turn ends, drawn with the transcript's own renderer: bordered tables, mermaid diagrams, alert boxes, front matter as a small key/value box. It follows later edits of the file.</p>
+        <p lang="ko">Claude 가 한 턴에 쓴 문서는 턴이 끝나면 여기 열립니다. 대화와 같은 렌더러로 테두리 표, mermaid 그림, 알림 상자, front matter 키·값 상자를 그리고, 그 뒤 고친 내용도 따라갑니다.</p>
+        <ul class="keys">
+          <li><kbd>d</kbd> <span lang="en">open the document in the diff pane</span><span lang="ko">문서를 diff 패널에서 열기</span></li>
+          <li><kbd>o</kbd> <span lang="en">open it full-window in your browser</span><span lang="ko">브라우저에서 전체 창으로 열기</span></li>
+        </ul>
+      </div>
+      <div class="dock"><div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="c"></i></div><div class="pane"><img class="crop" src="preview.png" width="2016" height="1850" loading="lazy" alt="The /desk-preview pane: a front matter box, a warning box, a table and a mermaid flowchart"></div></div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-context" aria-labelledby="t-context" hidden>
+      <div class="txt">
+        <h3><span lang="en">Context and usage</span><span lang="ko">컨텍스트와 사용량</span></h3>
+        <p lang="en">Replaces the <code>/context</code> grid. A bar in each category's own color, each category with a bar of its own, and what is loaded into the context: MCP tools by server, memory files, the skill listing and custom agents, each group folded until you click it.</p>
+        <p lang="ko"><code>/context</code> 격자를 대신합니다. 항목마다 제 색으로 칠한 막대, 항목별 가로 막대, 그리고 컨텍스트에 실린 것(서버별 MCP 도구, 메모리 파일, 스킬 목록, 커스텀 에이전트)을 묶음으로 접어 두었다가 누르면 펼칩니다.</p>
+        <p lang="en">Below that, this session: how full the context was at the end of each turn, with <code>▲</code> where it was compacted, the share of input read from cache, the cost of each turn, and the 5-hour and 7-day limits.</p>
+        <p lang="ko">그 아래는 이 세션입니다: 턴이 끝날 때마다 컨텍스트가 찬 정도와 압축한 자리 <code>▲</code>, 캐시에서 읽은 입력의 몫, 턴마다 비용, 5시간·7일 한도.</p>
+        <p lang="en">The breakdown is calculated when the pane opens and on <kbd>r</kbd>. The session graph uses what each turn already reports, and a closed pane does nothing.</p>
+        <p lang="ko">항목별 내역은 패널을 열 때와 <kbd>r</kbd> 때 계산합니다. 세션 그래프는 턴마다 이미 오는 값으로 그리고, 닫힌 패널은 아무 일도 하지 않습니다.</p>
+        <ul class="keys"><li><kbd>r</kbd> <span lang="en">recalculate the breakdown</span><span lang="ko">내역 다시 계산</span></li></ul>
+      </div>
+      <div class="dock tall"><div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="c"></i></div><div class="pane ctx"><img src="context.png" width="1310" height="1530" loading="lazy" alt="The /desk-context pane: a context bar in category colors, per-category bars, what is loaded into the context, a graph of this session with a compaction marker, cache, cost and usage limits"></div></div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="p-sessions" aria-labelledby="t-sessions" hidden>
+      <div class="txt">
+        <h3><span lang="en">Recent sessions</span><span lang="ko">최근 세션</span></h3>
+        <p lang="en">Recent sessions grouped by project, with search. Pick one and this window switches to it, moving to its folder first when it lives elsewhere. Sessions open right now carry a chip: working, background, needs input, open elsewhere.</p>
+        <p lang="ko">프로젝트별로 묶은 최근 세션과 검색. 하나를 고르면 지금 창이 그 세션으로 바뀌고, 다른 폴더라면 먼저 그 폴더로 옮겨 갑니다. 지금 열려 있는 세션에는 working, background, needs input, open elsewhere 칩이 붙습니다.</p>
+        <ul class="keys">
+          <li><kbd>f</kbd> <span lang="en">search</span><span lang="ko">검색</span></li>
+          <li><kbd>z</kbd> <span lang="en">collapse or expand every group</span><span lang="ko">모든 묶음 접기·펴기</span></li>
+        </ul>
+      </div>
+      <div class="dock"><div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="c"></i></div><div class="pane rec"><div class="term">
+        <div class="search">⌕ Search sessions</div>
+        <div class="sp"><b>⌄ weather-cli</b> <span class="dim">3</span></div>
+        <div class="srow"><span>Add an hourly forecast flag</span><span class="dim">12m</span><span class="st work">working</span></div>
+        <div class="srow"><span>Retry with backoff</span><span class="dim">2h</span><span class="st bg">background</span></div>
+        <div class="srow"><span>Fix the Busan coordinates</span><span class="dim">1d</span><span></span></div>
+        <div class="sp"><b>› todo-app</b> <span class="dim">2</span></div>
+        <div><b>› shop</b> <span class="dim">5</span></div>
+        <div><b>› dotfiles</b> <span class="dim">4</span></div>
+      </div></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Line comments ═══ -->
+<section class="sec" id="comments" style="padding-top:0">
+  <div class="wrap split">
+    <div class="shot"><img src="comments.png" width="2016" height="1380" loading="lazy" alt="Line comments in /desk-diff: a kept comment on lines 19–20, an open comment field on line 12, picked line numbers in blue"></div>
+    <div style="display:grid;gap:26px;min-width:0">
+      <div class="sec-head" style="margin:0">
+        <p class="eyebrow"><span lang="en">diff line comments</span><span lang="ko">diff 줄 댓글</span></p>
+        <h2 class="h2"><span lang="en">Comment on any diff line</span><span lang="ko">diff 줄마다 댓글</span></h2>
+        <p class="lead" lang="en">Like the desktop diff panel. Claude reads your comments with your next prompt.</p>
+        <p class="lead" lang="ko">데스크톱 diff 패널처럼. 남긴 댓글은 다음 프롬프트와 함께 Claude 가 읽습니다.</p>
+      </div>
+      <ol class="steps">
+        <li><div><span lang="en">Click a line number in <code>/desk-diff</code>.</span><span lang="ko"><code>/desk-diff</code> 에서 줄 번호를 누릅니다.</span></div></li>
+        <li><div><span lang="en">Click another line number in the same file for a range, type, and press Enter.</span><span lang="ko">같은 파일의 다른 줄 번호를 누르면 범위가 됩니다. 쓰고 Enter 를 누릅니다.</span></div></li>
+        <li><div><span lang="en">Kept comments wait as <code>✎ N</code> on the chin band, then go with your next prompt: the file, the lines and your note.</span><span lang="ko">남긴 댓글은 턱 띠에 <code>✎ N</code> 으로 기다리다가 다음 프롬프트와 함께 갑니다: 파일, 줄, 댓글.</span></div></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Demo ═══ -->
+<section class="sec" id="demo" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span lang="en">a session, recorded</span><span lang="ko">한 세션 녹화</span></p>
+      <h2 class="h2"><span lang="en">Watch it run</span><span lang="ko">돌아가는 모습</span></h2>
+    </div>
+    <figure class="demo" style="margin:0">
+      <div class="shot"><video id="demo-video" src="demo.mp4" poster="demo-poster.jpg" width="1600" height="872" autoplay muted loop playsinline preload="metadata" aria-label="desk-look in action: the progress band while Claude works, tool calls folded into one line, the edited-files card, the Markdown preview opening by itself, a line comment in the diff pane sent with the next prompt, and the context pane"></video></div>
+      <figcaption lang="en">The progress band while Claude works, tool calls folding into one line, the edited-files card, the Markdown preview opening by itself, a line comment in the diff pane that goes with the next prompt, and the context pane with the session so far. Model work runs at 4× speed.</figcaption>
+      <figcaption lang="ko">Claude 가 일하는 동안의 진행 띠, 한 줄로 접히는 도구 호출, 고친 파일 카드, 저절로 열리는 마크다운 미리보기, 다음 프롬프트와 함께 가는 diff 줄 댓글, 지금까지의 세션을 보여 주는 컨텍스트 패널. 모델이 일하는 구간은 4배속입니다.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ═══ Fits your setup ═══ -->
+<section class="sec" id="fit" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span lang="en">your setup</span><span lang="ko">쓰던 환경 그대로</span></p>
+      <h2 class="h2"><span lang="en">Fits the tools you already use</span><span lang="ko">쓰던 도구에 그대로 맞습니다</span></h2>
+    </div>
+    <div class="cols">
+      <div>
+        <h3>GitHub · GitLab</h3>
+        <p lang="en">Pull requests through <code>gh</code>, merge requests through <code>glab</code>. Checks, pipeline jobs and review threads show either way, and the chip keeps polling while a check is still running.</p>
+        <p lang="ko">PR 은 <code>gh</code>, MR 은 <code>glab</code> 으로 읽습니다. 체크, 파이프라인 잡, 리뷰 스레드가 어느 쪽이든 보이고, 체크가 도는 동안에는 칩이 계속 새로 읽습니다.</p>
+      </div>
+      <div>
+        <h3><span lang="en">Asana and Slack, if you want them</span><span lang="ko">Asana·Slack 은 필요할 때만</span></h3>
+        <p lang="en"><a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-asana">desk-asana</a> and <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-slack">desk-slack</a> are separate plugins in the same marketplace. Install only the one you use.</p>
+        <p lang="ko"><a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-asana">desk-asana</a>·<a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-slack">desk-slack</a> 은 같은 마켓의 별도 플러그인입니다. 쓰는 것만 설치하세요.</p>
+        <div class="cmd"><code>/plugin install desk-asana@cc-desktop-mod</code><button class="copy" type="button" data-copy="/plugin install desk-asana@cc-desktop-mod">⧉ copy</button></div>
+        <div class="cmd"><code>/plugin install desk-slack@cc-desktop-mod</code><button class="copy" type="button" data-copy="/plugin install desk-slack@cc-desktop-mod">⧉ copy</button></div>
+      </div>
+      <div>
+        <h3><span lang="en">Terminals</span><span lang="ko">터미널</span></h3>
+        <p lang="en">Round bubble corners and image thumbnails draw in kitty, Ghostty and iTerm2 3.5+, and through tmux 3.3+ and herdr. The gray fills follow the <a href="https://omarchy.org">omarchy</a> theme; elsewhere bubbles get a rounded border.</p>
+        <p lang="ko">둥근 말풍선 모서리와 이미지 미리보기는 kitty, Ghostty, iTerm2 3.5+ 에서, tmux 3.3+·herdr 안에서도 그립니다. 회색 채움은 <a href="https://omarchy.org">omarchy</a> 테마를 따르고, 그 밖에서는 말풍선이 둥근 테두리가 됩니다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Install ═══ -->
+<section class="sec install" id="install">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span lang="en">install</span><span lang="ko">설치</span></p>
+      <h2 class="h2"><span lang="en">One line at the prompt</span><span lang="ko">입력창에 한 줄</span></h2>
+    </div>
+    <div class="install-grid">
+    <ol class="steps">
+      <li><div>
+        <span lang="en">At the prompt of a Claude Code session, run:</span><span lang="ko">Claude Code 세션 입력창에서 실행합니다:</span>
+        <div class="cmd"><span class="pr" aria-hidden="true">❯</span><code>/plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod</code><button class="copy" type="button" data-copy="/plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod">⧉ copy</button></div>
+      </div></li>
+      <li><div><span lang="en">Answer <kbd>y</kbd> when asked to add the marketplace, and pick the user scope.</span><span lang="ko">마켓을 추가할지 물으면 <kbd>y</kbd>, 범위는 user 를 고릅니다.</span></div></li>
+      <li><div>
+        <span lang="en">Later, update with <code>/desk-update</code>. It updates desk-asana and desk-slack too, and reloads plugins when a new version came in.</span><span lang="ko">업데이트는 <code>/desk-update</code>. desk-asana·desk-slack 도 함께 올리고, 새 버전이 오면 플러그인을 다시 불러옵니다.</span>
+      </div></li>
+    </ol>
+    <div class="after">
+      <p lang="en">Settings live in <code>/config</code>: search for desk-look to set the language, the bubble side, the context chip, how long the progress band stays, and more. <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod#settings">Every setting</a></p>
+      <p lang="ko">설정은 <code>/config</code> 에서 desk-look 을 찾으면 됩니다. 언어, 말풍선 위치, 컨텍스트 칩, 진행 띠가 남는 시간 등을 고릅니다. <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/blob/main/README.ko.md#설정">설정 전체 보기</a></p>
+      <p lang="en">desk-look follows the latest Claude Code release and is tested there. On an older version, parts the engine can't draw yet fall back to its default look.</p>
+      <p lang="ko">desk-look 은 최신 Claude Code 를 따르고 거기서 시험합니다. 옛 버전에서는 엔진이 아직 못 그리는 부분이 기본 모양으로 돌아갑니다.</p>
+    </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <span>desk-look · MIT · <a href="https://github.com/KyongSik-Yoon">KyongSik-Yoon</a></span>
+    <nav aria-label="Links">
+      <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod">GitHub</a>
+      <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/releases"><span lang="en">Releases</span><span lang="ko">릴리즈</span></a>
+      <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/issues"><span lang="en">Issues</span><span lang="ko">이슈</span></a>
+      <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod#readme">README</a>
+      <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/blob/main/README.ko.md">README (한국어)</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  var titles = { en: 'desk-look for Claude Code', ko: 'desk-look — Claude Code 를 데스크톱 앱처럼' }
+
+  // Language toggle
+  function setLang(lang) {
+    root.dataset.lang = lang
+    root.lang = lang
+    document.title = titles[lang]
+    document.querySelectorAll('[data-set-lang]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.setLang === lang)) })
+  }
+  document.querySelectorAll('[data-set-lang]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      setLang(b.dataset.setLang)
+      try { localStorage.setItem('desk-look-site-lang', b.dataset.setLang) } catch (e) {}
+    })
+  })
+  setLang(root.dataset.lang === 'ko' ? 'ko' : 'en')
+
+  // Copy buttons
+  document.querySelectorAll('[data-copy]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.dataset.copy
+      var done = function () {
+        btn.dataset.done = ''
+        btn.textContent = '✓ copied'
+        setTimeout(function () { delete btn.dataset.done; btn.textContent = '⧉ copy' }, 1600)
+      }
+      var select = function () {
+        var code = btn.parentElement.querySelector('code')
+        var range = document.createRange()
+        range.selectNodeContents(code)
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range)
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, select)
+      else select()
+    })
+  })
+
+  // Hero: wipe between the stock drawing and desk-look's
+  var stage = document.querySelector('.hero-stage')
+  var screen = document.getElementById('screen')
+  var stock = screen.querySelector('.layer-stock')
+  var desk = screen.querySelector('.layer-desk')
+  var p = 1, frame = 0, touched = false
+  function setP(v) {
+    p = v
+    screen.style.setProperty('--p', v.toFixed(4))
+    screen.classList.toggle('sweeping', v > 0.002 && v < 0.998)
+  }
+  function show(state, duration) {
+    var target = state === 'desk' ? 1 : 0
+    stage.dataset.state = state
+    stock.setAttribute('aria-hidden', String(state === 'desk'))
+    desk.setAttribute('aria-hidden', String(state !== 'desk'))
+    stage.querySelectorAll('[data-to]').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.to === state)) })
+    cancelAnimationFrame(frame)
+    if (reduce) { setP(target); return }
+    var from = p, start = performance.now(), dur = duration || 950
+    var step = function (now) {
+      var k = Math.min(1, (now - start) / dur)
+      var e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2
+      setP(from + (target - from) * e)
+      if (k < 1) frame = requestAnimationFrame(step)
+    }
+    frame = requestAnimationFrame(step)
+  }
+  stage.querySelectorAll('[data-to]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      touched = true
+      stage.querySelector('.stage-cap').setAttribute('aria-live', 'polite')
+      show(b.dataset.to)
+    })
+  })
+  // Once, after the page settles: show what the terminal looks like without desk-look, then draw it back.
+  if (!reduce && 'IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      if (!entries[0].isIntersecting) return
+      io.disconnect()
+      setTimeout(function () {
+        if (touched) return
+        show('stock', 1100)
+        setTimeout(function () { if (!touched) show('desk', 1300) }, 2900)
+      }, 1600)
+    }, { threshold: .45 })
+    io.observe(screen)
+  }
+
+  // The recorded session plays by itself, unless the reader asked for less motion.
+  var video = document.getElementById('demo-video')
+  if (video && reduce) {
+    video.removeAttribute('autoplay')
+    video.pause()
+    video.controls = true
+  }
+
+  // Folded tool line in the specimens
+  document.querySelectorAll('.k-foldbtn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var open = btn.getAttribute('aria-expanded') !== 'true'
+      btn.setAttribute('aria-expanded', String(open))
+      document.getElementById(btn.getAttribute('aria-controls')).hidden = !open
+    })
+  })
+
+  // Legend ↔ chips
+  var legend = document.getElementById('legend')
+  function light(key, on) {
+    document.querySelectorAll('[data-k="' + key + '"], #legend [data-for="' + key + '"]').forEach(function (el) { el.classList.toggle('lit', on) })
+  }
+  legend.querySelectorAll('[data-for]').forEach(function (li) {
+    li.addEventListener('mouseenter', function () { light(li.dataset.for, true) })
+    li.addEventListener('mouseleave', function () { light(li.dataset.for, false) })
+  })
+  document.querySelectorAll('#show [data-k]').forEach(function (el) {
+    el.addEventListener('mouseenter', function () { light(el.dataset.k, true) })
+    el.addEventListener('mouseleave', function () { light(el.dataset.k, false) })
+  })
+
+  // Spinner dots and clocks, the way desk-look draws them
+  if (!reduce) {
+    var dots = document.querySelectorAll('[data-dots]'), n = 0
+    setInterval(function () {
+      n = (n + 1) % 3
+      var s = ['·', '·', '·']; s[n] = '●'
+      dots.forEach(function (d) { d.textContent = s.join('') })
+    }, 500)
+    var ticks = document.querySelectorAll('[data-tick]')
+    setInterval(function () {
+      ticks.forEach(function (t) {
+        var v = +t.dataset.tick + 1
+        t.dataset.tick = v
+        t.textContent = Math.floor(v / 60) + 'm ' + (v % 60) + 's'
+      })
+    }, 1000)
+  }
+
+  // Pane tabs
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'))
+  function select(tab, focus) {
+    tabs.forEach(function (t) {
+      var on = t === tab
+      t.setAttribute('aria-selected', String(on))
+      t.tabIndex = on ? 0 : -1
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on
+    })
+    if (focus) tab.focus()
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { select(t) })
+    t.addEventListener('keydown', function (e) {
+      var j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : null
+      if (j === null) return
+      e.preventDefault()
+      select(tabs[(j + tabs.length) % tabs.length], true)
+    })
+  })
+})()
+</script>
+</body>
+</html>

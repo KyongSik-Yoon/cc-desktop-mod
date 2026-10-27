@@ -121,6 +121,7 @@ export type UsageInfo = {
 }
 
 // /context 와 같은 항목별 내역(로컬 추정). compactAt 은 자동 압축이 도는 토큰 수, 꺼져 있으면 null.
+// 아래 목록들은 0.62.0 에 더했다: 다시 올리기 전 atom 에는 없으니 읽는 쪽이 undefined 를 견딘다.
 export type UsageBreakdown = {
   categories: Array<{ name: string; tokens: number; kind: string; color: string }>
   total: number
@@ -128,7 +129,19 @@ export type UsageBreakdown = {
   compactAt: number | null
   model: string
   at: number
+  memoryFiles?: Array<{ path: string; type: string; tokens: number }>
+  mcpServers?: Array<{ name: string; tools: number; onDemand: number; tokens: number }>
+  skills?: { included: number; total: number; tokens: number; list: Array<{ name: string; tokens: number }> } | null
+  agents?: Array<{ name: string; tokens: number }>
 }
+
+// 입력 쪽 토큰 세 갈래와 출력.
+export type TokenSplit = { input: number; cacheRead: number; cacheWrite: number; output: number }
+
+// 컨텍스트 패널의 세션 흐름. 메인 턴이 끝날 때 칩을 위해 이미 읽은 값을 한 점씩 적는다(따로 묻지 않는다).
+// costUsd 는 그때까지의 세션 비용 합계, turn 은 그 턴의 토큰(엔진이 못 셌으면 null).
+export type ContextPoint = { at: number; tokens: number | null; percent: number | null; costUsd: number | null; turn: TokenSplit | null }
+export type ContextCompaction = { at: number; trigger: string; before: number | null; after: number | null }
 
 // PR 바: 지금 브랜치의 GitHub PR(gh) 또는 GitLab MR(glab). checks 는 체크(GitLab 은 파이프라인 job) 하나하나,
 // threads 는 안 풀린 리뷰 스레드(GitLab 은 토론). added·removed 는 모르면 null(GitLab 은 로컬 git 으로 센다).

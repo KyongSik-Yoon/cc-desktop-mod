@@ -1901,7 +1901,7 @@ test('말풍선 오른쪽 설정', { options: { bubbleSide: 'right', language: '
   await row.unmount()
 })
 
-import { contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip } from '../hooks/usage'
+import { barRuns, cacheShares, chartColumns, chartRows, chartTop, columnOf, compactionPoints, contextChipMode, hhmm, meterBar, meterLevel, resetIn, ring, showsChip, sparkline, toBreakdown, turnCosts } from '../hooks/usage'
 
 const USAGE = (percent: number) => ({
   startedAt: 0,
@@ -2017,6 +2017,148 @@ test('컨텍스트 칩 always 설정', { options: { contextChip: 'always', langu
   const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
   expect(await band.find({ type: 'Button', key: 'context-chip' })).toBeDefined()
   await band.unmount()
+})
+
+test('컨텍스트 막대·그래프 순수 함수', () => {
+  // 칸 안에서 조각이 바뀌면 왼쪽 조각 색 글자를 오른쪽 조각 바탕에(1/8 칸)
+  expect(barRuns([{ value: 3, color: 'a' }, { value: 5, color: 'b' }], 8, 1)).toEqual([{ text: '▍', color: 'a', background: 'b' }])
+  // 같은 색이 이어지면 한 덩어리, 남은 자리는 빈칸
+  expect(barRuns([{ value: 50, color: 'a' }], 100, 4)).toEqual([
+    { text: '██', color: 'a', background: null },
+    { text: '  ', color: null, background: null },
+  ])
+  // 선 조각(─)이 오른쪽이면 바탕 없이 1/8 칸, 선 조각에서 시작하는 칸은 더 많이 덮은 쪽으로
+  expect(barRuns([{ value: 3, color: 'a' }, { value: 5, color: 'b', glyph: '─' }], 8, 1)).toEqual([{ text: '▍', color: 'a', background: null }])
+  expect(barRuns([{ value: 1, color: 'a', glyph: '─' }, { value: 3, color: 'b', glyph: '┄' }], 4, 1)).toEqual([{ text: '┄', color: 'b', background: null }])
+  // 0 이 아닌 조각은 적어도 1/8 칸
+  expect(barRuns([{ value: 1, color: 'a' }], 1000, 2)[0]).toEqual({ text: '▏', color: 'a', background: null })
+  // 조각 합이 total 보다 크면 합에 맞춘다
+  expect(barRuns([{ value: 6, color: 'a' }, { value: 6, color: 'b' }], 10, 2).map(run => run.text).join('')).toBe('██')
+
+  // 턴이 칸보다 적으면 폭을 나눠 채우고, 많으면 칸마다 가장 높은 값
+  expect(chartColumns([10, 20, 30], 5)).toEqual([10, 10, 20, 20, 30])
+  expect(chartColumns([10, 50, 20, 40], 2)).toEqual([50, 40])
+  expect(chartColumns([], 4)).toEqual([])
+  expect(columnOf(3, 4, 2)).toBe(1)
+  expect(columnOf(2, 3, 10)).toBe(6)
+  // 위 끝은 가장 높은 점이 드는 가장 낮은 눈금
+  expect([chartTop([3, 6]), chartTop([20]), chartTop([45, null]), chartTop([80]), chartTop([])]).toEqual([10, 25, 50, 100, 10])
+  expect(chartRows([100, 50, 0, null], 2, 100, null)).toEqual([
+    [{ text: '█', level: 'danger' }, { text: '   ', level: 'empty' }],
+    [{ text: '█', level: 'fill' }, { text: '█', level: 'muted' }, { text: '  ', level: 'empty' }],
+  ])
+  // 자동 압축 높이의 빈칸은 ┈
+  expect(chartRows([50], 2, 100, 80)[0]).toEqual([{ text: '┈', level: 'guide' }])
+  expect(sparkline([0, 1, 2])).toBe('▁▄█')
+
+  const point = (at: number, costUsd: number | null) => ({ at, tokens: null, percent: null, costUsd, turn: null })
+  const costs = turnCosts([point(1, 0.1), point(2, 0.25), point(3, null), point(4, 0.5)])
+  expect(costs.length).toBe(1)
+  expect(Math.round((costs[0] ?? 0) * 100)).toBe(15)
+  expect(compactionPoints([point(10, 0), point(20, 0), point(30, 0)], [{ at: 15, trigger: 'auto', before: null, after: null }, { at: 40, trigger: 'manual', before: null, after: null }])).toEqual([1])
+  expect(cacheShares({ input: 10, cacheRead: 900, cacheWrite: 90, output: 5 })).toEqual({ read: 90, write: 9, fresh: 1 })
+  expect(cacheShares({ input: 0, cacheRead: 0, cacheWrite: 0, output: 5 })).toBe(null)
+
+  // MCP 도구는 서버별로, 필요할 때 싣는 도구는 토큰 없이 수만
+  const raw = RICH(40, 1)
+  const detail = toBreakdown(raw as never, 0)
+  expect(detail?.mcpServers).toEqual([
+    { name: 'linear', tools: 2, onDemand: 0, tokens: 6200 },
+    { name: 'figma', tools: 1, onDemand: 1, tokens: 0 },
+  ])
+  expect(detail?.memoryFiles?.map(file => file.type)).toEqual(['User', 'Project'])
+})
+
+const RICH = (percent: number, usd: number) => {
+  const base = USAGE(percent)
+  return {
+    ...base,
+    cost: { usd },
+    context: {
+      ...base.context,
+      breakdown: {
+        ...base.context.breakdown,
+        memoryFiles: [
+          { path: '/home/me/proj/CLAUDE.md', type: 'Project', tokens: 1200 },
+          { path: '/home/me/.claude/CLAUDE.md', type: 'User', tokens: 1400 },
+        ],
+        mcpTools: [
+          { name: 'mcp__linear__a', serverName: 'linear', tokens: 4000, isLoaded: true },
+          { name: 'mcp__linear__b', serverName: 'linear', tokens: 2200, isLoaded: true },
+          { name: 'mcp__figma__c', serverName: 'figma', tokens: 900, isLoaded: false },
+        ],
+        skills: { totalSkills: 56, includedSkills: 41, tokens: 2400, skillFrontmatter: [{ name: 'deploy', source: 'plugin', tokens: 300 }] },
+        agents: [{ agentType: 'reviewer', source: 'projectSettings', tokens: 250 }],
+        apiUsage: { input_tokens: 20, output_tokens: 300, cache_read_input_tokens: 920, cache_creation_input_tokens: 60 },
+      },
+    },
+  }
+}
+
+test('컨텍스트 패널: 실린 것 묶음, 턴마다 흐름과 압축, 캐시와 턴마다 비용', KO, async ($, on) => {
+  let now = 1_000_000
+  let percent = 20
+  let cost = 0.1
+  const asked: string[] = []
+  on('clock.now', () => ({ value: now }))
+  on('session.usage', ($, e) => {
+    asked.push(e?.breakdown ?? 'plain')
+    return { value: RICH(percent, cost) as never }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('turn.complete', () => ({ text: '끝' }) as never)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: '요약', toolUses: [] }], tokensBefore: 140000, tokensAfter: 20000 }) as never)
+  await $.command.run({ command: 'desk-context', args: '' } as never)
+  expect(asked).toEqual(['summary'])
+
+  const turn = async (id: string, nextPercent: number, usd: number, at: number) => {
+    percent = nextPercent
+    cost = usd
+    now = at
+    const usage = { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 90, model: 'm' }
+    await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '끝', turnId: id, usage } as never)
+    await wait(30)
+  }
+  await turn('t1', 20, 0.1, 1_000_000)
+  await turn('t2', 45, 0.25, 1_060_000)
+  now = 1_090_000
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: '요약해 줘', toolUses: [] }] } as never)
+  await turn('t3', 15, 0.4, 1_120_000)
+  // 패널이 그려지지 않는 동안은 턴마다 칩이 읽던 값 하나만 묻는다(내역은 계산하지 않는다)
+  expect(asked).toEqual(['summary', 'plain', 'plain', 'plain'])
+
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-context', viewport: VIEWPORT, props: { title: '컨텍스트', isFocused: true, bodyColumns: 60 } as never })
+  await wait(30)
+  // 그려도 내역은 다시 계산하지 않는다(열 때와 ↻ 때만)
+  expect(asked).toEqual(['summary', 'plain', 'plain', 'plain'])
+  let drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('컨텍스트에 실린 것')
+  expect(drawn).toContain('MCP 도구 3개 · 서버 2개 · 1개는 필요할 때')
+  expect(drawn).toContain('메모리 파일 2개')
+  expect(drawn).toContain('스킬 56개 중 41개 목록에')
+  expect(drawn).toContain('커스텀 에이전트 1개')
+  expect(drawn).not.toContain('linear')
+  expect(drawn).toContain(`이 세션 · ${hhmm(1_000_000)} 부터 · 턴 3번 · ▲ 압축 1번`)
+  expect(drawn).toContain(' 50%│')
+  expect(drawn).toContain('  0%│')
+  expect(drawn).toContain('▲')
+  expect(drawn).toContain('읽음 90% · 씀 9% · 새로 1% · 지난 턴')
+  expect(drawn).toContain('턴 3번 동안 입력의 90% 를 캐시에서 읽음')
+  expect(drawn).toContain('$0.40')
+  expect(drawn).toContain('턴마다')
+  expect(drawn).toContain('지난 턴 $0.15')
+
+  // ↻ 한 번에 내역도 한 번
+  await pane.press({ key: 'context-refresh' })
+  await wait(30)
+  expect(asked.filter(kind => kind === 'summary').length).toBe(2)
+
+  await pane.press({ key: 'context-group-mcp' })
+  drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('linear')
+  expect(drawn).toContain('도구 2개')
+  expect(drawn).toContain('도구 1개 · 1개는 필요할 때')
+  await pane.unmount()
 })
 
 test('질문 알림 본문: 첫 질문, 여러 개면 외 N개', KO, () => {
