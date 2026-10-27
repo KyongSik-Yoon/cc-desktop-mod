@@ -238,6 +238,8 @@ declare module 'claude-code' {
       images: Record<string, ImageInfo>
       // 터미널이 그림을 그리는 길(멀티플렉서 밖의 kitty·Ghostty, 전체 화면의 iTerm2). 못 그리면 null.
       graphics: Graphics
+      // herdr 에 `herdr --remote` 클라이언트가 붙어 있는지. 그 터미널은 알 수 없어 붙은 동안 그림 없이 그린다.
+      herdrRemote: boolean
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
       sessions: SessionEntry[]

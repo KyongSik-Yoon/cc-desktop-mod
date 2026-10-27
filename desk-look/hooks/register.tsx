@@ -67,6 +67,9 @@ const surface = atom({ plugin: 'desk-look', key: 'surface' } as const, null as S
 const runs = atom({ plugin: 'desk-look', key: 'runs' } as const, { firstOf: {}, calls: {} } as Runs)
 const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Record<string, ImageInfo>)
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, null as Graphics)
+// herdr 에 `herdr --remote` 클라이언트가 붙어 있는지. 원격 터미널은 알 수 없고(foot 처럼 kitty 그림을 버리는 곳도 있다)
+// 모든 클라이언트가 한 화면을 같이 보므로, 붙어 있는 동안은 그림 없이 그린다.
+const herdrRemote = atom({ plugin: 'desk-look', key: 'herdrRemote' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
 // /desk-diff 패널 창 위치: ui.scroll 이 알려 준 첫 행과 보이는 행 수. 보이는 곳만 그리는 데 쓴다.
@@ -1614,7 +1617,23 @@ async function refreshGraphics($: EngineInterface) {
   const herdr = HERDR_ENV === '1' && herdrGraphicsOn(await readHerdrConfig($))
   const tmux = TMUX && TMUX_PANE ? await readTmuxGraphics($, TMUX_PANE) : null
   const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, CLAUDE_CODE_FORCE_TERMINAL_IMAGES, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT }
+  inHerdr = HERDR_ENV === '1'
   await update($, graphics, () => graphicsOf(env, herdr, tmux))
+  await refreshHerdrRemote($)
+}
+
+let inHerdr = false
+
+// 원격 클라이언트는 이 기계의 bridge 프로세스(`herdr remote-client-bridge`)로 붙는다. pgrep 은 한 번에 CPU 60ms 라
+// 타이머로 훑지 않고 세션을 열 때와 프롬프트를 보낼 때만 보며, herdr 밖이거나 어차피 그림을 안 그리면 보지 않는다. 그래서 원격으로 막 붙었으면 첫 프롬프트를 보낼 때까지는
+// 전의 모습이고, 보낸 말풍선도 판정이 올 때까지 잠깐 전의 모습으로 그려졌다가 다시 그려진다.
+async function refreshHerdrRemote($: EngineInterface) {
+  if (!inHerdr || (await read($, graphics)) === null) return
+  const ran = await $.process.run(['pgrep', '-f', '^\\S*herdr remote-client-bridge'], { timeoutMs: 3000 }).catch(() => null)
+  // pgrep 은 찾으면 0, 없으면 1. 실패는 판정하지 않는다.
+  if (!ran || (ran.exitCode !== 0 && ran.exitCode !== 1)) return
+  const remote = ran.exitCode === 0
+  if ((await read($, herdrRemote)) !== remote) await update($, herdrRemote, () => remote)
 }
 
 // 엔진처럼 이 창(TMUX_PANE)의 바깥 터미널과 그림 통과 설정을 tmux 에 묻는다. 못 물으면 null(그리지 않는다).
@@ -3075,6 +3094,7 @@ export const register: Register = (on, options) => {
       if ((await read($, agents))[id] !== undefined) startAgentClock($)
       return next(e)
     }
+    void refreshHerdrRemote($).catch(() => undefined)
     await update($, pendingEdits, () => [])
     await update($, previewWritten, () => null)
     const now = await $.clock.now()
@@ -3324,9 +3344,11 @@ export const register: Register = (on, options) => {
     }
     const els = $.ui.resolve(e)
     const { Box, Text, Image } = els
-    const [face, known, kind, openState] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open)])
+    const [face, known, kind, openState, remote] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open), read($, herdrRemote)])
     // iTerm2 는 전체 화면 그리기에서만 그린다(엔진 기본 화면은 줄마다 그림을 다시 보내야 해서 alt 글자).
-    const canDraw = kind === 'kitty' || kind === 'kitty-bytes' || (kind === 'iterm' && e.viewport?.isFullscreen === true)
+    // herdr 원격 클라이언트(foot 등)가 붙어 있으면 그림이 버려져 썸네일 자리가 비고 모서리 칸이 빠져 위·아래 줄이
+    // 짧아지므로, 그동안은 그림을 못 그리는 터미널처럼 글리프 모서리로 그리고 그림 알림은 엔진의 └ [Image #N] 줄에 맡긴다.
+    const canDraw = !remote && (kind === 'kitty' || kind === 'kitty-bytes' || (kind === 'iterm' && e.viewport?.isFullscreen === true))
     const columns = e.viewport?.columns ?? 80
     const { text: typed, pastes } = splitPastes(e.props.text)
     const found = [...typed.matchAll(IMAGE_TOKEN)]
