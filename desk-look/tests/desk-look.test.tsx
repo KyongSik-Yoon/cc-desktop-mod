@@ -10,7 +10,7 @@ import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
-import { bandStayMs, currentHead, headAt, quoteDecorations, quoteInto } from '../hooks/register'
+import { bandStayMs, currentHead, headAt, quoteDecorations, quoteInto, selectionIn } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -1285,6 +1285,54 @@ describe('진행 띠', () => {
     await pane.unmount()
   })
 
+  test('/desk-activity 패널: 창이 몸통보다 작으면 머리(막대·범례)는 고정하고 아래 줄만 스크롤한다', KO, async ($, on) => {
+    let now = 1_000_000
+    on('process.run', gitStub as never)
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+    for (let index = 1; index <= 30; index++) {
+      now += 1000
+      await $.tool.call({ tool: 'Bash', command: `step ${index}`, description: `명령 ${String(index).padStart(2, '0')}` } as never)
+    }
+    // 머리 6줄(제목·빈 줄·메인 막대·축·범례·빈 줄), 몸통 9줄: 흐름 제목과 명령 01~08
+    const props = { title: '활동', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, bodyRows: 15 } } as never
+    let pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props })
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('이번 턴')
+    expect(drawn).toContain('메인')
+    expect(drawn).toContain('흐름')
+    expect(drawn).toContain('명령 08')
+    expect(drawn).not.toContain('명령 09')
+    await pane.unmount()
+    const scroll = (by: number) => $.ui.scroll({ component: 'Pane', requestId: 'desk-activity', offset: 0, by, bodyRows: 15, contentRows: 15, origin: { kind: 'person' } } as never)
+    // 휠 세 칸: 머리는 그대로, 몸통은 명령 03~11
+    for (let tick = 0; tick < 3; tick++) await scroll(1)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('메인')
+    expect(drawn).not.toContain('흐름')
+    expect(drawn).not.toContain('명령 02')
+    expect(drawn).toContain('명령 03')
+    expect(drawn).toContain('명령 11')
+    expect(drawn).not.toContain('명령 12')
+    await pane.unmount()
+    // 끝까지 내리면 늘어나는 줄을 따라간다
+    await scroll(100)
+    await scroll(100)
+    await scroll(100)
+    now += 1000
+    await $.tool.call({ tool: 'Bash', command: 'step 31', description: '명령 31' } as never)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('메인')
+    expect(drawn).toContain('명령 31')
+    expect(drawn).not.toContain('명령 22')
+    await pane.unmount()
+  })
+
   test('긴 턴에는 도는 명령을 띄우고, 끝나면 접고 턴 끝 줄에 셈을 남긴다', KO, async ($, on) => {
     let now = 1_000_000
     let finish: () => void = () => undefined
@@ -2302,7 +2350,7 @@ test('백그라운드 에이전트를 기다리는 턴 끝 줄: 에이전트마�
   await expanded.unmount()
 })
 
-test('턴 끝 줄의 ❝ 칩과 /desk-quote 는 선택한 글을 인용으로 입력창에 넣는다', KO, async ($, on) => {
+test('턴 끝 줄의 ❝ 칩은 그 턴의 답(답 안에서 고른 글이면 그 글)을, /desk-quote 는 고른 글을 인용으로 넣는다', KO, async ($, on) => {
   let selected: { text: string; requestId?: string } | undefined = { text: '첫 줄\n\n둘째 줄  ', requestId: 'r1' }
   let box = ''
   let caret = 0
@@ -2310,12 +2358,17 @@ test('턴 끝 줄의 ❝ 칩과 /desk-quote 는 선택한 글을 인용으로 �
   const toasts: string[] = []
   on('process.run', gitStub as never)
   on('clock.now', () => ({ value: 0 }))
-  on('turn.complete', () => ({ text: '답' }) as never)
+  on('turn.complete', () => ({ text: '**첫 줄**\n\n- 둘째 줄\n\n셋째 줄' }) as never)
   on('ui.selection', () => ({ value: selected }) as never)
   on('prompt.read', () => ({ value: { text: box, cursor: caret } }))
   on('prompt.fill', ($, e) => {
     filled.push({ text: e.text, mode: e.mode, cursor: e.cursor })
     return { isFilled: true } as never
+  })
+  const painted: string[] = []
+  on('prompt.paint', ($, e) => {
+    painted.push(String(e.text))
+    return { value: { isPainted: true } } as never
   })
   on('ui.toast', ($, e) => {
     toasts.push(String((e as { text?: string }).text ?? e))
@@ -2325,23 +2378,44 @@ test('턴 끝 줄의 ❝ 칩과 /desk-quote 는 선택한 글을 인용으로 �
     const { Text } = $.ui.resolve(e)
     return <Text>Baked for 3s</Text>
   })
-  await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '답', turnId: 't1' } as never)
+  await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '**첫 줄**\n\n- 둘째 줄\n\n셋째 줄', turnId: 't1' } as never)
   const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { word: 'Baked', durationMs: 3000 } })
   expect(JSON.stringify(await row.drawn())).toContain('❝ quote')
-  // 빈 입력창: 인용으로 바꾸고 아래에 질문 칸을 비워 둔다
+  // 칩: 그 답 안에서 고른 글(그려진 글이라 마크다운 기호가 없다)이면 그 글만, 빈 입력창이면 인용 아래 질문 칸을 비워 둔다
   await row.press({ key: 'quote-turn-3000' })
   expect(filled).toEqual([{ text: '> 첫 줄\n>\n> 둘째 줄\n\n', mode: 'replace', cursor: 16 }])
-  // 쓰던 글이 있으면 인용을 그 위에 넣고 커서는 쓰던 자리(‘이거’ 뒤)에 둔다
+  // 채우기는 prompt.edit 를 거치지 않으니 넣은 인용을 직접 칠한다
+  await wait(10)
+  expect(painted).toEqual(['> 첫 줄\n>\n> 둘째 줄\n\n'])
+  // 칩: 고른 글이 다른 턴의 것이면 그 턴의 답 전체
+  selected = { text: '다른 턴에서 고른 글' }
+  await row.press({ key: 'quote-turn-3000' })
+  expect(filled[1]?.text).toBe('> **첫 줄**\n>\n> - 둘째 줄\n>\n> 셋째 줄\n\n')
+  // /desk-quote 는 고른 글만. 쓰던 글이 있으면 인용을 그 위에 넣고 커서는 쓰던 자리(‘이거’ 뒤)에 둔다
+  selected = { text: '첫 줄\n\n둘째 줄  ', requestId: 'r1' }
   box = '이거 왜?'
   caret = 2
   await $.command.run({ command: 'desk-quote', args: '' } as never)
-  expect(filled[1]).toEqual({ text: '> 첫 줄\n>\n> 둘째 줄\n\n이거 왜?', mode: 'replace', cursor: 18 })
-  // 고른 글이 없으면 채우지 않고 알린다
+  expect(filled[2]).toEqual({ text: '> 첫 줄\n>\n> 둘째 줄\n\n이거 왜?', mode: 'replace', cursor: 18 })
+  // 고른 글이 없으면 칩은 답 전체, /desk-quote 는 채우지 않고 알린다
   selected = undefined
+  box = ''
+  caret = 0
   await row.press({ key: 'quote-turn-3000' })
-  expect(filled.length).toBe(2)
+  expect(filled[3]?.text).toBe('> **첫 줄**\n>\n> - 둘째 줄\n>\n> 셋째 줄\n\n')
+  await $.command.run({ command: 'desk-quote', args: '' } as never)
+  expect(filled.length).toBe(4)
   expect(toasts.at(-1)).toContain('선택')
   await row.unmount()
+})
+
+test('고른 글이 답 안의 것인지: 그려진 글은 마크다운 기호·줄바꿈·표 선이 빠져 있어 글자와 숫자로 비교', () => {
+  const answer = '## 결과\n\n| 이름 | 값 |\n|---|---|\n| `foo` | **12** |\n\n- [링크](https://x.y) 뒤 글'
+  expect(selectionIn(answer, '결과')).toBe(true)
+  expect(selectionIn(answer, '│ foo  │ 12 │')).toBe(true)
+  expect(selectionIn(answer, '• 링크 뒤 글')).toBe(true)
+  expect(selectionIn(answer, '다른 글')).toBe(false)
+  expect(selectionIn(answer, ' │ ')).toBe(false)
 })
 
 test('인용은 앞서 넣은 인용들 다음, 쓰던 글 위에 들어가고 커서는 쓰던 자리를 따라간다', KO, async () => {

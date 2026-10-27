@@ -90,6 +90,12 @@ const turnActivity = atom({ plugin: 'desk-look', key: 'activity' } as const, IDL
 const activityLog = atom({ plugin: 'desk-look', key: 'activityLog' } as const, null as ActivityLog | null)
 // /desk-activity 패널을 다시 그리게 하는 시계(ms). 패널이 그려지고 무언가 돌 때만 ACTIVITY_TICK 마다 간다.
 const activityClock = atom({ plugin: 'desk-look', key: 'activityClock' } as const, 0)
+// /desk-activity 패널 몸통(머리 아래 줄)의 첫 줄. 끝(ACTIVITY_END)이면 늘어나는 줄을 따라간다.
+// 머리(제목·막대·범례)를 늘 보이게 하려고 패널이 스스로 스크롤한다: ui.scroll 을 next 없이 받아 이 값을 옮긴다.
+const activityTop = atom({ plugin: 'desk-look', key: 'activityTop' } as const, 0)
+const ACTIVITY_END = Number.MAX_SAFE_INTEGER
+// 마지막으로 그린 몸통 창: pinned 면 머리를 고정해 그렸고, room 은 몸통에 보이는 줄 수, max 는 첫 줄의 끝.
+let activityWindow = { pinned: false, room: 0, max: 0 }
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
@@ -1374,15 +1380,29 @@ export function quoteInto(draft: string, cursor: number, quote: string): { text:
   return { text: head + quote + rest, cursor: start + Math.max(0, cursor - lead.length) }
 }
 
-async function quoteSelection($: EngineInterface) {
+// 고른 글이 이 답 안의 것인지. 선택은 어느 행인지만 알려 줘 턴을 모르고, 그려진 글은 마크다운 기호·줄바꿈·표 선이
+// 빠져 있어 글자와 숫자만 남겨 비교한다. 링크는 글만 그려지니 주소를 뺀다.
+export function selectionIn(answer: string, selected: string): boolean {
+  const bare = (text: string) => text.replace(/[^\p{L}\p{N}]+/gu, '')
+  const part = bare(selected)
+  return part !== '' && bare(answer.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')).includes(part)
+}
+
+// answer 는 턴 끝 줄의 ❝ 칩이 넘기는 그 턴의 답: 그 안에서 고른 글이 있으면 그 글, 없으면 답 전체를 인용한다.
+// /desk-quote 는 답 없이 불러 고른 글만 인용한다.
+async function quoteSelection($: EngineInterface, answer = '') {
   const selected = await $.ui.selection().catch(() => undefined)
-  if (!selected || selected.text.trim() === '') {
+  const picked = selected && selected.text.trim() !== '' ? selected.text : ''
+  const text = answer.trim() !== '' && !(picked !== '' && selectionIn(answer, picked)) ? answer : picked
+  if (text === '') {
     $.ui.toast(T.quoteNone)
     return
   }
   const box = await $.prompt.read().catch(() => ({ text: '', cursor: 0 }))
-  const next = quoteInto(box.text, box.cursor, quoteText(selected.text))
+  const next = quoteInto(box.text, box.cursor, quoteText(text))
   const filled = await $.prompt.fill({ text: next.text, mode: 'replace', cursor: next.cursor }).catch(() => null)
+  // 채우기는 prompt.edit 를 거치지 않으니 넣은 인용을 여기서 칠한다.
+  if (filled?.isFilled) void $.prompt.paint({ text: next.text, decorations: quoteDecorations(next.text) }).catch(() => undefined)
   $.ui.toast(filled?.isFilled ? T.quoted : T.fillFailed)
 }
 
@@ -2993,14 +3013,8 @@ export const register: Register = (on, options) => {
     return done
   })
 
-  // 입력창이 바뀔 때마다 인용 줄을 다시 칠한다. 칠할 것이 없으면 지운다(빈 목록).
-  on('prompt.change', async ($, e, next) => {
-    const done = await next(e)
-    const decorations = quoteDecorations(e.text)
-    void $.prompt.paint({ text: e.text, decorations }).catch(() => undefined)
-    return done
-  })
-  // 타이핑·붙여넣기는 prompt.change 가 아니라 prompt.edit 로 온다. 편집이 만든 상자를 칠한다.
+  // 타이핑·붙여넣기는 prompt.edit 로 온다. 편집이 만든 상자를 칠한다. 인용을 넣는 채우기는 quoteSelection 이 칠한다.
+  // prompt.change(기록 불러오기·채우기)는 훅으로 받지 않는다: 디렉터리가 아직 모르는 이벤트라 mod 가 거부된다.
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
     const decorations = quoteDecorations(box.text)
@@ -3626,7 +3640,7 @@ export const register: Register = (on, options) => {
             onPress={press => void copyText($, answer, press, 'answer')}
           />
         )}
-        <Button key={`quote-turn-${card.durationMs}`} plain dimColor label="❝ quote" onPress={() => void quoteSelection($)} />
+        <Button key={`quote-turn-${card.durationMs}`} plain dimColor label="❝ quote" onPress={() => void quoteSelection($, answer)} />
       </Box>
     )
     // 진행 띠를 띄운 긴 턴의 셈: 엔진 줄에는 덧붙일 자리가 없어 그 아래 흐린 한 줄로.
@@ -3702,7 +3716,7 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     // 턴이나 이 턴이 띄운 일이 도는 동안은 패널 시계(2초)로 다시 그려 막대와 시간이 간다.
-    const [log, records, startedAt] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityClock)])
+    const [log, records, startedAt, top] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityClock)])
     if (log === null) return <Text color={COLORS.muted}>{T.activityNone}</Text>
     const now = await $.clock.now()
     activitySeen = now
@@ -3718,7 +3732,10 @@ export const register: Register = (on, options) => {
     // 턴이 끝났어도 이 턴에 띄운 에이전트·셸이 아직 돌면 지금까지, 끝났으면 가장 늦게 끝난 때까지 시간 축을 늘린다.
     const spawned = [...turnAgents, ...shells]
     const end = spawned.some(agent => isLive(agent.status)) ? now : Math.max(turnEnd, ...spawned.map(agent => agent.endedAt ?? turnEnd))
-    return activityPane(els, { log, now, end, columns, turnAgents, shells, tail, openAgent: id => void openAgents($, id) })
+    const bodyRows = (e.props as { scroll?: { bodyRows: number } }).scroll?.bodyRows ?? 0
+    const drawn = activityPane(els, { log, now, end, columns, turnAgents, shells, tail, bodyRows, top, openAgent: id => void openAgents($, id) })
+    activityWindow = drawn.window
+    return drawn.tree
   })
 
   // 세션 패널: 프로젝트별로 묶은 최근 세션. 현재 세션은 클레이색 ●.
@@ -4069,6 +4086,18 @@ export const register: Register = (on, options) => {
   // 모든 패널의 위치도 적어 두고(/desk-fold 가 접을 때 가져간다), 다시 편 뒤 첫 스크롤은 적어 둔 위치로 바꾼다.
   on('ui.scroll', { component: 'Pane' }, async ($, e, next) => {
     if (!DESK_PANES.has(e.requestId)) return next(e)
+    // 머리를 고정해 그린 /desk-activity 는 창이 늘 꽉 차 엔진이 옮길 것이 없다: 몸통 첫 줄만 옮겨 그 패널만 다시 그린다.
+    // 쪽 넘김(·Home/End)은 창 높이만큼 오므로 몸통 높이만큼 넘긴다.
+    if (e.requestId === ACTIVITY_PANE && activityWindow.pinned) {
+      restoreOffsets.delete(e.requestId)
+      paneOffsets.set(e.requestId, 0)
+      const { room, max } = activityWindow
+      const from = Math.min(await read($, activityTop), max)
+      const by = Math.abs(e.by) >= e.bodyRows ? Math.sign(e.by) * room : e.by
+      const top = Math.max(0, Math.min(max, from + by))
+      if (top !== from) await update($, activityTop, () => (top >= max ? ACTIVITY_END : top))
+      return {}
+    }
     const restore = e.contentRows > 0 ? restoreOffsets.get(e.requestId) : undefined
     if (restore !== undefined) restoreOffsets.delete(e.requestId)
     const asked = restore === undefined ? e : { ...e, offset: restore }
@@ -5095,6 +5124,8 @@ function nowLine(els: Elements['terminal'], input: BandInput) {
 const LANE_LABEL = 11
 const LANE_AGENTS = 4
 const FLOW_ROWS = 60
+// 머리를 고정하려면 몸통에 이만큼은 남아야 한다. 그보다 작은 창은 예전처럼 엔진이 통째로 스크롤한다.
+const ACTIVITY_MIN_ROOM = 5
 // 막대 색: 가장 길게 이어지는 명령은 진행 띠의 ▶ 와 같은 강조색, 나머지는 서로 다른 테마 색(글자색 검정은 쓰지 않는다).
 const KIND_COLOR: Record<LaneSegment['kind'], string> = {
   explore: COLORS.link,
@@ -5129,6 +5160,9 @@ type PaneInput = {
   turnAgents: ReadonlyArray<AgentRecord>
   shells: ReadonlyArray<AgentRecord>
   tail: { id: string; text: string } | null
+  // 엔진이 몸통에 준 줄 수(모르면 0)와 몸통 첫 줄(activityTop).
+  bodyRows: number
+  top: number
   openAgent: (id: string) => void
 }
 
@@ -5184,7 +5218,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
   // 기타(MCP·Skill·질문 등)는 그 턴에 있을 때만: 늘 붙이면 범례가 길어진다.
   const kinds: ActivityKind[] = ['explore', 'edit', 'test', 'command', 'agent', ...(log.events.some(event => event.kind === 'other') ? (['other'] as const) : [])]
   const legend = (
-    <Text>
+    <Text wrap="truncate-end">
       {' '.repeat(LANE_LABEL)}
       {kinds.map(kind => (
         <Text>
@@ -5205,10 +5239,10 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
   ].filter(Boolean)
   const rows = flowRows(log).slice(-FLOW_ROWS)
   const at = (row: FlowRow) => <Text color={COLORS.muted}>{`${clockOf(row.at - log.startedAt)}  `}</Text>
-  const flow = rows.map(row => {
+  const flow = rows.map((row, index) => {
     if (row.kind === 'say') {
       return (
-        <Text wrap="truncate-end">
+        <Text key={`flow-${index}`} wrap="truncate-end">
           {at(row)}
           <Text color={COLORS.clay}>◉ </Text>
           <Text color={COLORS.text} weight="semibold">{row.text}</Text>
@@ -5217,7 +5251,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     }
     if (row.kind === 'explore') {
       return (
-        <Text wrap="truncate-end">
+        <Text key={`flow-${index}`} wrap="truncate-end">
           {at(row)}
           <Text color={KIND_COLOR.explore}>{`${KIND_GLYPH.explore} `}</Text>
           <Text color={COLORS.muted}>{row.text}</Text>
@@ -5226,7 +5260,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     }
     if (row.kind === 'edit') {
       return (
-        <Text wrap="truncate-end">
+        <Text key={`flow-${index}`} wrap="truncate-end">
           {at(row)}
           <Text color={row.isError ? COLORS.danger : KIND_COLOR.edit}>{`${KIND_GLYPH.edit} `}</Text>
           <Text color={COLORS.text}>{row.text}</Text>
@@ -5239,7 +5273,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     const mark = row.ms === null ? '▶' : row.isError ? '✗' : row.kind === 'agent' ? '◆' : '✓'
     const markColor = row.ms === null ? COLORS.clay : row.isError ? COLORS.danger : row.kind === 'agent' ? COLORS.warning : COLORS.success
     return (
-      <Text wrap="truncate-end">
+      <Text key={`flow-${index}`} wrap="truncate-end">
         {at(row)}
         <Text color={markColor}>{`${mark} `}</Text>
         {row.kind === 'test' && <Text color={KIND_COLOR.test}>{`${T.kindName.test} `}</Text>}
@@ -5262,9 +5296,41 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
       <Text color={COLORS.muted}>{`${agent.description} · ${facts}`}</Text>,
     )
   }
-  const section = (title: string) => <Text color={COLORS.text} weight="semibold">{title}</Text>
-  return (
-    <Box flexDirection="column" rowGap={1}>
+  // 머리 아래는 모두 한 줄짜리 줄의 목록이다: 창의 줄 수로 잘라 그릴 수 있게.
+  const one = (key: string, row: unknown) => (
+    <Box key={key} height={1} overflow="hidden">
+      {row as never}
+    </Box>
+  )
+  const section = (title: string, key: string) => (
+    <Text key={key} color={COLORS.text} weight="semibold">
+      {title}
+    </Text>
+  )
+  const body: unknown[] = []
+  const gap = (key: string) => body.length > 0 && body.push(<Text key={key}> </Text>)
+  if (flow.length > 0) body.push(section(T.activityFlow, 'flow-title'), ...flow)
+  if (input.turnAgents.length > 0) {
+    gap('agents-gap')
+    body.push(section(T.activityAgents, 'agents-title'), ...input.turnAgents.map(agent => one(`agent-${agent.id}`, turnAgentRow(agent))))
+  }
+  if (input.shells.length > 0) {
+    gap('shells-gap')
+    body.push(section(T.laneBackground, 'shells-title'))
+    for (const shell of input.shells) {
+      body.push(one(`shell-${shell.id}`, turnAgentRow(shell)))
+      if (input.tail?.id === shell.id) body.push(<Text key={`tail-${shell.id}`} color={COLORS.muted} wrap="truncate-end">{`  └ ${input.tail.text}`}</Text>)
+    }
+  }
+  // 머리: 제목 줄, 빈 줄, 막대들, 축, 범례, 빈 줄. 몸통에 몇 줄이라도 남을 만큼 창이 크면 머리를 고정하고 몸통의 창만 그린다.
+  const head = lanes.length + 5
+  const room = input.bodyRows - head
+  const pinned = room >= ACTIVITY_MIN_ROOM
+  const max = pinned ? Math.max(0, body.length - room) : 0
+  const top = Math.min(input.top, max)
+  const shown = pinned ? body.slice(top, top + room) : body
+  const tree = (
+    <Box flexDirection="column" rowGap={1} {...(pinned ? { height: Math.min(input.bodyRows, head + shown.length), overflow: 'hidden' as const } : {})}>
       <Box columnGap={2} width={columns}>
         <Box flexGrow={1}>
           <Text color={COLORS.text} weight="semibold">{`${log.endedAt === null ? T.activityThisTurn : T.activityLastTurn} · ${formatElapsed(turnEnd - log.startedAt)}`}</Text>
@@ -5276,31 +5342,10 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
         <Text color={COLORS.muted}>{axis}</Text>
         {legend}
       </Box>
-      {flow.length > 0 && (
-        <Box flexDirection="column">
-          {section(T.activityFlow)}
-          {flow}
-        </Box>
-      )}
-      {input.turnAgents.length > 0 && (
-        <Box flexDirection="column">
-          {section(T.activityAgents)}
-          {input.turnAgents.map(turnAgentRow)}
-        </Box>
-      )}
-      {input.shells.length > 0 && (
-        <Box flexDirection="column">
-          {section(T.laneBackground)}
-          {input.shells.map(shell => (
-            <Box flexDirection="column">
-              {turnAgentRow(shell)}
-              {input.tail?.id === shell.id && <Text color={COLORS.muted} wrap="truncate-end">{`  └ ${input.tail.text}`}</Text>}
-            </Box>
-          ))}
-        </Box>
-      )}
+      {shown.length > 0 && <Box flexDirection="column">{shown as never}</Box>}
     </Box>
   )
+  return { tree, window: { pinned, room, max } }
 }
 
 const padCells = (text: string, width: number) => text + ' '.repeat(Math.max(0, width - cellWidth(text)))
