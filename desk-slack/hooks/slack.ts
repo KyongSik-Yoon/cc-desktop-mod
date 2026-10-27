@@ -1,3 +1,4 @@
+import { cellWidth } from './util'
 import type { SlackInbox, SlackMessage, SlackPoller, SlackPost, SlackRoom, SlackServer } from '../types'
 
 // /desk-slack: 나에게 온 DM·그룹 DM 을 대화방으로. 엔진에 붙은 Slack MCP 서버(claude.ai 커넥터)를 그대로 쓴다.
@@ -176,9 +177,166 @@ export function parseThread(text: string): SlackPost[] {
   return out
 }
 
-// Slack mrkdwn 의 링크 <url|글> → 글, <url> → url. 나머지는 그대로.
+// Slack mrkdwn 의 링크 <url|글> → 글, <url> → url, 엔티티는 글자로. 나머지는 그대로(미리보기·알림·Claude 에게 줄 글).
 export function slackText(text: string): string {
-  return text.replace(/<((?:https?|mailto):[^|>]+)\|([^>]+)>/g, '$2').replace(/<((?:https?|mailto):[^>]+)>/g, '$1')
+  return entities(text.replace(/<((?:https?|mailto):[^|>]+)\|([^>]+)>/g, '$2').replace(/<((?:https?|mailto):[^>]+)>/g, '$1'))
+}
+
+// 방 안 글을 그릴 마크다운(desk-look 렌더러로 그린다). Slack mrkdwn 은 마크다운과 다르다:
+// *굵게* _기울임_ ~취소~, ``` 는 한 줄 안에서도 열고 닫고, <주소|글>·<@U…>·<#C…|이름>·<!here> 를 쓴다.
+// 코드 밖의 나머지 글자는 마크다운으로 읽히지 않게 \ 로 막는다. names 는 멘션 <@U…> 을 이름으로 풀 사람들.
+// Slack 은 글자 < > & 를 &lt; &gt; &amp; 로 준다(진짜 < 는 위 모양에만): <…> 를 읽은 뒤에 푼다.
+const WORD = '\\p{L}\\p{N}_'
+const mark = (m: string) => `(?<![${WORD}${m}])${m}([^\\s${m}](?:[^\\n${m}]*[^\\s${m}])?)${m}(?![${WORD}${m}])`
+const SLACK_INLINE = new RegExp(`<([^<>\\n]+)>|(\`[^\`\\n]+\`)|${mark('\\*')}|${mark('_')}|${mark('~')}`, 'gu')
+
+export function slackMarkdown(text: string, names: Readonly<Record<string, string>> = {}): string {
+  const out: string[] = []
+  let last = 0
+  for (const fence of text.matchAll(/```([\s\S]*?)```/g)) {
+    out.push(slackLines(text.slice(last, fence.index), names))
+    const body = (fence[1] ?? '').replace(/^\n/, '').replace(/\n$/, '')
+    // 상자 표가 든 펜스는 터미널 출력을 붙여 넣은 것: 코드 대신 글로 그려 표를 패널 폭에 맞춘다(서식 글자는 글자 그대로)
+    out.push(body.split('\n').some(line => BOX_RULE.test(line)) ? `\n${slackLines(body, names, true)}\n` : `\n\`\`\`\n${entities(body)}\n\`\`\`\n`)
+    last = fence.index + fence[0].length
+  }
+  out.push(slackLines(text.slice(last), names))
+  return out.join('').replace(/^\n+|\n+$/g, '')
+}
+
+// 코드 블록 밖: 줄 앞 • ◦ ▪ 는 목록으로, ─ 만 있는 줄은 가로줄로, 줄 앞 │ 는 인용으로, 상자 표는 마크다운 표로,
+// 나머지는 줄마다 인라인(literal 이면 서식 없이 글자만).
+// 터미널 출력(• ─ 줄이 있는 글)을 복사하면 둘째 줄부터 같은 칸만큼 들여 있어 그만큼 걷는다(첫 줄은 빼고 센다,
+// Python 의 cleandoc). 펜스 없이 붙여 넣은 코드는 첫 줄만 덜 들여 있는 게 보통이라 그대로 둔다.
+function slackLines(text: string, names: Readonly<Record<string, string>>, literal = false): string {
+  const inline = (line: string) => (literal ? escapeMarkdown(line) : slackInline(line, names))
+  const raw = text.split('\n')
+  const isTerminal = raw.some(line => /^\s*(?:[•◦▪]\s|[─━]{3,})/.test(line))
+  const indents = raw.slice(1).filter(line => line.trim() !== '').map(line => /^ */.exec(line)![0].length)
+  const strip = isTerminal && indents.length > 0 ? Math.min(...indents) : 0
+  const lines = raw.map((line, index) => (index === 0 ? line.trimStart() : line.slice(strip)))
+  const out: string[] = []
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? ''
+    const table = boxTable(lines, index)
+    if (table) {
+      const row = (cells: string[]) => `| ${cells.map(cell => inline(cell).replace(/\|/g, '\\|')).join(' | ')} |`
+      out.push('', row(table.header), `|${table.header.map(() => ' --- ').join('|')}|`, ...table.rows.map(row), '')
+      index = table.end - 1
+      continue
+    }
+    if (/^\s*[─━]{3,}\s*$/.test(line)) out.push('---')
+    else if (/^\s*│\s/.test(line) && !line.slice(line.indexOf('│') + 1).includes('│')) out.push(`> ${inline(line.slice(line.indexOf('│') + 1).trim())}`)
+    else {
+      const bullet = /^(\s*)[•◦▪]\s+(.*)$/.exec(line)
+      out.push(bullet ? `${bullet[1]}- ${inline(bullet[2] ?? '')}` : inline(line))
+    }
+  }
+  return out.join('\n')
+}
+
+// 터미널이 그린 상자 표: 머리 줄 → ─┼─ 줄 → 행. 칸은 │ 로 나뉘고, 첫 칸이 빈 줄은 위 행이 칸 폭에서 접혀 내려온 것.
+// 접힌 조각이 칸 폭을 꽉 채웠고 앞뒤가 영문·숫자면 낱말 가운데서 접힌 것이라 붙이고, 아니면 한 칸 띄워 잇는다.
+const BOX_RULE = /^\s*─+(?:┼─+)+\s*$/
+
+function boxTable(lines: readonly string[], start: number): { header: string[]; rows: string[][]; end: number } | null {
+  const first = lines[start] ?? ''
+  if (!first.includes('│') || /^\s*│/.test(first)) return null
+  let rule = start + 1
+  while (rule < lines.length && rule - start <= 3 && !BOX_RULE.test(lines[rule] ?? '') && (lines[rule] ?? '').includes('│')) rule++
+  if (!BOX_RULE.test(lines[rule] ?? '')) return null
+  const widths = (lines[rule] ?? '').trim().split('┼').map(segment => cellWidth(segment) - 2)
+  const split = (line: string) => line.split('│')
+  const count = widths.length
+  const merge = (group: string[]) => {
+    const cells = widths.map(() => '')
+    // 칸마다 마지막으로 붙인 조각: 이것이 칸 폭을 채웠으면 다음 조각은 낱말 가운데서 이어진다
+    const tails = widths.map(() => '')
+    for (const line of group) {
+      split(line)
+        .slice(0, count)
+        .forEach((piece, index) => {
+          const part = piece.trim()
+          const was = cells[index] ?? ''
+          if (part === '') return
+          const isCut = cellWidth(tails[index] ?? '') >= (widths[index] ?? 0) && /[A-Za-z0-9_]$/.test(was) && /^[A-Za-z0-9_]/.test(part)
+          cells[index] = was === '' ? part : `${was}${isCut ? '' : ' '}${part}`
+          tails[index] = part
+        })
+    }
+    return cells
+  }
+  const header = merge(lines.slice(start, rule))
+  const rows: string[][] = []
+  let group: string[] = []
+  let end = rule + 1
+  for (; end < lines.length; end++) {
+    const line = lines[end] ?? ''
+    if (BOX_RULE.test(line)) continue
+    if (!line.includes('│') || split(line).length !== count) break
+    if (split(line)[0]!.trim() !== '' && group.length > 0) {
+      rows.push(merge(group))
+      group = []
+    }
+    group.push(line)
+  }
+  if (group.length > 0) rows.push(merge(group))
+  return rows.length > 0 ? { header, rows, end } : null
+}
+
+// nested: 굵게·기울임 안. 멘션을 또 ** 로 싸면 렌더러가 ** 짝을 잘못 맞춘다.
+function slackInline(text: string, names: Readonly<Record<string, string>>, nested = false): string {
+  let out = ''
+  let last = 0
+  for (const match of text.matchAll(SLACK_INLINE)) {
+    out += escapeMarkdown(text.slice(last, match.index))
+    const [whole, angle, code, bold, italic, strike] = match
+    if (angle !== undefined) out += slackAngle(angle, names, nested) ?? escapeMarkdown(whole)
+    else if (code !== undefined) out += entities(code)
+    else if (bold !== undefined) out += `**${slackInline(bold, names, true)}**`
+    else if (italic !== undefined) out += `*${slackInline(italic, names, true)}*`
+    else if (strike !== undefined) out += `~~${slackInline(strike, names, true)}~~`
+    last = match.index + whole.length
+  }
+  return out + escapeMarkdown(text.slice(last))
+}
+
+// <…> 하나. Slack 이 만든 모양이 아니면(사람이 쓴 <host> 같은 글) null.
+function slackAngle(inner: string, names: Readonly<Record<string, string>>, nested: boolean): string | null {
+  const strong = (label: string) => (nested ? label : `**${label}**`)
+  const bar = inner.indexOf('|')
+  const [head, label] = bar < 0 ? [inner, null] : [inner.slice(0, bar), inner.slice(bar + 1)]
+  if (/^(?:https?|mailto):/.test(head)) {
+    const href = head.replace(/[()\s]/g, ch => encodeURIComponent(ch))
+    const shown = label ?? head.replace(/^mailto:/, '')
+    return shown === head ? `<${href}>` : `[${escapeMarkdown(shown)}](${href})`
+  }
+  const mention = /^@([UW]\w+)$/.exec(head)
+  if (mention) return strong(`@${escapeMarkdown(label ?? names[mention[1]!] ?? mention[1]!)}`)
+  if (/^#C\w+$/.test(head)) return strong(`#${escapeMarkdown(label ?? head.slice(1))}`)
+  if (/^!(?:here|channel|everyone)$/.test(head)) return strong(`@${head.slice(1)}`)
+  if (head.startsWith('!') && label !== null) return strong(escapeMarkdown(label))
+  return null
+}
+
+const entities = (text: string) => text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+
+// 마크다운이 서식으로 읽는 글자를 막는다(엔티티도 함께 푼다). 맨 주소는 그대로 둔다(렌더러가 링크로 읽는다).
+function escapeMarkdown(text: string): string {
+  return entities(text)
+    .split(/(https?:\/\/\S+)/)
+    .map((part, index) => (index % 2 === 1 ? part : part.replace(/[\\`*_~[\]]/g, '\\$&')))
+    .join('')
+}
+
+// 기록·스레드 본문 끝의 "Files: a.png (ID: F…, image/png, 51.1 KB)" 줄. 본문과 따로 그린다.
+export function slackFiles(text: string): { text: string; files: string[] } {
+  const files: string[] = []
+  const rest = text.replace(/^Files: (.*)$/gm, (_, list: string) => {
+    for (const file of list.matchAll(/(.+?) \(ID: \w+, [^,)]+, ([^)]+)\)(?:, |$)/g)) files.push(`${file[1]!.trim()} · ${file[2]!.trim()}`)
+    return ''
+  })
+  return { text: rest.trim(), files }
 }
 
 // Slack ts("1792131860.241069") 비교. 소수까지 문자열로(배정밀도로 바꾸면 끝자리가 흐려진다).
@@ -195,7 +353,7 @@ export const emptyInbox = (): SlackInbox => ({ watermark: null, notified: null, 
 
 // 미리보기 한 줄
 export function snippet(text: string): string {
-  return slackText(text).replace(/\s+/g, ' ').trim().slice(0, 200)
+  return slackText(text).replace(/```/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)
 }
 
 // 받은 메시지를 방에 넣는다. 워터마크보다 새 것만, 내가 보낸 것은 빼고. 닫은 방(지운 방)도 새 메시지면 다시 생긴다.

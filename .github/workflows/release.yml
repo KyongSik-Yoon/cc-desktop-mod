@@ -16,6 +16,7 @@ on:
       - desk-look/hooks/diagram.ts
       - desk-look/hooks/vendor/**
       - desk-asana/hooks/shared/**
+      - desk-slack/hooks/shared/**
       - desk-asana/hooks/util.tsx
       - desk-slack/hooks/util.tsx
       - scripts/sync-shared.sh
@@ -48,7 +49,7 @@ jobs:
               exit 1
             fi
           done
-          # desk-asana 의 마크다운 렌더러 복사본이 desk-look 원본과 같은지
+          # desk-asana·desk-slack 의 마크다운 렌더러 복사본이 desk-look 원본과 같은지
           scripts/sync-shared.sh --check
 
       - name: Create tag and release

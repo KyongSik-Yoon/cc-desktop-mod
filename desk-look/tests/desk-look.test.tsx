@@ -156,6 +156,15 @@ describe('응답 렌더링', () => {
     expect(blocks[0]?.kind === 'code' && blocks[0].language).toBe('ts')
     expect(blocks[2]?.kind === 'code' && blocks[2].source).toBe('```\n안쪽\n```')
     expect(inlineWidth(parseInline('`ab` 한'), 1)).toBe(2 + 2 + 1 + 2)
+    // breaks(채팅 글): 문단 줄바꿈과 줄 앞 들여쓰기, 목록 항목의 이어지는 줄을 그대로 둔다. 기본은 한 칸으로 잇는다
+    expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1')).toEqual([
+      { kind: 'paragraph', text: 'a b' },
+      { kind: 'list', items: [{ level: 0, marker: '•', text: 'x { "k": 1' }] },
+    ])
+    expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1', true)).toEqual([
+      { kind: 'paragraph', text: 'a\n  b' },
+      { kind: 'list', items: [{ level: 0, marker: '•', text: 'x\n{\n  "k": 1' }] },
+    ])
 
     const reply = await $.ui.mount({
       plugin: 'desk-look',
