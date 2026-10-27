@@ -22,6 +22,8 @@ import {
   roomList,
   sendCall,
   sendProblem,
+  slackFiles,
+  slackMarkdown,
   slackPrompt,
   threadCall,
   slackText,
@@ -33,6 +35,7 @@ import {
 import type { SlackCall } from './slack'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton } from './util'
+import { renderMarkdown } from './shared/markdown'
 
 const SLACK_PANE = 'desk-slack'
 // 답장 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -64,6 +67,27 @@ async function setSlack($: EngineInterface, change: (state: SlackState | null) =
 // /desk-slack 의 Slack 호출(slack.ts 참고). 엔진이 거절하면(서버가 끊김, 권한) 던지는 대신 오류 글로 돌려준다.
 const SLACK_POLL_MS = 60_000
 const CLOSE_ARM_MS = 5000
+// 같은 사람이 이만큼 안에 이어 쓴 글은 이름 줄을 한 번만
+const JOIN_S = 5 * 60
+
+// 방 안 글의 날짜 구분선과 시각. Slack ts 는 Unix 초, 날짜는 이 컴퓨터의 시간대로.
+const local = (ts: string) => new Date(Number(ts.split('.')[0]) * 1000)
+const dayKey = (ts: string) => {
+  const at = local(ts)
+  return `${at.getFullYear()}-${at.getMonth()}-${at.getDate()}`
+}
+const clock = (ts: string) => {
+  const at = local(ts)
+  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+}
+function dayLabel(ts: string, now: number) {
+  const key = dayKey(ts)
+  if (key === dayKey(String(now / 1000))) return T.slackToday
+  if (key === dayKey(String(now / 1000 - 86_400))) return T.slackYesterday
+  const at = local(ts)
+  return T.slackDay(at.getFullYear() === new Date(now).getFullYear() ? null : at.getFullYear(), at.getMonth() + 1, at.getDate())
+}
+const rule = (label: string, columns: number) => `── ${label} ${'─'.repeat(Math.max(2, columns - cellWidth(label) - 4))}`
 
 async function callSlack($: EngineInterface, server: SlackServer, call: SlackCall, key: string) {
   try {
@@ -336,6 +360,8 @@ export const register: Register = (on, options) => {
     const room = view === null ? undefined : state?.inbox.rooms[view.channel]
     if (view !== null && server !== null) {
       const title = room?.title ?? view.channel
+      // 멘션 <@U…> 을 풀 이름: 이 방에 글을 쓴 사람들
+      const names = Object.fromEntries(view.posts.map(post => [post.from.id, post.from.name]))
       // 글이 길게 쌓이면 위로 되돌아가지 않도록 답장 칸 아래에도 같은 버튼을 둔다.
       const back = (key: string) => (
         <Button
@@ -371,24 +397,48 @@ export const register: Register = (on, options) => {
             </Box>
           )}
           {view.posts.length === 0 && view.status === 'loading' && <Text color={COLORS.muted}>{T.slackLoading}</Text>}
-          {view.posts.map(post => (
-            <Box key={`slack-post-${post.ts}`} flexDirection="column">
-              <Box columnGap={1}>
-                <Text color={post.from.id === myId ? COLORS.muted : COLORS.accent}>{post.from.id === myId ? T.slackMe : post.from.name}</Text>
-                <Text color={COLORS.muted}>{when(post.ts)}</Text>
-              </Box>
-              <Text color={COLORS.text}>{slackText(post.text)}</Text>
-              {view.thread === null && post.replies > 0 && (
-                <Box>
-                  {canThread ? (
-                    <Button key={`slack-thread-${post.ts}`} plain label={T.slackReplies(post.replies)} onPress={() => void openSlackRoom($, server, view.channel, post.ts)} />
-                  ) : (
-                    <Text color={COLORS.muted}>{T.slackReplies(post.replies)}</Text>
-                  )}
-                </Box>
-              )}
+          {view.posts.length > 0 && (
+            <Box flexDirection="column">
+              {view.posts.map((post, index) => {
+                const prev = view.posts[index - 1]
+                const day = dayKey(post.ts)
+                const isNewDay = prev === undefined || dayKey(prev.ts) !== day
+                // 같은 사람이 5분 안에 이어 쓴 글은 이름 줄 없이 붙인다(Slack 처럼)
+                const isJoined = !isNewDay && prev?.from.id === post.from.id && Number(post.ts) - Number(prev.ts) < JOIN_S
+                const { text, files } = slackFiles(post.text)
+                return (
+                  <Box key={`slack-post-${post.ts}`} flexDirection="column" marginTop={index === 0 || isJoined ? 0 : 1}>
+                    {isNewDay && (
+                      <Box marginBottom={1}>
+                        <Text color={COLORS.muted}>{rule(dayLabel(post.ts, now), columns)}</Text>
+                      </Box>
+                    )}
+                    {!isJoined && (
+                      <Box columnGap={1}>
+                        <Text color={post.from.id === myId ? COLORS.muted : COLORS.accent} weight="semibold">
+                          {post.from.id === myId ? T.slackMe : post.from.name}
+                        </Text>
+                        <Text color={COLORS.muted}>{clock(post.ts)}</Text>
+                      </Box>
+                    )}
+                    {text !== '' && renderMarkdown(slackMarkdown(text, names), els, COLORS, columns, { breaks: true, cards: true })}
+                    {files.map(file => (
+                      <Text color={COLORS.muted}>{`📎 ${file}`}</Text>
+                    ))}
+                    {view.thread === null && post.replies > 0 && (
+                      <Box>
+                        {canThread ? (
+                          <Button key={`slack-thread-${post.ts}`} plain label={T.slackReplies(post.replies)} onPress={() => void openSlackRoom($, server, view.channel, post.ts)} />
+                        ) : (
+                          <Text color={COLORS.muted}>{T.slackReplies(post.replies)}</Text>
+                        )}
+                      </Box>
+                    )}
+                  </Box>
+                )
+              })}
             </Box>
-          ))}
+          )}
           <Input
             key={`slack-write-${view.channel}-${view.thread ?? 'room'}-${slackSent}`}
             label={T.slackReplyLabel}

@@ -20,6 +20,7 @@ The DMs and group DMs other people sent you, kept as conversations like the Slac
 
 - The list shows one row per conversation, most recent first: `●` when it has messages you have not opened in desk-slack, the people in it, the last message and how long ago. The first time, it fills in the last 3 days as already read
 - Click a conversation for its latest 30 messages, both sides. Write in the box at the bottom and press Enter to reply there. `↻` (`r` in every view) reloads, `← Conversations` (`b`, also under the reply box) goes back
+- Messages are drawn the way Slack shows them: bold, italic, strikethrough, code blocks, links and mentions, a date line where the day changes, the name once for messages one person sends in a row, and attachments as `📎 name · size`. A table pasted from a terminal (drawn with `│` and `─┼─`) is redrawn to fit the pane, or as one card per row when its columns would cut words
 - Under a message with replies, `N replies` opens that thread (the message and its latest 30 replies), and a reply written there goes to the thread. `← name` (`b`) goes back to the conversation. When a conversation's last message is a thread reply, clicking it in the list opens that thread directly
 - `✕` closes a conversation, and `Close all` at the top closes every conversation in the list (both need a second press within 5 seconds). A closed conversation comes back when a new message arrives in it
 - `Hand to Claude` fills the prompt with the conversation's recent messages; `Open in Slack` opens it in Slack
@@ -44,6 +45,8 @@ desk-slack collects no data and runs no programs. Everything it reads stays on y
 **Reads**: Claude Code's `language` setting, and desk-look's language and `/desk-fold` state when desk-look is installed.
 
 **Sends**: only to the Slack MCP server Claude Code already has connected (with Claude Code's own connection and login), but only while all four of its Slack tools (`slack_search_public_and_private`, `slack_read_channel`, `slack_send_message`, `slack_read_user_profile`) have an allow rule (`slack_read_thread`, which opens threads, is called only when it has one too): once a minute, from one running session, it searches for DMs and group DMs sent to you since the last check; when you open a conversation or one of its threads it reads its latest 30 messages; when you submit a reply it sends it there; and it reads your Slack user ID once. It keeps the conversation list, your user ID and which session checks in its own plugin store (`$.store`), and raises a notification for new messages through your notification channel unless `slackNotify` is `off`. Without the rules it calls nothing and the pane lists the missing ones (found with `$.tool.check`). It publishes the unread count for desk-look's `✉` chip.
+
+`hooks/shared/` is a copy of desk-look's Markdown renderer, used to draw messages; `hooks/shared/vendor/lovely-mermaid.js` is [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 0.3.3 (Apache-2.0, `hooks/shared/vendor/LICENSE.lovely-mermaid`), bundled without minification. It runs no programs and makes no requests.
 
 ## Hooks and what they do
 

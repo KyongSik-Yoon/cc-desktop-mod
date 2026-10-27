@@ -1,7 +1,7 @@
 import type { On, RenderSurface } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackText, tsCompare, unreadCount } from '../hooks/slack'
+import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackFiles, slackMarkdown, slackText, snippet, tsCompare, unreadCount } from '../hooks/slack'
 
 const KO = { options: { language: 'ko' } }
 const VIEWPORT = { columns: 100, rows: 40 }
@@ -111,6 +111,61 @@ describe('Slack 패널', () => {
     expect(findSlackServer(['mcp__claude_ai_Slack__slack_read_channel', 'mcp__asana-v2__get_me'])).toBeNull()
     // deny 규칙이 걸린 도구는 목록에 없어도 서버는 찾는다(빠진 도구는 규칙 안내로)
     expect(findSlackServer(['mcp__claude_ai_Slack__slack_search_public_and_private', 'mcp__claude_ai_Slack__slack_read_channel'])).toEqual({ name: 'claude_ai_Slack' })
+  })
+
+  test('방 안 글: Slack mrkdwn 을 마크다운으로, 첨부 줄은 따로', () => {
+    // 한 줄 안에서 열고 닫는 코드 블록, 여는 ``` 바로 뒤 코드(언어로 읽으면 안 된다), 코드 안 * 는 그대로
+    expect(slackMarkdown('```[   0][15:21:53 539] void a.is(()V) [2688 ms]```')).toBe('```\n[   0][15:21:53 539] void a.is(()V) [2688 ms]\n```')
+    expect(slackMarkdown('보세요\n```if (a * b > 1) {\n  x()\n}```\n어때요')).toBe('보세요\n\n```\nif (a * b > 1) {\n  x()\n}\n```\n\n어때요')
+    // *굵게* _기울임_ ~취소~, 낱말 안의 _ 와 이어진 ~ 는 글자
+    expect(slackMarkdown('*Sent using* Claude')).toBe('**Sent using** Claude')
+    expect(slackMarkdown('_정말_ ~틀림~ heap_used 야~~~~')).toBe('*정말* ~~틀림~~ heap\\_used 야\\~\\~\\~\\~')
+    expect(slackMarkdown('`a*b*c` 그대로')).toBe('`a*b*c` 그대로')
+    // 링크·멘션·채널·@here, 사람이 쓴 <host> 는 글자
+    expect(slackMarkdown('<https://example.com/a_b|example.com/a…> <https://x.io> <mailto:a@b.c|a@b.c>')).toBe('[example.com/a…](https://example.com/a_b) <https://x.io> [a@b.c](mailto:a@b.c)')
+    expect(slackMarkdown('<@U0KV> <@U0ZZ> <#C01|dev> <!here> http://<gateway-host>:17800/x', { U0KV: 'kevin' })).toBe('**@kevin** **@U0ZZ** **#dev** **@here** http://<gateway-host>:17800/x')
+    // 글자 < > & 는 엔티티로 온다: 코드 안팎 모두 푼다
+    expect(slackMarkdown('a &lt;b&gt; &amp;amp;\n```x &gt; 1```')).toBe('a <b> &amp;\n\n```\nx > 1\n```')
+    expect(slackMarkdown('<https://x.io|a &amp;lt; b>')).toBe('[a &lt; b](https://x.io)')
+    // 줄 앞 • 는 목록
+    // 굵게·기울임 안의 멘션은 ** 를 겹치지 않는다
+    expect(slackMarkdown('*cc <@U1>* _to <!here>_', { U1: 'a' })).toBe('**cc @a** *to @here*')
+    // 목록 미리보기·알림은 평문: ``` 와 엔티티를 걷는다
+    expect(snippet('```[ 0] a &gt; b```')).toBe('[ 0] a > b')
+    // 줄 앞 • 는 목록, ─ 줄은 가로줄. 터미널에서 복사해 둘째 줄부터 같이 들인 칸은 걷는다
+    expect(slackMarkdown('개요\n  • 클러스터: jennifer\n    • 네임스페이스: orphan\n  ──────\n  다음')).toBe('개요\n- 클러스터: jennifer\n  - 네임스페이스: orphan\n---\n다음')
+    // 펜스 없이 붙여 넣은 코드는 들여쓰기 그대로
+    expect(slackMarkdown('f() {\n    if (a) {\n      b()\n    }')).toBe('f() {\n    if (a) {\n      b()\n    }')
+    // 펜스 안 상자 표(터미널 출력 붙여 넣기): 글로 그리고 표는 마크다운 표로. 접힌 행은 칸마다 잇되
+    // 칸 폭을 꽉 채운 조각 뒤는 낱말 가운데서 접힌 것이라 붙인다. 줄 앞 │ 는 인용
+    const BOX = [
+      '```  그룹 1. 묶어 보내야 하는 경로',
+      '',
+      '   도메인      │ Proto 필드                │ 파생',
+      '  ─────────────┼───────────────────────────┼──────────────',
+      '   JVM 메모리  │ heap_committed            │ heapUsage (heap',
+      '               │ (heapCommitted)heapMemory │ / 100)',
+      '               │ SizeBytes                 │',
+      '   GC          │ gc_activity               │ -',
+      '',
+      '  │ 이 *필드*는 함께 보낸다```',
+    ].join('\n')
+    expect(slackMarkdown(BOX)).toBe(
+      [
+        '그룹 1. 묶어 보내야 하는 경로',
+        '',
+        '',
+        '| 도메인 | Proto 필드 | 파생 |',
+        '| --- | --- | --- |',
+        '| JVM 메모리 | heap\\_committed (heapCommitted)heapMemorySizeBytes | heapUsage (heap / 100) |',
+        '| GC | gc\\_activity | - |',
+        '',
+        '',
+        '> 이 \\*필드\\*는 함께 보낸다',
+      ].join('\n'),
+    )
+    expect(slackFiles('{"pid":12029}\nFiles: a.jpg (ID: F01, image/jpeg, 1.0 KB)')).toEqual({ text: '{"pid":12029}', files: ['a.jpg · 1.0 KB'] })
+    expect(slackFiles('\nFiles: image.png (ID: F0C, image/png, 51.1 KB), b c.pdf (ID: F0D, application/pdf, 492.4 KB)')).toEqual({ text: '', files: ['image.png · 51.1 KB', 'b c.pdf · 492.4 KB'] })
   })
 
   test('대화방: 처음 채우기는 알리지 않고, 그 뒤 새 메시지만 방에, 닫은 방은 새 메시지가 와야 다시', () => {
@@ -270,7 +325,11 @@ describe('Slack 패널', () => {
     drawn = JSON.stringify(await pane.drawn())
     expect(calls.at(-1)).toEqual({ tool: 'slack_read_channel', args: { channel_id: 'D01', limit: 30, response_format: 'detailed' } })
     expect(drawn).toContain('{\\"pid\\":12029}')
-    expect(drawn).toContain('오오... 링크')
+    // 본문은 마크다운으로: <주소|글> 은 누르는 링크, 첨부는 📎 줄, 이름 옆은 시각
+    expect(drawn).toContain('"href":"https://example.com/a"},"children":["링크"]')
+    expect(drawn).toContain('📎 a.jpg · 1.0 KB')
+    expect(drawn).not.toContain('Files:')
+    expect(drawn).toMatch(/"children":\["kevin"\]\},\{"type":"Text","props":\{"color":"inactive"\},"children":\["\d\d:\d\d"\]/)
     // 패널을 골라도 답장 칸이 고리를 가져가지 않아야 r·b 가 눌린다
     expect(drawn).not.toContain('autoFocus')
 

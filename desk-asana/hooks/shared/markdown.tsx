@@ -96,7 +96,8 @@ function isBlockStart(line: string, next: string | undefined): boolean {
   )
 }
 
-export function parseBlocks(markdown: string): Block[] {
+// breaks 는 채팅 글용: 문단 안의 줄바꿈을 그대로 둔다(GFM 의 breaks). 아니면 CommonMark 처럼 한 칸으로 잇는다.
+export function parseBlocks(markdown: string, breaks = false): Block[] {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
   const blocks: Block[] = []
   let i = 0
@@ -164,12 +165,12 @@ export function parseBlocks(markdown: string): Block[] {
         body.push((lines[i] ?? '').replace(/^\s*>\s?/, ''))
         i++
       }
-      blocks.push({ kind: 'quote', blocks: parseBlocks(body.join('\n')), raw: body.join('\n') })
+      blocks.push({ kind: 'quote', blocks: parseBlocks(body.join('\n'), breaks), raw: body.join('\n') })
       continue
     }
 
     if (LIST_ITEM.test(line)) {
-      const items: { level: number; marker: string; text: string }[] = []
+      const items: { level: number; marker: string; text: string; column: number }[] = []
       while (i < lines.length) {
         const current = lines[i] ?? ''
         const item = LIST_ITEM.exec(current)
@@ -177,21 +178,23 @@ export function parseBlocks(markdown: string): Block[] {
           const indent = (item[1] ?? '').replace(/\t/g, '    ').length
           const marker = item[2] ?? '-'
           items.push({
+            column: indent + marker.length + 1,
             level: Math.min(4, Math.floor(indent / 2)),
             marker: /\d/.test(marker) ? marker : (BULLETS[Math.min(4, Math.floor(indent / 2)) % BULLETS.length] ?? '•'),
             text: item[3] ?? '',
           })
           i++
         } else if (current.trim() !== '' && /^\s+/.test(current) && items.length > 0) {
-          // 들여쓴 이어지는 줄은 앞 항목에 붙인다.
+          // 들여쓴 이어지는 줄은 앞 항목에 붙인다. breaks 면 줄을 바꾸고 항목 글 칸보다 더 들인 만큼은 남긴다.
           const last = items[items.length - 1]
-          if (last) last.text += ' ' + current.trim()
+          if (last && breaks) last.text += '\n' + current.trimEnd().replace(new RegExp(`^ {0,${last.column}}`), '')
+          else if (last) last.text += ' ' + current.trim()
           i++
         } else {
           break
         }
       }
-      blocks.push({ kind: 'list', items })
+      blocks.push({ kind: 'list', items: items.map(({ column: _, ...item }) => item) })
       continue
     }
 
@@ -199,10 +202,11 @@ export function parseBlocks(markdown: string): Block[] {
     while (i < lines.length) {
       const current = lines[i] ?? ''
       if (current.trim() === '' || (paragraph.length > 0 && isBlockStart(current, lines[i + 1]))) break
-      paragraph.push(current.trim())
+      // 채팅 글은 펜스 없이 붙여 넣은 코드가 많아 줄 앞 들여쓰기를 남긴다
+      paragraph.push(breaks ? current.trimEnd() : current.trim())
       i++
     }
-    blocks.push({ kind: 'paragraph', text: paragraph.join(' ') })
+    blocks.push({ kind: 'paragraph', text: paragraph.join(breaks ? '\n' : ' ') })
   }
 
   return blocks
@@ -357,7 +361,8 @@ export function splitFrontMatter(markdown: string): { fields: [string, string][]
 
 // onCopy 가 있으면 코드 블록 위 테두리 오른쪽에 마우스를 올렸을 때만 보이는 "⧉ copy" 버튼을 단다.
 // document 는 파일 한 편을 읽는 패널용: 제목 단계를 색·밑줄로 나누고 front matter 를 흐린 머리로 접는다.
-export type MarkdownOptions = { onCopy?: (source: string, press: UiPressArgument) => void; document?: boolean }
+// breaks 는 채팅 글(Slack)용: 한 줄 바꿈도 줄을 바꾼다. cards 는 좁은 패널용: 낱말이 잘릴 만큼 칸이 좁아지는 표를 행마다 카드로.
+export type MarkdownOptions = { onCopy?: (source: string, press: UiPressArgument) => void; document?: boolean; breaks?: boolean; cards?: boolean }
 
 export function renderMarkdown(markdown: string, els: Els, colors: Palette, columns: number, options: MarkdownOptions = {}) {
   const { Box, Text, Code, Link, Button } = els
@@ -414,6 +419,13 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
     )
     // 데스크톱 메시지 열처럼 폭을 채우되, 아주 넓은 터미널에서 늘어지지 않게 100칸에서 멈춘다.
     const widths = columnWidths(natural, Math.min(room, 100) - 2, true)
+    // cards: 칸이 그 칸의 가장 긴 낱말보다 좁아지면 낱말이 쪼개져 못 읽으니 행마다 카드로 그린다.
+    if (options.cards) {
+      const longest = Array.from({ length: count }, (_, index) =>
+        Math.max(0, ...[block.header, ...block.rows].flatMap(row => plainText(parseInline(cell(row, index))).split(/\s+/).map(cellWidth))),
+      )
+      if (widths.some((width, index) => width < (longest[index] ?? 0))) return cards(block, key, room)
+    }
     const inner = widths.reduce((sum, width) => sum + width + 2, 0)
     const justify = (index: number) =>
       block.align[index] === 'right' ? 'flex-end' : block.align[index] === 'center' ? 'center' : 'flex-start'
@@ -433,6 +445,31 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
       <Box flexDirection="column" alignSelf="flex-start" borderStyle="round" borderColor={colors.border}>
         {row(block.header, `${key}.h`, true)}
         {block.rows.flatMap((cells, index) => [rule, row(cells, `${key}.${index}`, false)])}
+      </Box>
+    )
+  }
+
+  // 카드: 첫 칸을 제목으로, 나머지는 "머리  값" 줄로. 머리 폭은 가장 긴 머리에 맞추되 폭의 1/3 을 넘지 않는다.
+  const cards = (block: Extract<Block, { kind: 'table' }>, key: string, room: number) => {
+    const labels = block.header.slice(1)
+    const labelWidth = Math.min(Math.floor(room / 3), Math.max(0, ...labels.map(label => inlineWidth(parseInline(label), codePadding))))
+    return (
+      <Box flexDirection="column">
+        {block.rows.map((row, index) => (
+          <Box marginTop={index === 0 ? 0 : 1} flexDirection="column">
+            {prose(row[0] ?? '', `${key}.${index}.t`, { weight: 'semibold' })}
+            {labels.map((label, n) =>
+              (row[n + 1] ?? '') === '' ? null : (
+                <Box flexDirection="row" paddingLeft={2} columnGap={2}>
+                  <Box width={labelWidth} flexShrink={0}>
+                    {prose(label, `${key}.${index}.${n}.l`, { color: colors.muted })}
+                  </Box>
+                  {prose(row[n + 1] ?? '', `${key}.${index}.${n}`)}
+                </Box>
+              ),
+            )}
+          </Box>
+        ))}
       </Box>
     )
   }
@@ -522,7 +559,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
                   <Text color={style.color} weight="semibold">
                     {style.title}
                   </Text>
-                  {blocks(parseBlocks(block.raw.slice(alert[0].length)), k, room - 4)}
+                  {blocks(parseBlocks(block.raw.slice(alert[0].length), options.breaks), k, room - 4)}
                 </Box>
               )
             }
@@ -550,7 +587,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
 
   const room = Math.max(20, columns)
   if (!options.document) {
-    return <Box flexDirection="column">{blocks(parseBlocks(markdown), 'md', room)}</Box>
+    return <Box flexDirection="column">{blocks(parseBlocks(markdown, options.breaks), 'md', room)}</Box>
   }
   const { fields, body } = splitFrontMatter(markdown)
   const keyWidth = Math.max(0, ...fields.map(([name]) => cellWidth(name)))
