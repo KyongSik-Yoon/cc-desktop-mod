@@ -430,7 +430,7 @@ test('순수 함수', KO, async () => {
 
 import { computeRuns, placeCall, withPredicted } from '../hooks/runs'
 import type { PredictedCall, RunCursor } from '../hooks/runs'
-import { mix, parseSurface } from '../hooks/theme'
+import { gray256, mix, parseSurface } from '../hooks/theme'
 
 describe('v3: 테마 면과 도구 묶음', () => {
   test('omarchy colors.toml 에서 말풍선 색을 계산한다', KO, async () => {
@@ -3845,6 +3845,37 @@ describe('데스크톱 모양 diff', () => {
     }
   })
 
+  test('어두운 테마: 패널 바탕은 말풍선 색, tmux 안(256색)에서는 팔레트 회색', KO, async ($, on) => {
+    let tmux: string | undefined
+    const opened: { backgroundColor?: string }[] = []
+    on('env.get', ($, e) => {
+      const name = String((e as { name?: string }).name ?? e)
+      return { value: (name === 'HOME' ? '/home/t' : name === 'COLORTERM' ? 'truecolor' : name === 'TMUX' ? tmux : undefined) as never }
+    })
+    on('fs.read', ($, e) => {
+      const path = String((e as { path?: string }).path ?? e)
+      if (path.endsWith('colors.toml')) return { value: 'mode = "dark"\nbackground = "#1a1b26"\n' } as never
+      throw new Error('ENOENT')
+    })
+    on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+    on('ui.open', ($, e) => {
+      opened.push(e as { backgroundColor?: string })
+      return { value: { isPlaced: true } }
+    })
+    for (const where of [undefined, '/tmp/tmux-1000/default,1,0']) {
+      tmux = where
+      await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+      const want = where ? '#303030' : '#2c2d37'
+      for (let tries = 0; tries < 50; tries++) {
+        opened.length = 0
+        await $.command.run({ command: 'desk-context', args: '' } as never)
+        if (opened.at(-1)?.backgroundColor === want) break
+        await wait(10)
+      }
+      expect(opened.at(-1)?.backgroundColor).toBe(want)
+    }
+  })
+
   // Omarchy 밝은 테마 파일을 읽게 하고 프롬프트 하나로 테마를 읽힌다. 터미널은 truecolor(tmux 밖).
   // sent 를 주면 엔진까지 간 프롬프트(글·context)를 모은다.
   const lightTheme = (on: On, sent?: { text: string; context?: readonly string[] }[]) => {
@@ -4514,4 +4545,11 @@ describe('답 글 블록째 보여주기(replyInBlocks)', () => {
     expect((await stream.next()).value).toEqual({ kind: 'stop', stopReason: 'end_turn', usage: null })
     expect((await stream.next()).done).toBe(true)
   })
+})
+
+test('256색 패널 바탕: 섞은 색을 밝기가 가장 가까운 팔레트 회색으로(어두운 회색이 #5f5f5f 로 밝아지지 않게)', () => {
+  expect(gray256('#2c2d37')).toBe('#303030')
+  expect(gray256('#ececec')).toBe('#eeeeee')
+  expect(gray256('#000000')).toBe('#000000')
+  expect(gray256('#5f5f5f')).toBe('#5f5f5f')
 })

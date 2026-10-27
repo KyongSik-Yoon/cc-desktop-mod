@@ -19,7 +19,7 @@ import { computeTasks } from './tasks'
 import { KIND_GLYPH, LOG_EVENTS, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
 import type { FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
-import { OMARCHY_COLORS, parseSurface } from './theme'
+import { OMARCHY_COLORS, gray256, parseSurface } from './theme'
 import { limitName, contextChipMode, meterBar, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage } from './usage'
 import type { ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
@@ -593,9 +593,16 @@ async function refreshBreakdown($: EngineInterface) {
   await update($, usageBreakdown, () => toBreakdown(raw, now))
 }
 
+// 2.1.311 Pane backgroundColor: omarchy 테마를 읽을 수 있으면 desk 패널 바탕을 말풍선 회색으로.
+// 엔진 테마 키에는 바탕용 키가 없어, 테마를 못 읽으면 기본 그림 그대로 둔다.
+async function paneLook($: EngineInterface): Promise<{ backgroundColor?: string }> {
+  const face = await read($, surface).catch(() => null)
+  return face ? { backgroundColor: face.bubble } : {}
+}
+
 async function openContext($: EngineInterface) {
   await refreshBreakdown($).catch(() => undefined)
-  await $.ui.open({ id: CONTEXT_PANE, title: T.paneContext, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: CONTEXT_PANE, title: T.paneContext, focus: true })
 }
 
 // 줄 전체가 눌리는 버튼: 라벨 뒤에 칩·흐린 설명(Text)을 함께 넣는다.
@@ -754,7 +761,7 @@ async function loadPreview($: EngineInterface, asked: string): Promise<PreviewFi
 
 async function openPreview($: EngineInterface, path: string, focus = false) {
   const file = await loadPreview($, path)
-  const opened = await $.ui.open({ id: PREVIEW_PANE, title: fileName(file.path), ...(focus ? { focus: true as const } : {}) })
+  const opened = await $.ui.open({ ...(await paneLook($)), id: PREVIEW_PANE, title: fileName(file.path), ...(focus ? { focus: true as const } : {}) })
   return { file, isPlaced: opened.isPlaced }
 }
 
@@ -798,7 +805,7 @@ async function openDiffAt($: EngineInterface, path: string) {
   // git 이 모르는 파일(저장소 밖)은 세션 편집 기록에서 찾는다. 경로는 도구가 준 절대 경로다.
   const outside = inGit === null ? matchDiffFile(outsideEdits(sessionEditsOf(await read($, runs)), await read($, repo)), path) : null
   const target = inGit ?? (outside === null ? null : `${OUTSIDE}${outside}`)
-  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   if (target === null) {
     $.ui.toast(T.notInDiff)
     return
@@ -937,7 +944,7 @@ async function refreshPr($: EngineInterface, force: boolean) {
 
 async function openDiff($: EngineInterface, scope?: DiffScope) {
   await refreshDiffView($, scope)
-  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   // 맨 위에서 보여 준다. 다시 연 패널의 창과 적어 둔 위치(diffWindow)도 이 스크롤로 맞춰진다.
   await $.ui.scroll({ to: 'start', in: PANE }).catch(() => undefined)
 }
@@ -973,7 +980,7 @@ async function toggleFold($: EngineInterface): Promise<string> {
   // 앞에 있던 패널을 마지막에 열어 앞에 오게 한다.
   const order = [...saved.filter(pane => !pane.isShown), ...saved.filter(pane => pane.isShown)]
   for (const pane of order) {
-    await $.ui.open({ id: pane.id, title: pane.title, ...(pane.isShown ? { focus: true as const } : {}) })
+    await $.ui.open({ ...(await paneLook($)), id: pane.id, title: pane.title, ...(pane.isShown ? { focus: true as const } : {}) })
     if (pane.offset > 0) await restoreScroll($, pane.id, pane.offset)
   }
   return T.unfolded(count)
@@ -1000,7 +1007,7 @@ async function restoreScroll($: EngineInterface, id: string, offset: number) {
 
 async function openPr($: EngineInterface) {
   const shown = refreshPr($, true).catch(() => undefined)
-  await $.ui.open({ id: PR_PANE, title: 'PR', focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: PR_PANE, title: 'PR', focus: true })
   await shown
 }
 
@@ -1046,7 +1053,7 @@ async function pickLine($: EngineInterface, at: LinePress) {
   if (!next || before?.patch !== next.patch) draftText = ''
   await update($, commentDraft, () => next)
   if (!next) return
-  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   await $.ui.focus({ requestId: PANE, key: draftInputKey(next) }).catch(() => undefined)
 }
 
@@ -1057,7 +1064,7 @@ async function clearComment($: EngineInterface) {
   const draft = await read($, commentDraft)
   await update($, commentDraft, current => (current ? { ...current } : current))
   if (!draft) return
-  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   await $.ui.focus({ requestId: PANE, key: draftInputKey(draft) }).catch(() => undefined)
 }
 
@@ -1212,7 +1219,7 @@ async function toggleFilter($: EngineInterface) {
     return
   }
   await update($, diffFilter, previous => ({ ...previous, isOpen: true }))
-  await $.ui.open({ id: PANE, title: T.paneChanges, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   await focusInPane($, PANE, 'diff-filter')
 }
 
@@ -1307,9 +1314,13 @@ async function foldCommits($: EngineInterface) {
 async function refreshSurface($: EngineInterface) {
   const home = await $.env.get('HOME')
   const toml = home ? await $.fs.read(`${home}/${OMARCHY_COLORS}`).catch(() => null) : null
-  const next = toml === null ? null : parseSurface(toml)
+  const parsed = toml === null ? null : parseSurface(toml)
   const [colorterm, tmux] = await Promise.all([$.env.get('COLORTERM').catch(() => undefined), $.env.get('TMUX').catch(() => undefined)])
-  diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, isTruecolor({ COLORTERM: colorterm, TMUX: tmux })) : null
+  const truecolor = isTruecolor({ COLORTERM: colorterm, TMUX: tmux })
+  // 256색(tmux 안)에서는 말풍선 회색을 팔레트의 회색으로: 섞은 색은 엔진이 색 큐브로 줄여 어두운 테마에서 #5f5f5f 로 밝아진다.
+  // 말풍선·코드 바탕·파일 줄·패널 바탕·모서리 그림이 모두 이 값을 쓰므로 여기서 한 번 바꾼다.
+  const next = parsed && !truecolor ? { ...parsed, bubble: gray256(parsed.bubble) } : parsed
+  diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, truecolor) : null
   if (!sameJson(await read($, surface), next)) await update($, surface, () => next)
 }
 
@@ -1868,7 +1879,7 @@ async function openAgents($: EngineInterface, id: string | null = null) {
   await update($, agentView, () => id)
   await refreshAgents($).catch(() => undefined)
   await refreshAgentDetail($).catch(() => undefined)
-  await $.ui.open({ id: AGENTS_PANE, title: T.paneAgents, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: AGENTS_PANE, title: T.paneAgents, focus: true })
 }
 
 // 패널이 한동안 그려지지 않았거나(닫힘·접힘), 턴도 끝나고 도는 에이전트·셸도 없으면 멈춘다.
@@ -1890,7 +1901,7 @@ function startActivityClock($: EngineInterface) {
 }
 
 async function openActivity($: EngineInterface) {
-  await $.ui.open({ id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
+  await $.ui.open({ ...(await paneLook($)), id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
 }
 
 // 에이전트 대화를 메인 화면에 띄운다(엔진의 작업 목록에서 고른 것처럼). 그 뒤 Enter 는 그 에이전트에게 간다. id 가 없으면 메인 대화로.
@@ -2851,7 +2862,7 @@ export const register: Register = (on, options) => {
       return { text: T.sessionPicked(index, entry.title) }
     }
     await refreshSessions($)
-    await $.ui.open({ id: SESSIONS_PANE, title: T.paneSessions, focus: true })
+    await $.ui.open({ ...(await paneLook($)), id: SESSIONS_PANE, title: T.paneSessions, focus: true })
     return { text: T.sessionsOpened }
   })
 
