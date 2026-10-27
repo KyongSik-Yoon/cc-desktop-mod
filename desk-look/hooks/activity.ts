@@ -216,7 +216,8 @@ export function kindOf(tool: string, command?: string): ActivityKind {
 // 막대에서 한 칸을 무엇으로 칠할지: 같은 칸에 여럿이 겹치면 짧은 사건(편집·테스트·탐색)이 이겨 긴 명령에 묻히지 않는다.
 const PRIORITY: ActivityKind[] = ['edit', 'test', 'explore', 'agent', 'command', 'other']
 // 오래 걸리는 일(명령·위임)은 굵은 선, 짧은 사건은 블록. 응답 중(idle)은 가는 선.
-export const KIND_GLYPH: Record<ActivityKind, string> = { explore: '░', edit: '▓', test: '▒', command: '━', agent: '━', other: '▪' }
+// 위임은 겹선: 사용자 테마가 두 색(claude·planMode)을 같게 잡아도 명령과 갈리게.
+export const KIND_GLYPH: Record<ActivityKind, string> = { explore: '░', edit: '▓', test: '▒', command: '━', agent: '═', other: '▪' }
 
 export type LaneSegment = { kind: ActivityKind | 'idle' | 'none'; text: string }
 
