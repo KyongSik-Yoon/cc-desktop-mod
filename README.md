@@ -5,7 +5,7 @@
 **desk-look** is a Claude Code plugin (mod) that makes the Claude Code CLI terminal UI look and work like the Code tab of the Claude desktop app.
 It is a Claude Code function-hook plugin: the engine stays as it is, and only the way things are drawn on screen changes. Nothing changes in the Code tab of the desktop app (the `desktop` surface).
 
-<img src="docs/demo.gif" alt="desk-look in action: a prompt, tool calls folded into one line, the edited-files card, the Markdown preview opening by itself when the turn ends, and a line comment in the diff pane" width="1280">
+<img src="docs/demo.gif" alt="desk-look in action: the progress band while Claude works, tool calls folded into one line, the edited-files card, the Markdown preview opening by itself when the turn ends, a line comment in the diff pane sent with the next prompt, and the context pane" width="1280">
 
 **At a glance**
 
@@ -25,7 +25,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - `/desk-tasks [number]`: Background tasks pane: agents, background shells and monitors
 - `/desk-pr`: The current branch's pull request or merge request, with a merge button
 - `/desk-preview [file]`: Markdown preview pane: a document drawn like the transcript
-- `/desk-context`: Context breakdown, usage limits and session cost
+- `/desk-context`: Context breakdown, what is loaded into it, how it filled this session, cache, cost and usage limits
 - `/desk-sessions [number]`: Recent sessions by project, with search; switch to one
 - `/desk-fold`: Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position
 - `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it. If you were already writing, the quote goes above your draft (after any earlier quotes) and the caret stays where you were typing. In the prompt, `>` lines (typed, pasted or inserted) look like quotes: the mark dimmed, the text italic and muted
@@ -144,14 +144,18 @@ Coming from an earlier desk-look: install the one you use (below), and if you ha
 
 ### `/desk-context`: context and usage
 
-<img src="docs/context.png" alt="The /desk-context pane: context bar, per-category breakdown, usage limits and session cost" width="540">
+<img src="docs/context.png" alt="The /desk-context pane: a context bar in category colors, per-category bars, what is loaded into the context, a graph of this session with a compaction marker, cache, cost and usage limits" width="540">
 
 Replaces the `/context` grid:
 
-- A context bar (tokens / window, the auto-compact point)
-- A per-category breakdown, the same categories as `/context` (a local estimate, so no API requests)
-- 5-hour and 7-day usage limits with time until reset, and the session cost
-- `↻` (`r`) recalculates
+- A context bar in the categories' own colors, free space as a thin line and the auto-compact buffer dashed (tokens / window, the auto-compact point)
+- A per-category breakdown, the same categories as `/context`, each with a bar (a local estimate, so no API requests)
+- What is loaded into the context, each group folded until clicked: MCP tools by server (with how many load on demand), memory files, the skill listing (how many of the session's skills it lists) and custom agents, each with its tokens
+- This session: how full the context was at the end of each turn, the axis scaled to the highest point, `┈` at the auto-compact height and `▲` where the conversation was compacted. The graph keeps what the turns already read for the context chip and asks nothing more; it starts over when plugins are reloaded or the window moves to another session, and its title says since when
+- Cache: how the last turn's input split between read from cache, written to cache and new, and the share read from cache over the turns in the graph
+- Cost: the session cost, a bar per turn and the last turn's cost
+- 5-hour and 7-day usage limits with time until reset
+- The breakdown and what is loaded are calculated when the pane opens and on `↻` (`r`). The session graph, cache, cost and limits update after each turn from what the turn end already reads, so an open pane adds no calculation per turn and a closed one does nothing
 
 ### `/desk-sessions [number]`: recent sessions
 
