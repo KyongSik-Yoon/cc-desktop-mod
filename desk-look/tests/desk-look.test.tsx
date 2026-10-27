@@ -1132,6 +1132,23 @@ describe('진행 띠', () => {
       ['edit', '▓'],
       ['command', '━━━━'],
     ])
+    // 위임과 명령은 테마가 두 색을 같게 잡아도 모양으로 갈린다
+    expect(
+      laneSegments(
+        [
+          { kind: 'agent', start: 0, end: 4000 },
+          { kind: 'command', start: 6000, end: 10_000 },
+        ],
+        { start: 0, end: 10_000 },
+        0,
+        10_000,
+        10,
+      ).map(segment => [segment.kind, segment.text]),
+    ).toEqual([
+      ['agent', '═════'],
+      ['idle', '─'],
+      ['command', '━━━━'],
+    ])
     // 살아 있던 구간 밖은 빈칸
     expect(laneSegments([], { start: 5000, end: 6000 }, 0, 10_000, 10).map(segment => [segment.kind, segment.text])).toEqual([
       ['none', '     '],
