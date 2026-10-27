@@ -37,10 +37,11 @@ declare module 'claude-code' {
       // 패널이 지금 열려 있음(desk-look 의 /desk-fold 가 읽는다).
       shown: boolean
     }
-    // desk-look 의 값 가운데 이 플러그인이 읽는 것(그쪽 types 와 같은 모양): 화면 언어, 접어 둔 desk-look 패널.
+    // desk-look 의 값 가운데 이 플러그인이 읽는 것(그쪽 types 와 같은 모양): 화면 언어, 접어 둔 desk-look 패널, ✉ 칩을 누른 횟수.
     'desk-look': {
       lang: 'en' | 'ko'
       folded: FoldedPane[] | null
+      slackOpen: number
     }
   }
 }

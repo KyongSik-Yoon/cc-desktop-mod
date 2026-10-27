@@ -288,6 +288,14 @@ export const register: Register = (on, options) => {
     return done
   }).catch(($, e, next) => next(e))
 
+  // desk-look 아래턱의 ✉ 칩: 누를 때마다 slackOpen 이 오른다. $.command.run('desk-slack') 은 턴이 끝날 때까지
+  // 줄을 서서 턴 중에는 열리지 않았다.
+  on('state.set', { plugin: 'desk-look', key: 'slackOpen' }, async ($, e, next) => {
+    const done = await next(e)
+    await openSlack($).catch(() => undefined)
+    return done
+  }).catch(($, e, next) => next(e))
+
   // 패널이 열려 있는지 desk-look 에 알린다. 사람이 ✕ 로 닫아도, 플러그인을 내려도 ui.close 가 온다.
   on('ui.open', { id: SLACK_PANE }, async ($, e, next) => {
     const opened = await next(e)

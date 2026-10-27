@@ -130,6 +130,8 @@ const agentClock = atom({ plugin: 'desk-look', key: 'agentClock' } as const, 0)
 const taskOutput = atom({ plugin: 'desk-look', key: 'taskOutput' } as const, null as { id: string; text: string | null } | null)
 // /desk-fold 로 접어 둔 패널. 펴면 비운다. 접은 동안은 내 패널이 없었어도 빈 목록이다(toggleFold).
 const folded = atom({ plugin: 'desk-look', key: 'folded' } as const, null as FoldedPane[] | null)
+// 아래턱 ✉ 칩을 누른 횟수. desk-slack 이 이 값의 state.set 을 훅해 Slack 패널을 연다.
+const slackOpenCount = atom({ plugin: 'desk-look', key: 'slackOpen' } as const, 0)
 // 지금 화면 언어. desk-asana·desk-slack 이 이 값을 따른다.
 const lang = atom({ plugin: 'desk-look', key: 'lang' } as const, 'en' as Lang)
 // 같은 마켓의 desk-asana·desk-slack 이 쓰는 값(읽기만): 접어 둔 패널, 이 세션에 떠 있는지, 안 읽은 Slack 메시지 수.
@@ -2239,7 +2241,8 @@ function waitingRows(els: Els, $: EngineInterface, waited: ReadonlyArray<{ id: s
 }
 
 // 아래턱의 "✉ 3": desk-slack 플러그인이 세는 안 읽은 Slack 메시지 수(desk-slack 이 없으면 0).
-// 누르면 desk-slack 의 /desk-slack 패널.
+// 누르면 desk-slack 의 Slack 패널: $.command.run 은 immediate 명령도 턴이 끝날 때까지 줄을 서서,
+// 턴 중에 눌러도 열리도록 slackOpen 을 올려 desk-slack 이 바로 열게 한다.
 function slackChip(els: Els, $: EngineInterface, count: number) {
   if (count === 0) return null
   const { Text, Button } = els
@@ -2247,7 +2250,7 @@ function slackChip(els: Els, $: EngineInterface, count: number) {
   return {
     width: 2 + cellWidth(label),
     node: (
-      <Button key="slack-chip" plain dimColor onPress={() => void $.command.run({ command: 'desk-slack' }).catch(() => undefined)}>
+      <Button key="slack-chip" plain dimColor onPress={() => void update($, slackOpenCount, count => count + 1).catch(() => undefined)}>
         <Text color={COLORS.accent}>✉</Text>
         {` ${label}`}
       </Button>
@@ -5178,7 +5181,8 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
   ]
   const total = formatElapsed(end - log.startedAt)
   const axis = `${' '.repeat(LANE_LABEL)}0${' '.repeat(Math.max(1, width - 1 - total.length))}${total}`
-  const kinds: ActivityKind[] = ['explore', 'edit', 'test', 'command', 'agent']
+  // 기타(MCP·Skill·질문 등)는 그 턴에 있을 때만: 늘 붙이면 범례가 길어진다.
+  const kinds: ActivityKind[] = ['explore', 'edit', 'test', 'command', 'agent', ...(log.events.some(event => event.kind === 'other') ? (['other'] as const) : [])]
   const legend = (
     <Text>
       {' '.repeat(LANE_LABEL)}
