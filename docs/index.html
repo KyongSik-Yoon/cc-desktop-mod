@@ -105,8 +105,10 @@ body {
   text-rendering: optimizeLegibility;
 }
 :root[data-lang="ko"] body { word-break: keep-all; overflow-wrap: anywhere; }
-/* Martian Mono's space is a full mono cell; tighten it between Hangul words. */
-:root[data-lang="ko"] :is(.hero h1, .h2, .facts dt, .spec h3, .panel h3, .cols h3) { word-spacing: -.3em; }
+/* Martian Mono's space is a full mono cell, too wide between Hangul words. The script measures the space the
+   heading font really draws and sets how much to take off; a fallback font (web fonts blocked) keeps its own. */
+:root[data-lang="ko"] :is(.hero h1, .h2) { word-spacing: var(--ko-ws-narrow, 0); }
+:root[data-lang="ko"] :is(.facts dt, .spec h3, .panel h3, .cols h3) { word-spacing: var(--ko-ws, 0); }
 img { max-width: 100%; display: block; }
 a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: .2em; }
 a:hover { text-decoration-color: var(--clay); }
@@ -1106,6 +1108,26 @@ flowchart TD
   var root = document.documentElement
   var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   var titles = { en: 'desk-look for Claude Code', ko: 'desk-look — Claude Code 를 데스크톱 앱처럼' }
+
+  // Korean headings: bring the space between words to about .3em, whatever font ends up drawing it.
+  function tuneSpaces() {
+    var probe = document.createElement('span')
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-family:var(--display);font-weight:600;font-size:100px'
+    document.body.appendChild(probe)
+    var space = function (stretch) {
+      probe.style.fontStretch = stretch
+      probe.textContent = '가 가'
+      var spaced = probe.getBoundingClientRect().width
+      probe.textContent = '가가'
+      return (spaced - probe.getBoundingClientRect().width) / 100
+    }
+    var take = function (stretch) { return Math.min(0, 0.3 - space(stretch)).toFixed(3) + 'em' }
+    root.style.setProperty('--ko-ws-narrow', take('75%'))
+    root.style.setProperty('--ko-ws', take('87.5%'))
+    probe.remove()
+  }
+  tuneSpaces()
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(tuneSpaces)
 
   // Language toggle
   function setLang(lang) {
