@@ -1400,6 +1400,8 @@ describe('진행 띠', () => {
     await ran
     await wait(20)
     await $.turn.complete({ durationMs: 25_000, reason: 'answer', answer: '끝', turnId: 't1' } as never)
+    // 시계가 도는 동안 바뀐 기록은 다음 시계(2초)에 들어온다
+    now += 2000
     pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
     const ended = JSON.stringify(await pane.drawn())
     expect(ended).toContain('지난 턴 · 25s')
@@ -1487,6 +1489,51 @@ describe('진행 띠', () => {
     await pane.unmount()
   })
 
+  test('/desk-activity 패널: 시계가 도는 동안 에이전트·호출 기록이 바뀌어도 다음 시계(2초)까지 그림이 그대로다', KO, async ($, on) => {
+    let now = 1_000_000
+    // 패널 시계(2초)는 fire() 할 때 한 번씩만 간다.
+    let fire: () => void = () => undefined
+    on('clock.every', async ($, e) => {
+      if ((e as { ms: number }).ms === 2000) await new Promise<void>(resolve => (fire = resolve))
+      return { value: undefined }
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'route-agent', status: 'running' }] as never }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    await $.command.run({ command: 'desk-tasks', args: '' } as never)
+    await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    const paneProps = { title: '활동', isFocused: true, bodyColumns: 70 } as never
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    const first = JSON.stringify(await pane.drawn())
+    expect(first).toContain('route-agent')
+    // 에이전트가 걸음마다 쓰는 기록은 시계 사이에 그림을 바꾸지 않는다(막대와 시간이 1초에 몇 번씩 가지 않게)
+    for (const file of ['a', 'b', 'c']) {
+      now += 500
+      await $.tool.call({ tool: 'Edit', file_path: `/r/${file}.ts`, old_string: 'a', new_string: 'b', agentId: 'a7' } as never)
+      await wait(20)
+      expect(JSON.stringify(await pane.drawn())).toBe(first)
+    }
+    // 펼침은 시계를 기다리지 않는다(시계 사이에는 지난 기록으로)
+    await pane.press({ key: 'activity-agent-a7' })
+    await wait(20)
+    expect(JSON.stringify(await pane.drawn())).toContain('▾')
+    // 시계가 가면 그동안의 호출과 시간이 한 번에 들어온다
+    now += 500
+    fire()
+    await wait(20)
+    const ticked = JSON.stringify(await pane.drawn())
+    expect(ticked).not.toBe(first)
+    expect(ticked).toContain('c.ts')
+    await pane.unmount()
+  })
+
   test('/desk-activity 패널: 사람이 패널을 잡고 있어 focus 가 거절돼도 에이전트 칩은 그 대화를 앞에 띄운다', KO, async ($, on) => {
     on('process.run', gitStub as never)
     on('fs.read', () => {
@@ -1568,7 +1615,8 @@ describe('진행 띠', () => {
     await scroll(100)
     await scroll(100)
     await scroll(100)
-    now += 1000
+    // 시계가 도는 동안 새 호출은 다음 시계(2초)에 들어온다
+    now += 2000
     await $.tool.call({ tool: 'Bash', command: 'step 31', description: '명령 31' } as never)
     pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props })
     drawn = JSON.stringify(await pane.drawn())

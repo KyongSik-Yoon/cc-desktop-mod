@@ -101,6 +101,8 @@ const activityAgentOpen = atom({ plugin: 'desk-look', key: 'activityAgentOpen' }
 const ACTIVITY_END = Number.MAX_SAFE_INTEGER
 // 마지막으로 그린 몸통 창: pinned 면 머리를 고정해 그렸고, room 은 몸통에 보이는 줄 수, max 는 첫 줄의 끝.
 let activityWindow = { pinned: false, room: 0, max: 0 }
+// 패널 시계가 도는 동안 마지막으로 새로 읽어 그린 입력과 그 시각·시계 값(activity 패널 훅이 시계 사이에 다시 쓴다).
+let activityFrame: { input: PaneInput; at: number; clockAt: number } | null = null
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
@@ -3791,13 +3793,31 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     // 턴이나 이 턴이 띄운 일이 도는 동안은 패널 시계(2초)로 다시 그려 막대와 시간이 간다.
-    const [log, records, startedAt, top, expanded] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityAgentOpen), read($, activityClock)])
+    const [log, records, startedAt, top, expanded, clockAt] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityAgentOpen), read($, activityClock)])
     if (log === null) return <Text color={COLORS.muted}>{T.activityNone}</Text>
     const now = await $.clock.now()
     activitySeen = now
+    const columns = Math.max(30, e.props.bodyColumns)
+    const bodyRows = (e.props as { scroll?: { bodyRows: number } }).scroll?.bodyRows ?? 0
+    const interactive = {
+      columns,
+      bodyRows,
+      top,
+      expanded,
+      openAgent: (id: string) => void openAgents($, id),
+      toggleAgent: (id: string) => void update($, activityAgentOpen, current => (current === id ? null : id)),
+    }
+    // 시계가 도는 동안 에이전트·호출 기록은 걸음마다 바뀌어(에이전트가 여럿이면 1초에도 몇 번) 이 훅을 다시 부른다.
+    // 그때마다 지금 시각으로 그리면 막대가 2초보다 자주 가므로, 다음 시계까지는 지난 그림의 입력을 그대로 쓰고
+    // 스크롤·펼침·폭만 새로 넣는다. 턴이 바뀐 것(백그라운드 끝남 알림 턴 등)도 다음 시계를 기다린다.
+    const held = activityTimer !== null && activityFrame !== null && activityFrame.clockAt === clockAt && now - activityFrame.at < ACTIVITY_TICK ? activityFrame : null
     // 도는 것이 있을 때만 시계를 건다(멈춘 뒤 마지막 한 번 그릴 때 다시 걸지 않게).
     if (activityTimer === null && (startedAt !== null || Object.values(records).some(agent => isLive(agent.status)))) startActivityClock($)
-    const columns = Math.max(30, e.props.bodyColumns)
+    if (held) {
+      const drawn = activityPane(els, { ...held.input, ...interactive })
+      activityWindow = drawn.window
+      return drawn.tree
+    }
     const turnEnd = log.endedAt ?? now
     const inTurn = (agent: AgentRecord) => (agent.startedAt ?? 0) >= log.startedAt - 1000 && (agent.startedAt ?? 0) <= turnEnd
     // 에이전트는 앞 턴에 띄웠어도 이 턴 동안(또는 지금) 돌았으면 함께 그린다: 그 호출도 이 기록에 쌓인다.
@@ -3810,21 +3830,9 @@ export const register: Register = (on, options) => {
     // 턴이 끝났어도 이 턴에 띄운 에이전트·셸이 아직 돌면 지금까지, 끝났으면 가장 늦게 끝난 때까지 시간 축을 늘린다.
     const spawned = [...turnAgents, ...shells]
     const end = spawned.some(agent => isLive(agent.status)) ? now : Math.max(turnEnd, ...spawned.map(agent => agent.endedAt ?? turnEnd))
-    const bodyRows = (e.props as { scroll?: { bodyRows: number } }).scroll?.bodyRows ?? 0
-    const drawn = activityPane(els, {
-      log,
-      now,
-      end,
-      columns,
-      turnAgents,
-      shells,
-      tail,
-      bodyRows,
-      top,
-      expanded,
-      openAgent: id => void openAgents($, id),
-      toggleAgent: id => void update($, activityAgentOpen, current => (current === id ? null : id)),
-    })
+    const input: PaneInput = { log, now, end, turnAgents, shells, tail, ...interactive }
+    activityFrame = { input, at: now, clockAt }
+    const drawn = activityPane(els, input)
     activityWindow = drawn.window
     return drawn.tree
   })
