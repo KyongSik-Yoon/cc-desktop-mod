@@ -192,6 +192,12 @@ export function applyNotices(records: Readonly<Record<string, AgentRecord>>, not
   return next
 }
 
+// 엔진은 백그라운드 셸이 끝나면 출력 파일 끝에 "[exited with code N]" 를 쓴다. 끝났으면 그 상태, 아니면 undefined.
+export function exitStatusOf(output: string): 'completed' | 'failed' | undefined {
+  const code = /(?:^|\n)\[exited with code (-?\d+)\]\s*$/.exec(output)?.[1]
+  return code === undefined ? undefined : code === '0' ? 'completed' : 'failed'
+}
+
 // 출력의 마지막 lines 줄(앞에 잘린 줄 수).
 export function tailOf(text: string, lines: number): string {
   const all = text.replace(/\n+$/, '').split('\n')

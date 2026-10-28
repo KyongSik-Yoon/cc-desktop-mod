@@ -283,6 +283,8 @@ pre.src { margin: 0; font: inherit; color: var(--ink-2); white-space: pre; }
 }
 .cur { display: inline-block; width: .6em; height: 1.15em; vertical-align: -.2em; background: var(--ink); margin-left: 1px; }
 .modeline { color: var(--mode); padding-left: 2ch; margin-top: .3em; }
+/* ⏵ is in no web font subset and missing from Android's fallback fonts, so the mode arrows are drawn. */
+.modeline svg { width: 2ch; height: 1em; vertical-align: -.2em; fill: currentColor; }
 
 /* desk-look */
 .k-bubble {
@@ -420,10 +422,11 @@ pre.src { margin: 0; font: inherit; color: var(--ink-2); white-space: pre; }
 .dock .pane img { width: 100%; height: 100%; object-fit: contain; object-position: left top; }
 .dock .pane img.crop { object-fit: cover; }
 .dock .pane.rec { filter: none; }
-/* The context pane screenshot is portrait: a taller frame, and its own pane gray behind it. */
+/* The context pane screenshot is portrait: a taller frame, and its own pane gray behind it.
+   On a phone it drops the conversation column like every dock and takes the screenshot's own shape. */
 .dock.tall { height: clamp(460px, 52vw, 720px); grid-template-columns: 16% minmax(0, 1fr); }
 .dock .pane.ctx { background: #E4E4E4; }
-@media (max-width: 640px) { .dock.tall { height: 560px; } }
+@media (max-width: 640px) { .dock.tall { height: auto; aspect-ratio: 1310 / 1530; grid-template-columns: minmax(0, 1fr); } }
 .dock .pane.rec { background: var(--pane); overflow: auto; }
 @media (max-width: 640px) { .dock { grid-template-columns: minmax(0, 1fr); height: 420px; } .dock .conv { display: none; } }
 .rec .term { font-size: clamp(10.5px, .5rem + .35vw, 12.5px); padding: 18px 20px; }
@@ -583,7 +586,7 @@ pre.src { margin: 0; font: inherit; color: var(--ink-2); white-space: pre; }
 ▎ Data is stored in todos.json in the current working directory.</div>
             <div class="row sp dim"><span class="clay">✻</span><span>Baked for 12s</span></div>
             <div class="inputbox sp"><span>&gt;</span><span>commit this<span class="cur"></span></span></div>
-            <div class="modeline">⏵⏵ accept edits on <span class="dim">(shift+tab to cycle)</span></div>
+            <div class="modeline"><svg viewBox="0 0 12 10" aria-hidden="true"><path d="M1.2 2.2 5.6 5 1.2 7.8zM7.2 2.2 11.6 5 7.2 7.8z"/></svg> accept edits on <span class="dim">(shift+tab to cycle)</span></div>
           </div>
 
           <!-- The same turn, drawn by desk-look -->
@@ -617,7 +620,7 @@ pre.src { margin: 0; font: inherit; color: var(--ink-2); white-space: pre; }
               <span><span class="chip a">+25</span><span class="chip d">−4</span></span>
             </div>
             <div class="inputbox sp"><span>❯</span><span>commit this<span class="cur"></span></span></div>
-            <div class="modeline"><span class="k-mode">⏵⏵ accept edits on</span> <span class="dim">(shift+tab to cycle)</span></div>
+            <div class="modeline"><span class="k-mode"><svg viewBox="0 0 12 10" aria-hidden="true"><path d="M1.2 2.2 5.6 5 1.2 7.8zM7.2 2.2 11.6 5 7.2 7.8z"/></svg> accept edits on</span> <span class="dim">(shift+tab to cycle)</span></div>
           </div>
 
           <div class="seam" aria-hidden="true"></div>
@@ -836,7 +839,7 @@ flowchart TD
             </div>
           </div>
           <div class="inputbox" style="margin-top:.5em"><span>❯</span><span><span class="cur"></span></span></div>
-          <div class="modeline"><span class="k-mode">⏵⏵ accept edits on</span> <span class="dim">(shift+tab to cycle)</span></div>
+          <div class="modeline"><span class="k-mode"><svg viewBox="0 0 12 10" aria-hidden="true"><path d="M1.2 2.2 5.6 5 1.2 7.8zM7.2 2.2 11.6 5 7.2 7.8z"/></svg> accept edits on</span> <span class="dim">(shift+tab to cycle)</span></div>
         </div>
       </div>
     </div>

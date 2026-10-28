@@ -4,7 +4,7 @@ import { describe, expect, mock, test, type TestBody } from 'claude-code/testing
 import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
-import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
+import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
@@ -629,6 +629,152 @@ test('iTerm2 3.5 전체 화면: 모서리는 rgba, 썸네일은 PNG 바이트로
   await main.unmount()
 })
 
+// herdr 서버의 /proc/net/unix: herdr-client.sock 듣는 소켓, 받아 준 클라이언트 연결들, API 소켓
+function unixTable(clients: string[]) {
+  const row = (flags: string, st: string, inode: string, path: string) => `0000000000000000: 00000002 00000000 ${flags} 0001 ${st} ${inode} ${path}`
+  return [
+    'Num       RefCount Protocol Flags    Type St Inode Path',
+    row('00010000', '01', '63497', '/home/t/.config/herdr/herdr-client.sock'),
+    ...clients.map(inode => row('00000000', '03', inode, '/home/t/.config/herdr/herdr-client.sock')),
+    row('00010000', '01', '46072', '/home/t/.config/herdr/herdr.sock'),
+    '',
+  ].join('\n')
+}
+
+test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없이(글리프 모서리, 썸네일은 엔진 └ [Image #N] 줄) 그린다', KO, async ($, on) => {
+  const env: Record<string, string> = { HOME: '/home/t', COLORTERM: 'truecolor', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1', CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }
+  const header = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 1, 234, 0, 0, 1, 42]
+  const dir = '/tmp/claude-501/-repo/s1/images'
+  let bridge = true
+  const asked: string[][] = []
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    const path = String((e as { path?: string }).path ?? e)
+    if (path.endsWith('colors.toml')) return { value: 'mode = "dark"\nbackground = "#1a1a1a"\n' } as never
+    if (path === '/home/t/.config/herdr/config.toml') return { value: '[experimental]\nkitty_graphics = true\n' } as never
+    if (path === '/proc/net/unix') return { value: unixTable(bridge ? ['62751', '70001'] : ['62751']) } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.list', ($, e) => {
+    const path = (e as { path?: string }).path
+    if (path === '/tmp/claude-501') return { value: [{ name: '-repo', kind: 'dir', size: 0, mtimeMs: 1 }] } as never
+    if (path === dir) return { value: [{ name: '3.png', kind: 'file', size: 9, mtimeMs: 1 }] } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.exists', ($, e) => ({ value: (e as { path?: string }).path === dir }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('process.run', ($, e) => {
+    if (e.argv[0] === 'pgrep') asked.push([...e.argv])
+    const exitCode = e.argv[0] === 'pgrep' && !bridge ? 1 : 0
+    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'od' ? header.join(' ') : e.argv[0] === 'pgrep' && bridge ? '4242\n' : ''
+    return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const bubble = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'UserMessage',
+    viewport: { ...VIEWPORT, isFullscreen: true },
+    props: { text: '[Image #3] 1\n2\n3', origin: { kind: 'composer' }, isExpanded: false },
+  } as never)
+  let drawn = ''
+  for (let tries = 0; tries < 50 && !drawn.includes('\u{1FB41}'); tries++) {
+    await wait(10)
+    drawn = JSON.stringify(await bubble.drawn())
+  }
+  expect(asked[0]).toEqual(['pgrep', '-f', '^\\S*herdr( --session \\S+)? remote-client-bridge'])
+  expect(drawn).not.toContain('"rgba"')
+  expect(drawn).toContain('\u{1FB41}')
+  expect(drawn).toContain('\u{1FB5D}')
+  // 썸네일 없이 말풍선 글에서 [Image #3] 만 빠진다
+  expect(drawn).not.toContain('"source"')
+  expect(drawn).not.toContain('Image #3')
+  // herdr-client.sock 연결이 그대로면 다음 프롬프트에서 pgrep 을 다시 돌리지 않는다
+  await $.turn.start({ text: '다음', turnId: 't2' } as never)
+  await wait(50)
+  expect(asked).toHaveLength(1)
+  // 원격이 떨어져 연결이 바뀐 뒤 다음 프롬프트에서 다시 보고, 그려 둔 말풍선도 둥근 그림 모서리와 썸네일로 다시 그린다
+  bridge = false
+  await $.turn.start({ text: '그다음', turnId: 't3' } as never)
+  for (let tries = 0; tries < 50 && !drawn.includes('"rgba"'); tries++) {
+    await wait(10)
+    drawn = JSON.stringify(await bubble.drawn())
+  }
+  expect(asked).toHaveLength(2)
+  expect(drawn).toContain('"rgba"')
+  expect(drawn).toContain('"file"')
+  expect(drawn).not.toContain('\u{1FB41}')
+  await bubble.unmount()
+})
+
+test('herdr-client.sock 연결을 못 읽으면(/proc 없음, 소켓 줄 없음) 프롬프트마다 pgrep 으로 원격 접속을 본다', KO, async ($, on) => {
+  const env: Record<string, string> = { HOME: '/home/t', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1', CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }
+  let table: string | null = null
+  const asked: string[][] = []
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    const path = String((e as { path?: string }).path ?? e)
+    if (path === '/home/t/.config/herdr/config.toml') return { value: '[experimental]\nkitty_graphics = true\n' } as never
+    if (path === '/proc/net/unix' && table !== null) return { value: table } as never
+    throw new Error('ENOENT')
+  })
+  on('fs.list', () => {
+    throw new Error('ENOENT')
+  })
+  on('fs.exists', () => ({ value: false }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('process.run', ($, e) => {
+    if (e.argv[0] === 'pgrep') asked.push([...e.argv])
+    return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  await wait(50)
+  await $.turn.start({ text: '안녕', turnId: 't1' } as never)
+  await wait(50)
+  // 읽기는 되지만(빈 /proc 읽기 같은) herdr-client.sock 줄이 없으면 같은 목록이라고 넘기지 않는다
+  table = unixTable([]).split('\n').filter(line => !line.includes('herdr-client.sock')).join('\n')
+  await $.turn.start({ text: '다음', turnId: 't2' } as never)
+  await wait(50)
+  await $.turn.start({ text: '그다음', turnId: 't3' } as never)
+  await wait(50)
+  expect(asked).toHaveLength(4)
+})
+
+test('herdr 안이라도 그림이 꺼져 있으면(kitty_graphics 없음) 원격 접속을 보지 않는다', KO, async ($, on) => {
+  const env: Record<string, string> = { HOME: '/home/t', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1', CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }
+  const asked: string[][] = []
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    asked.push(['read', String((e as { path?: string }).path ?? e)])
+    throw new Error('ENOENT')
+  })
+  on('fs.list', () => {
+    throw new Error('ENOENT')
+  })
+  on('fs.exists', () => ({ value: false }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('process.run', ($, e) => {
+    asked.push([...e.argv])
+    return { value: { exitCode: e.argv[0] === 'pgrep' ? 0 : 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  await $.turn.start({ text: '안녕', turnId: 't1' } as never)
+  await wait(50)
+  expect(asked.filter(argv => argv[0] === 'pgrep' || argv[1] === '/proc/net/unix')).toEqual([])
+})
+
 test('tmux 안 그림: 통과 설정과 바깥 터미널을 tmux 에 물어 엔진과 같은 때 그린다(2.1.310)', KO, async () => {
   const reply = (termtype: string, passthrough = 'on', focus = '1', bigger = '0') => [termtype, passthrough, focus, bigger].join('\t') + '\n'
   expect(tmuxGraphicsOf(reply('kitty(0.35.1)'))).toBe('kitty-bytes')
@@ -1191,6 +1337,7 @@ describe('진행 띠', () => {
     expect(rows[2]).toMatchObject({ added: 5, removed: 1 })
     expect(rows[3]).toMatchObject({ ms: 2000, isError: true })
     expect(rows[5]).toMatchObject({ ms: null })
+    expect(flowRows(log, 'agent-1').map(row => [row.kind, row.text])).toEqual([['explore', 'Read']])
     expect(outputFileOf('Command running in background with ID: b1. Output is being written to: /tmp/claude-1000/p/s/tasks/b1.output')).toBe('/tmp/claude-1000/p/s/tasks/b1.output')
     expect(outputFileOf('done')).toBeUndefined()
     expect(clockOf(125_000)).toBe('02:05')
@@ -1253,6 +1400,8 @@ describe('진행 띠', () => {
     await ran
     await wait(20)
     await $.turn.complete({ durationMs: 25_000, reason: 'answer', answer: '끝', turnId: 't1' } as never)
+    // 시계가 도는 동안 바뀐 기록은 다음 시계(2초)에 들어온다
+    now += 2000
     pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
     const ended = JSON.stringify(await pane.drawn())
     expect(ended).toContain('지난 턴 · 25s')
@@ -1282,6 +1431,157 @@ describe('진행 띠', () => {
     expect(third).not.toContain('테스트 돌리기')
     expect(third).toContain('▪')
     expect(third).toContain(' 기타 ')
+    await pane.unmount()
+  })
+
+  test('/desk-activity 패널: 앞 턴에 띄워 아직 도는 에이전트도 그리고, 글로만 답한 턴 뒤에는 기록 턴이 끝난 지 얼마인지 붙인다', KO, async ($, on) => {
+    let now = 1_000_000
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    const opened: string[] = []
+    on('ui.open', ($, e) => {
+      opened.push((e as { id: string }).id)
+      return { value: { isPlaced: true } } as never
+    })
+    on('agent.list', () => ({
+      value: [
+        { id: 'a7', description: '경로 진행', type: 'general-purpose', name: 'route-agent', status: 'running' },
+        { id: 'a8', description: '자원 누락', type: 'general-purpose', status: 'running' },
+      ] as never,
+    }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('turn.complete', () => ({ text: '끝' }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    // 에이전트는 턴보다 먼저 떠 있다
+    await $.command.run({ command: 'desk-tasks', args: '' } as never)
+    now += 60_000
+    await $.turn.start({ text: '진행중이야?', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'a7' } as never)
+    now += 7000
+    await $.turn.complete({ durationMs: 7000, reason: 'answer', answer: '돌고 있어요', turnId: 't1' } as never)
+    const paneProps = { title: '활동', isFocused: true, bodyColumns: 70 } as never
+    let pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    let drawn = JSON.stringify(await pane.drawn())
+    // 줄머리는 엔진 하단 목록처럼 이름, 이름이 없으면 설명뿐이다. 종류(general-purpose)는 에이전트마다 같아 구별이 안 된다
+    expect(drawn).toContain('route-agent')
+    expect(drawn).not.toContain('general-purpose')
+    expect(drawn).toContain('경로 진행')
+    expect(drawn).toContain('자원 누락')
+    expect(drawn).not.toContain(' 전')
+    // 에이전트의 호출은 그 줄을 눌러야 펼친다. 다시 누르면 접고, 행 끝 칩은 에이전트 패널을 연다
+    expect(drawn).not.toContain('a.ts')
+    await pane.press({ key: 'activity-agent-a7' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('a.ts')
+    expect(drawn).toContain('▾')
+    await pane.press({ key: 'activity-agent-a7' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).not.toContain('a.ts')
+    await pane.press({ key: 'activity-agent-open-a7' })
+    expect(opened).toContain('desk-tasks')
+    await pane.unmount()
+    // 글로만 답한 턴이 지나가도 기록은 t1 에 머물고, 끝난 지 얼마인지 붙는다
+    now += 12 * 60_000
+    await $.turn.start({ text: '남은 건?', turnId: 't2' } as never)
+    await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '두 개', turnId: 't2' } as never)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('지난 턴 · 7s')
+    expect(drawn).toContain(' · 12분 전')
+    expect(drawn).toContain('route-agent')
+    await pane.unmount()
+  })
+
+  test('/desk-activity 패널: 시계가 도는 동안 에이전트·호출 기록이 바뀌어도 다음 시계(2초)까지 그림이 그대로다', KO, async ($, on) => {
+    let now = 1_000_000
+    // 패널 시계(2초)는 fire() 할 때 한 번씩만 간다.
+    let fire: () => void = () => undefined
+    on('clock.every', async ($, e) => {
+      if ((e as { ms: number }).ms === 2000) await new Promise<void>(resolve => (fire = resolve))
+      return { value: undefined }
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'general-purpose', name: 'route-agent', status: 'running' }] as never }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    await $.command.run({ command: 'desk-tasks', args: '' } as never)
+    await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    const paneProps = { title: '활동', isFocused: true, bodyColumns: 70 } as never
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    const first = JSON.stringify(await pane.drawn())
+    expect(first).toContain('route-agent')
+    // 에이전트가 걸음마다 쓰는 기록은 시계 사이에 그림을 바꾸지 않는다(막대와 시간이 1초에 몇 번씩 가지 않게)
+    for (const file of ['a', 'b', 'c']) {
+      now += 500
+      await $.tool.call({ tool: 'Edit', file_path: `/r/${file}.ts`, old_string: 'a', new_string: 'b', agentId: 'a7' } as never)
+      await wait(20)
+      expect(JSON.stringify(await pane.drawn())).toBe(first)
+    }
+    // 펼침은 시계를 기다리지 않는다(시계 사이에는 지난 기록으로)
+    await pane.press({ key: 'activity-agent-a7' })
+    await wait(20)
+    expect(JSON.stringify(await pane.drawn())).toContain('▾')
+    // 시계가 가면 그동안의 호출과 시간이 한 번에 들어온다
+    now += 500
+    fire()
+    await wait(20)
+    const ticked = JSON.stringify(await pane.drawn())
+    expect(ticked).not.toBe(first)
+    expect(ticked).toContain('c.ts')
+    await pane.unmount()
+  })
+
+  test('/desk-activity 패널: 사람이 패널을 잡고 있어 focus 가 거절돼도 에이전트 칩은 그 대화를 앞에 띄운다', KO, async ($, on) => {
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: 1_000_000 }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'general-purpose', name: 'route-agent', status: 'running' }] as never }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    // 엔진처럼: 패널은 연 순서의 탭, 앞에 오는 것은 focus 가 받아들여질 때뿐이고 사람이 패널을 잡고 있으면 거절된다.
+    // 잡고 있던 패널이 닫히면 키는 입력창으로 돌아간다.
+    const up: string[] = []
+    let front: string | null = null
+    let held = false
+    on('ui.open', ($, e) => {
+      const pane = e as { id: string; focus?: true }
+      if (!up.includes(pane.id)) up.push(pane.id)
+      if (front === null || (pane.focus && !held)) front = pane.id
+      return { value: undefined } as never
+    })
+    on('ui.close', ($, e) => {
+      const id = (e as { id: string }).id
+      up.splice(up.indexOf(id), 1)
+      if (front === id) [front, held] = [up[up.length - 1] ?? null, false]
+      return { value: undefined } as never
+    })
+    on('ui.panes', () => ({ value: up.map(id => ({ id, title: id, isShown: id === front, isFocused: id === front && held, isPlaced: true })) }) as never)
+    await $.command.run({ command: 'desk-tasks', args: '' } as never)
+    await $.turn.start({ text: '진행중이야?', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'a7' } as never)
+    await $.command.run({ command: 'desk-activity', args: '' } as never)
+    expect(front).toBe('desk-activity')
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: { title: '활동', isFocused: true, bodyColumns: 70 } as never })
+    held = true
+    await pane.press({ key: 'activity-agent-open-a7' })
+    expect(front).toBe('desk-tasks')
+    // 활동 패널은 닫히지 않고 뒤 탭으로 남는다
+    expect(up).toEqual(['desk-tasks', 'desk-activity'])
     await pane.unmount()
   })
 
@@ -1323,7 +1623,8 @@ describe('진행 띠', () => {
     await scroll(100)
     await scroll(100)
     await scroll(100)
-    now += 1000
+    // 시계가 도는 동안 새 호출은 다음 시계(2초)에 들어온다
+    now += 2000
     await $.tool.call({ tool: 'Bash', command: 'step 31', description: '명령 31' } as never)
     pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props })
     drawn = JSON.stringify(await pane.drawn())
@@ -3742,6 +4043,9 @@ test('백그라운드 셸·모니터 순수 함수: 결과에서 작업, 알림 
   const orphans = parseNotices('<task-notification>\n<task-id>b8</task-id>\n<task-id>b9</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>2 background shell command tasks didn\'t finish</summary>\n</task-notification>')
   expect(orphans.map(notice => [notice.id, notice.status])).toEqual([['b8', 'stopped'], ['b9', 'stopped']])
   expect(tailOf('a\nb\nc\n', 2)).toBe('… 1줄 더\nb\nc')
+  expect(exitStatusOf('out\n\n[exited with code 0]\n')).toBe('completed')
+  expect(exitStatusOf('out\n[exited with code 144]')).toBe('failed')
+  expect(exitStatusOf('[exited with code 0]\nstill running\n')).toBeUndefined()
 })
 
 test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 알림 뒤 출력', KO, async ($, on) => {
@@ -3802,6 +4106,33 @@ test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 �
   expect(one).toContain('끝남 1')
   await pane.press({ key: 'tasks-clear-done' })
   expect(JSON.stringify(await pane.drawn())).toContain('끝난 작업을 목록에서 모두 지웠어요')
+  await pane.unmount()
+})
+
+test('끝남 알림을 못 받은 셸(서브에이전트가 띄운 것)은 출력 파일 끝의 종료 줄로 끝남이 된다', KO, async ($, on) => {
+  let output = 'line1\n'
+  let reads = 0
+  on('clock.now', () => ({ value: 1_000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: output.length, mtimeMs: 0, isLink: false } as never }))
+  on('fs.read', () => {
+    reads++
+    return { value: output as never }
+  })
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b5' }, text: 'Command running in background with ID: b5. Output is being written to: /tmp/t/b5.output. You will be notified' }) as never)
+  await $.tool.call({ tool: 'Bash', command: 'python3 v.py', description: '검증기 돌리기', run_in_background: true, agentId: 'a1' } as never)
+  await $.command.run({ command: 'desk-tasks', args: '1' } as never)
+  await $.command.run({ command: 'desk-tasks', args: '1' } as never)
+  // 크기가 그대로면 다시 읽지 않는다(상세 화면이 읽는 몫 하나씩 + 처음 한 번)
+  const before = reads
+  output += 'KeyError: x\n\n[exited with code 1]\n'
+  await $.command.run({ command: 'desk-tasks', args: '1' } as never)
+  expect(reads).toBe(before + 2)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 70 } as never })
+  const drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('실패')
+  expect(drawn).not.toContain('실행 중')
   await pane.unmount()
 })
 

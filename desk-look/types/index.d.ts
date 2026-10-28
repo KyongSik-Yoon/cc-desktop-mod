@@ -238,6 +238,8 @@ declare module 'claude-code' {
       images: Record<string, ImageInfo>
       // 터미널이 그림을 그리는 길(멀티플렉서 밖의 kitty·Ghostty, 전체 화면의 iTerm2). 못 그리면 null.
       graphics: Graphics
+      // herdr 에 `herdr --remote` 클라이언트가 붙어 있는지. 그 터미널은 알 수 없어 붙은 동안 그림 없이 그린다.
+      herdrRemote: boolean
       pendingEdits: TurnEdit[]
       turnCards: TurnCard[]
       sessions: SessionEntry[]
@@ -262,6 +264,8 @@ declare module 'claude-code' {
       activityClock: number
       // /desk-activity 패널 몸통의 첫 줄(머리 아래를 패널이 스스로 스크롤한다). 끝을 따라가면 Number.MAX_SAFE_INTEGER.
       activityTop: number
+      // /desk-activity 패널에서 호출을 펼친 에이전트 id, 없으면 null.
+      activityAgentOpen: string | null
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
       ask: AskState | null
       // 마지막 사람 입력이 온 곳: 터미널(composer) 또는 Remote Control(bridge). 아직 없으면 null.

@@ -10,7 +10,7 @@ import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rang
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withPredicted } from './runs'
 import type { PredictedCall, RunCursor } from './runs'
-import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
+import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
@@ -67,6 +67,9 @@ const surface = atom({ plugin: 'desk-look', key: 'surface' } as const, null as S
 const runs = atom({ plugin: 'desk-look', key: 'runs' } as const, { firstOf: {}, calls: {} } as Runs)
 const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Record<string, ImageInfo>)
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, null as Graphics)
+// herdr 에 `herdr --remote` 클라이언트가 붙어 있는지. 원격 터미널은 알 수 없고(foot 처럼 kitty 그림을 버리는 곳도 있다)
+// 모든 클라이언트가 한 화면을 같이 보므로, 붙어 있는 동안은 그림 없이 그린다.
+const herdrRemote = atom({ plugin: 'desk-look', key: 'herdrRemote' } as const, false)
 const pendingEdits = atom({ plugin: 'desk-look', key: 'pendingEdits' } as const, [] as TurnEdit[])
 const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as TurnCard[])
 // /desk-diff 패널 창 위치: ui.scroll 이 알려 준 첫 행과 보이는 행 수. 보이는 곳만 그리는 데 쓴다.
@@ -95,9 +98,13 @@ const activityClock = atom({ plugin: 'desk-look', key: 'activityClock' } as cons
 // /desk-activity 패널 몸통(머리 아래 줄)의 첫 줄. 끝(ACTIVITY_END)이면 늘어나는 줄을 따라간다.
 // 머리(제목·막대·범례)를 늘 보이게 하려고 패널이 스스로 스크롤한다: ui.scroll 을 next 없이 받아 이 값을 옮긴다.
 const activityTop = atom({ plugin: 'desk-look', key: 'activityTop' } as const, 0)
+// /desk-activity 패널에서 호출을 펼친 에이전트(에이전트 줄을 누르면 펴고, 다시 누르면 접는다).
+const activityAgentOpen = atom({ plugin: 'desk-look', key: 'activityAgentOpen' } as const, null as string | null)
 const ACTIVITY_END = Number.MAX_SAFE_INTEGER
 // 마지막으로 그린 몸통 창: pinned 면 머리를 고정해 그렸고, room 은 몸통에 보이는 줄 수, max 는 첫 줄의 끝.
 let activityWindow = { pinned: false, room: 0, max: 0 }
+// 패널 시계가 도는 동안 마지막으로 새로 읽어 그린 입력과 그 시각·시계 값(activity 패널 훅이 시계 사이에 다시 쓴다).
+let activityFrame: { input: PaneInput; at: number; clockAt: number } | null = null
 const usage = atom({ plugin: 'desk-look', key: 'usage' } as const, null as UsageInfo | null)
 const usageBreakdown = atom({ plugin: 'desk-look', key: 'usageBreakdown' } as const, null as UsageBreakdown | null)
 const pr = atom({ plugin: 'desk-look', key: 'pr' } as const, null as PrState | null)
@@ -1616,7 +1623,37 @@ async function refreshGraphics($: EngineInterface) {
   const herdr = HERDR_ENV === '1' && herdrGraphicsOn(await readHerdrConfig($))
   const tmux = TMUX && TMUX_PANE ? await readTmuxGraphics($, TMUX_PANE) : null
   const env = { TMUX, ZELLIJ, HERDR_ENV, TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, CLAUDE_CODE_FORCE_TERMINAL_IMAGES, CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT }
+  inHerdr = HERDR_ENV === '1'
   await update($, graphics, () => graphicsOf(env, herdr, tmux))
+  await refreshHerdrRemote($)
+}
+
+let inHerdr = false
+// 마지막으로 pgrep 으로 판정했을 때 herdr-client.sock 에 붙어 있던 연결과 그 판정.
+let herdrSeen: { clients: string; remote: boolean } | null = null
+
+// 원격 클라이언트는 이 기계의 bridge 프로세스(`herdr remote-client-bridge`, 이름 있는 세션은 `herdr --session <이름> remote-client-bridge`)로 붙는다. pgrep 은 한 번에 CPU 60~110ms 라
+// 타이머로 훑지 않고 세션을 열 때와 프롬프트를 보낼 때만 보며, herdr 밖이거나 어차피 그림을 안 그리면 보지 않는다. 그래서 원격으로 막 붙었으면 첫 프롬프트를 보낼 때까지는
+// 전의 모습이고, 보낸 말풍선도 판정이 올 때까지 잠깐 전의 모습으로 그려졌다가 다시 그려진다.
+// bridge 도 로컬 클라이언트처럼 herdr-client.sock 에 붙으므로, 그 연결이 지난 판정 때 그대로면 붙거나 떨어진 클라이언트가 없어
+// pgrep 없이 넘어간다(/proc/net/unix 읽기는 CPU 2ms). 못 읽거나(/proc 없는 macOS) 소켓 줄이 없으면 늘 pgrep 으로 본다.
+// /clear·/resume 은 atom 만 기본값으로 비우므로 지난 판정이 지금 atom 과 같은지도 본다.
+async function refreshHerdrRemote($: EngineInterface) {
+  if (!inHerdr || (await read($, graphics)) === null) return
+  const clients = herdrClientsOf(await $.fs.read('/proc/net/unix').catch(() => ''))
+  if (clients && herdrSeen?.clients === clients && herdrSeen.remote === (await read($, herdrRemote))) return
+  const ran = await $.process.run(['pgrep', '-f', '^\\S*herdr( --session \\S+)? remote-client-bridge'], { timeoutMs: 3000 }).catch(() => null)
+  // pgrep 은 찾으면 0, 없으면 1. 실패는 판정하지 않는다.
+  if (!ran || (ran.exitCode !== 0 && ran.exitCode !== 1)) return
+  const remote = ran.exitCode === 0
+  herdrSeen = clients ? { clients, remote } : null
+  if ((await read($, herdrRemote)) !== remote) await update($, herdrRemote, () => remote)
+}
+
+// /proc/net/unix 한 줄은 `Num RefCount Protocol Flags Type St Inode Path` 이고, 서버가 받아 준 연결도 듣는 소켓의 경로를 달고 나온다.
+// 그래서 herdr-client.sock 줄의 inode 들(듣는 소켓 하나 포함)이 붙은 클라이언트다. 개수만 보면 원격이 나가고 로컬이 들어온 걸 놓친다.
+function herdrClientsOf(table: string): string {
+  return table.split('\n').filter(line => line.endsWith('/herdr-client.sock')).map(line => line.trim().split(/\s+/)[6]).sort().join(' ')
 }
 
 // 엔진처럼 이 창(TMUX_PANE)의 바깥 터미널과 그림 통과 설정을 tmux 에 묻는다. 못 물으면 null(그리지 않는다).
@@ -2006,7 +2043,11 @@ async function logCall($: EngineInterface, event: ActivityLog['events'][number])
   const fresh = event.loop === undefined ? takeLogStart() : null
   await update($, activityLog, current => {
     const log = fresh ?? current
-    return log === null || (log.endedAt !== null && event.loop === undefined) ? log : { ...log, events: [...log.events, event].slice(-LOG_EVENTS) }
+    if (log === null || (log.endedAt !== null && event.loop === undefined)) return log
+    // 오래 도는 에이전트의 호출이 상한을 채워도 메인 대화의 호출은 밀어내지 않는다.
+    const events = [...log.events, event]
+    const kept = new Set([...events.filter(item => item.loop === undefined).slice(-LOG_EVENTS), ...events.filter(item => item.loop !== undefined).slice(-LOG_EVENTS)])
+    return { ...log, events: events.filter(item => kept.has(item)) }
   })
 }
 
@@ -2089,7 +2130,25 @@ async function refreshAgents($: EngineInterface) {
   const [list, now] = await Promise.all([$.agent.list(), $.clock.now()])
   const records = await read($, agents)
   if (!sameJson(mergeAgents(records, list, now), records)) await update($, agents, records => mergeAgents(records, list, now))
+  await settleShells($, now)
   if (Object.values(await read($, agents)).some(agent => isLive(agent.status))) startAgentClock($)
+}
+
+// 서브에이전트가 띄운 셸의 끝남 알림은 그 서브에이전트의 턴 안으로 배달돼 메인의 prompt.submit 에 오지 않는다.
+// 그래서 출력 파일 끝의 종료 줄로도 끝을 읽는다. 파일 크기가 바뀌었을 때만 다시 읽는다.
+const shellSizes = new Map<string, number>()
+
+async function settleShells($: EngineInterface, now: number) {
+  const live = Object.values(await read($, agents)).filter(task => task.kind === 'shell' && isLive(task.status) && task.outputFile)
+  for (const task of live) {
+    const file = task.outputFile ?? ''
+    const size = (await $.fs.stat(file).catch(() => null))?.size
+    if (size === undefined || shellSizes.get(task.id) === size) continue
+    shellSizes.set(task.id, size)
+    const raw = await $.fs.read(file).catch(() => null)
+    const status = typeof raw === 'string' ? exitStatusOf(raw) : undefined
+    if (status) await update($, agents, records => applyNotices(records, [{ id: task.id, status }], now))
+  }
 }
 
 // 도는 에이전트가 있는 동안 1초마다 경과 시간을 다시 그리고, 2초마다 엔진 목록으로 상태를 맞춘다.
@@ -2153,7 +2212,22 @@ async function openAgents($: EngineInterface, id: string | null = null) {
   await update($, agentView, () => id)
   await refreshAgents($).catch(() => undefined)
   await refreshAgentDetail($).catch(() => undefined)
-  await $.ui.open({ ...(await paneLook($)), id: AGENTS_PANE, title: T.paneAgents, focus: true })
+  await openInFront($, { ...(await paneLook($)), id: AGENTS_PANE, title: T.paneAgents, focus: true })
+}
+
+// 사람이 다른 내 패널을 잡고 있으면(그 패널의 버튼을 눌렀을 때) 엔진은 focus 를 거절해 연 패널을 그 탭 뒤에 둔다.
+// 그때는 앞에 있던 패널을 닫았다가 뒤에 다시 열어, 연 패널이 앞에 오게 한다(스크롤 위치는 되돌린다).
+async function openInFront($: EngineInterface, pane: Parameters<EngineInterface['ui']['open']>[0]) {
+  await $.ui.open(pane)
+  // 앞으로 올리기는 연 뒤의 덤이다: 패널 목록을 못 읽으면 연 것으로 끝낸다.
+  const panes = await $.ui.panes().catch(() => [])
+  const front = panes.find(item => item.isShown)
+  if (!front || front.id === pane.id || !panes.some(item => item.id === pane.id)) return
+  const offset = paneOffsets.get(front.id) ?? 0
+  await $.ui.close({ id: front.id })
+  await $.ui.open(pane)
+  await $.ui.open({ ...(await paneLook($)), id: front.id, title: front.title })
+  if (offset > 0) await restoreScroll($, front.id, offset)
 }
 
 // 패널이 한동안 그려지지 않았거나(닫힘·접힘), 턴도 끝나고 도는 에이전트·셸도 없으면 멈춘다.
@@ -2175,7 +2249,7 @@ function startActivityClock($: EngineInterface) {
 }
 
 async function openActivity($: EngineInterface) {
-  await $.ui.open({ ...(await paneLook($)), id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
+  await openInFront($, { ...(await paneLook($)), id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
 }
 
 // 에이전트 대화를 메인 화면에 띄운다(엔진의 작업 목록에서 고른 것처럼). 그 뒤 Enter 는 그 에이전트에게 간다. id 가 없으면 메인 대화로.
@@ -2234,7 +2308,7 @@ function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentR
   }
 }
 
-// 턴 끝 "Waiting for 2 background agents to finish" 아래 줄들: "··· general-purpose  설명 ›". 끝나면 상태를 단다.
+// 턴 끝 "Waiting for 2 background agents to finish" 아래 줄들: "··· route-agent  설명 ›"(이름 없으면 설명만). 끝나면 상태를 단다.
 // 그 줄은 에이전트가 끝나도 남으니 지금 상태는 에이전트 기록에서 읽는다. 기록이 아직 없으면 종류만.
 function waitingRows(els: Els, $: EngineInterface, waited: ReadonlyArray<{ id: string; agentType: string }>, records: Record<string, AgentRecord>, columns: number) {
   if (waited.length === 0) return null
@@ -2244,14 +2318,15 @@ function waitingRows(els: Els, $: EngineInterface, waited: ReadonlyArray<{ id: s
       {waited.map(({ id, agentType }) => {
         const agent = records[id]
         const live = agent === undefined || isLive(agent.status)
+        const label = agent ? AGENT_LABEL(agent) : agentType
         return (
           <Box key={`waiting-${id}`} columnGap={1}>
             <Text color={COLORS.clay}>{live ? '···' : '◆'}</Text>
-            <Text color={COLORS.muted}>{agent?.type ?? agentType}</Text>
+            {label && <Text color={COLORS.muted}>{label}</Text>}
             {rowButton(
               els,
               { key: `waiting-row-${id}`, dimColor: true, onPress: () => void openAgents($, id) },
-              clip(agent?.description ?? '', Math.max(10, columns - cellWidth(agent?.type ?? agentType) - 24)),
+              clip(agent?.description ?? '', Math.max(10, columns - cellWidth(label ?? '') - 24)),
               !live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{` ${T.agentStatus[agent.status] ?? agent.status}`}</Text>,
               <Text color={COLORS.muted}> ›</Text>,
             )}
@@ -2311,6 +2386,11 @@ const agentElapsed = (agent: AgentRecord, now: number) =>
 
 // 목록의 카드 한 장: 데스크톱 Background tasks 처럼 제목, 종류·시간, 모델·토큰·도구 수·하는 일·대화 보기.
 const KIND_LABEL = (agent: AgentRecord) => (agent.kind === 'shell' ? T.kindShell : agent.kind === 'monitor' ? T.kindMonitor : agent.type)
+// 설명 앞 줄머리: 엔진 하단 목록처럼 SendMessage 이름(route-agent 등)이고, 이름 없는 에이전트는 비운다(설명만).
+// 셸·모니터는 종류. 에이전트 종류(general-purpose)는 여럿이 같아 구별이 안 된다.
+const AGENT_LABEL = (agent: AgentRecord) => agent.name ?? ((agent.kind ?? 'agent') === 'agent' ? undefined : KIND_LABEL(agent))
+// 이름표 하나만 쓰는 곳(진행 띠, 레인): 줄머리가 없으면 설명.
+const AGENT_TITLE = (agent: AgentRecord) => AGENT_LABEL(agent) ?? agent.description
 
 // 도는 작업의 멈춤 버튼: 한 번 누르면 "멈출까요?", 5초 안에 한 번 더 누르면 멈춘다.
 function stopButton(els: Els, $: EngineInterface, agent: AgentRecord, armed: Record<string, boolean>) {
@@ -2338,7 +2418,7 @@ function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: numb
       {rowButton(els, { key: `agent-title-${agent.id}`, onPress: open }, clip(agent.description, Math.max(10, columns - 6)))}
       <Box columnGap={1}>
         <Text color={COLORS.muted}>{`${number}`}</Text>
-        <Text color={COLORS.muted}>{KIND_LABEL(agent)}</Text>
+        {AGENT_LABEL(agent) && <Text color={COLORS.muted}>{AGENT_LABEL(agent)}</Text>}
         {elapsed && <Text color={COLORS.muted}>{elapsed}</Text>}
         {!live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{T.agentStatus[agent.status] ?? agent.status}</Text>}
         {agent.id === inView && <Text color={COLORS.clay}>{`◉ ${T.agentInView}`}</Text>}
@@ -3077,6 +3157,7 @@ export const register: Register = (on, options) => {
       if ((await read($, agents))[id] !== undefined) startAgentClock($)
       return next(e)
     }
+    void refreshHerdrRemote($).catch(() => undefined)
     await update($, pendingEdits, () => [])
     await update($, previewWritten, () => null)
     const now = await $.clock.now()
@@ -3327,9 +3408,11 @@ export const register: Register = (on, options) => {
     }
     const els = $.ui.resolve(e)
     const { Box, Text, Image } = els
-    const [face, known, kind, openState] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open)])
+    const [face, known, kind, openState, remote] = await Promise.all([read($, surface), read($, images), read($, graphics), read($, open), read($, herdrRemote)])
     // iTerm2 는 전체 화면 그리기에서만 그린다(엔진 기본 화면은 줄마다 그림을 다시 보내야 해서 alt 글자).
-    const canDraw = kind === 'kitty' || kind === 'kitty-bytes' || (kind === 'iterm' && e.viewport?.isFullscreen === true)
+    // herdr 원격 클라이언트(foot 등)가 붙어 있으면 그림이 버려져 썸네일 자리가 비고 모서리 칸이 빠져 위·아래 줄이
+    // 짧아지므로, 그동안은 그림을 못 그리는 터미널처럼 글리프 모서리로 그리고 그림 알림은 엔진의 └ [Image #N] 줄에 맡긴다.
+    const canDraw = !remote && (kind === 'kitty' || kind === 'kitty-bytes' || (kind === 'iterm' && e.viewport?.isFullscreen === true))
     const columns = e.viewport?.columns ?? 80
     const { text: typed, pastes } = splitPastes(e.props.text)
     const found = [...typed.matchAll(IMAGE_TOKEN)]
@@ -3721,24 +3804,46 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     // 턴이나 이 턴이 띄운 일이 도는 동안은 패널 시계(2초)로 다시 그려 막대와 시간이 간다.
-    const [log, records, startedAt, top] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityClock)])
+    const [log, records, startedAt, top, expanded, clockAt] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityAgentOpen), read($, activityClock)])
     if (log === null) return <Text color={COLORS.muted}>{T.activityNone}</Text>
     const now = await $.clock.now()
     activitySeen = now
+    const columns = Math.max(30, e.props.bodyColumns)
+    const bodyRows = (e.props as { scroll?: { bodyRows: number } }).scroll?.bodyRows ?? 0
+    const interactive = {
+      columns,
+      bodyRows,
+      top,
+      expanded,
+      openAgent: (id: string) => void openAgents($, id),
+      toggleAgent: (id: string) => void update($, activityAgentOpen, current => (current === id ? null : id)),
+    }
+    // 시계가 도는 동안 에이전트·호출 기록은 걸음마다 바뀌어(에이전트가 여럿이면 1초에도 몇 번) 이 훅을 다시 부른다.
+    // 그때마다 지금 시각으로 그리면 막대가 2초보다 자주 가므로, 다음 시계까지는 지난 그림의 입력을 그대로 쓰고
+    // 스크롤·펼침·폭만 새로 넣는다. 턴이 바뀐 것(백그라운드 끝남 알림 턴 등)도 다음 시계를 기다린다.
+    const held = activityTimer !== null && activityFrame !== null && activityFrame.clockAt === clockAt && now - activityFrame.at < ACTIVITY_TICK ? activityFrame : null
     // 도는 것이 있을 때만 시계를 건다(멈춘 뒤 마지막 한 번 그릴 때 다시 걸지 않게).
     if (activityTimer === null && (startedAt !== null || Object.values(records).some(agent => isLive(agent.status)))) startActivityClock($)
-    const columns = Math.max(30, e.props.bodyColumns)
+    if (held) {
+      const drawn = activityPane(els, { ...held.input, ...interactive })
+      activityWindow = drawn.window
+      return drawn.tree
+    }
     const turnEnd = log.endedAt ?? now
     const inTurn = (agent: AgentRecord) => (agent.startedAt ?? 0) >= log.startedAt - 1000 && (agent.startedAt ?? 0) <= turnEnd
-    const all = [...orderAgents(records).live, ...orderAgents(records).done].filter(inTurn).reverse()
-    const turnAgents = all.filter(agent => (agent.kind ?? 'agent') === 'agent')
-    const shells = all.filter(agent => agent.kind === 'shell' || agent.kind === 'monitor')
+    // 에이전트는 앞 턴에 띄웠어도 이 턴 동안(또는 지금) 돌았으면 함께 그린다: 그 호출도 이 기록에 쌓인다.
+    // 셸은 띄운 턴에만: 개발 서버처럼 계속 떠 있는 셸이 턴마다 붙지 않게.
+    const overlaps = (agent: AgentRecord) => (agent.startedAt ?? 0) <= turnEnd && (isLive(agent.status) || (agent.endedAt ?? 0) >= log.startedAt)
+    const all = [...orderAgents(records).live, ...orderAgents(records).done].reverse()
+    const turnAgents = all.filter(agent => (agent.kind ?? 'agent') === 'agent' && (inTurn(agent) || overlaps(agent)))
+    const shells = all.filter(agent => (agent.kind === 'shell' || agent.kind === 'monitor') && inTurn(agent))
     const tail = await shellTail($, shells, now)
     // 턴이 끝났어도 이 턴에 띄운 에이전트·셸이 아직 돌면 지금까지, 끝났으면 가장 늦게 끝난 때까지 시간 축을 늘린다.
     const spawned = [...turnAgents, ...shells]
     const end = spawned.some(agent => isLive(agent.status)) ? now : Math.max(turnEnd, ...spawned.map(agent => agent.endedAt ?? turnEnd))
-    const bodyRows = (e.props as { scroll?: { bodyRows: number } }).scroll?.bodyRows ?? 0
-    const drawn = activityPane(els, { log, now, end, columns, turnAgents, shells, tail, bodyRows, top, openAgent: id => void openAgents($, id) })
+    const input: PaneInput = { log, now, end, turnAgents, shells, tail, ...interactive }
+    activityFrame = { input, at: now, clockAt }
+    const drawn = activityPane(els, input)
     activityWindow = drawn.window
     return drawn.tree
   })
@@ -5101,7 +5206,7 @@ function nowLine(els: Elements['terminal'], input: BandInput) {
     const shown = live.slice(0, 2).map((agent, index) => (
       <Text>
         {index > 0 ? '   ' : ''}
-        <Text color={COLORS.link}>{agent.type}</Text>
+        <Text color={COLORS.link}>{clip(AGENT_TITLE(agent), 24)}</Text>
         <Text color={COLORS.muted}>{` ${agent.activity ?? T.bandThinking} · ${T.bandTools(agent.toolUses)}${agent.startedAt ? ` · ${formatElapsed(now - agent.startedAt)}` : ''}`}</Text>
       </Text>
     ))
@@ -5168,7 +5273,10 @@ type PaneInput = {
   // 엔진이 몸통에 준 줄 수(모르면 0)와 몸통 첫 줄(activityTop).
   bodyRows: number
   top: number
+  // 호출을 펼친 에이전트.
+  expanded: string | null
   openAgent: (id: string) => void
+  toggleAgent: (id: string) => void
 }
 
 export function activityPane(els: Elements['terminal'], input: PaneInput) {
@@ -5191,7 +5299,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     lane(T.laneMain, laneSegments(main, { start: log.startedAt, end: turnEnd }, log.startedAt, end, width), 'lane-main'),
     ...input.turnAgents.slice(-LANE_AGENTS).map(agent =>
       lane(
-        agent.type,
+        AGENT_TITLE(agent),
         laneSegments(
           log.events.filter(event => event.loop === agent.id),
           { start: agent.startedAt ?? log.startedAt, end: agent.endedAt ?? end },
@@ -5242,12 +5350,12 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     commands.length > 0 ? T.turnStats({ commands: commands.length, failed, agents: 0, tasksDone: 0, tasksTotal: 0 }) : '',
     files > 0 ? T.activityFiles(files) : '',
   ].filter(Boolean)
-  const rows = flowRows(log).slice(-FLOW_ROWS)
-  const at = (row: FlowRow) => <Text color={COLORS.muted}>{`${clockOf(row.at - log.startedAt)}  `}</Text>
-  const flow = rows.map((row, index) => {
+  // 흐름 한 줄. 펼친 에이전트의 호출은 indent 만큼 들여 그 에이전트 줄 아래에 둔다.
+  const flowLine = (row: FlowRow, key: string, indent = '') => {
+    const at = (row: FlowRow) => <Text color={COLORS.muted}>{`${indent}${clockOf(row.at - log.startedAt)}  `}</Text>
     if (row.kind === 'say') {
       return (
-        <Text key={`flow-${index}`} wrap="truncate-end">
+        <Text key={key} wrap="truncate-end">
           {at(row)}
           <Text color={COLORS.clay}>◉ </Text>
           <Text color={COLORS.text} weight="semibold">{row.text}</Text>
@@ -5256,7 +5364,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     }
     if (row.kind === 'explore') {
       return (
-        <Text key={`flow-${index}`} wrap="truncate-end">
+        <Text key={key} wrap="truncate-end">
           {at(row)}
           <Text color={KIND_COLOR.explore}>{`${KIND_GLYPH.explore} `}</Text>
           <Text color={COLORS.muted}>{row.text}</Text>
@@ -5265,7 +5373,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     }
     if (row.kind === 'edit') {
       return (
-        <Text key={`flow-${index}`} wrap="truncate-end">
+        <Text key={key} wrap="truncate-end">
           {at(row)}
           <Text color={row.isError ? COLORS.danger : KIND_COLOR.edit}>{`${KIND_GLYPH.edit} `}</Text>
           <Text color={COLORS.text}>{row.text}</Text>
@@ -5278,7 +5386,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     const mark = row.ms === null ? '▶' : row.isError ? '✗' : row.kind === 'agent' ? '◆' : '✓'
     const markColor = row.ms === null ? COLORS.clay : row.isError ? COLORS.danger : row.kind === 'agent' ? COLORS.warning : COLORS.success
     return (
-      <Text key={`flow-${index}`} wrap="truncate-end">
+      <Text key={key} wrap="truncate-end">
         {at(row)}
         <Text color={markColor}>{`${mark} `}</Text>
         {row.kind === 'test' && <Text color={KIND_COLOR.test}>{`${T.kindName.test} `}</Text>}
@@ -5286,20 +5394,42 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
         <Text color={COLORS.muted}>{` · ${formatElapsed(row.ms ?? now - row.at)}`}</Text>
       </Text>
     )
-  })
+  }
+  const flow = flowRows(log)
+    .slice(-FLOW_ROWS)
+    .map((row, index) => flowLine(row, `flow-${index}`))
   const turnAgentRow = (agent: AgentRecord) => {
     const live = isLive(agent.status)
     const failedAgent = agent.status === 'failed' || agent.status === 'killed'
     const isAgent = (agent.kind ?? 'agent') === 'agent'
     const facts = [agent.activity && live ? agent.activity : undefined, isAgent ? T.bandTools(agent.toolUses) : undefined, agentElapsed(agent, now)].filter(Boolean).join(' · ')
-    return rowButton(
-      els,
-      { key: `activity-agent-${agent.id}`, onPress: () => input.openAgent(agent.id) },
-      '',
+    const parts = [
       <Text color={live ? COLORS.clay : failedAgent ? COLORS.danger : COLORS.success}>{live ? '▶ ' : failedAgent ? '✗ ' : '✓ '}</Text>,
-      <Text color={COLORS.text}>{`${KIND_LABEL(agent)} `}</Text>,
+      AGENT_LABEL(agent) && <Text color={COLORS.text}>{`${AGENT_LABEL(agent)} `}</Text>,
       <Text color={COLORS.muted}>{`${agent.description} · ${facts}`}</Text>,
+    ]
+    if (!isAgent) return rowButton(els, { key: `activity-agent-${agent.id}`, onPress: () => input.openAgent(agent.id) }, '', ...parts)
+    // 에이전트 줄은 누르면 그 호출을 펴고 접는다. 대화는 행 끝 칩으로 에이전트 패널에서 본다.
+    return (
+      <Box columnGap={1}>
+        <Box flexGrow={1} flexShrink={1} overflow="hidden">
+          {rowButton(
+            els,
+            { key: `activity-agent-${agent.id}`, onPress: () => input.toggleAgent(agent.id) },
+            '',
+            <Text color={COLORS.muted}>{input.expanded === agent.id ? '▾ ' : '▸ '}</Text>,
+            ...parts,
+          )}
+        </Box>
+        <Box flexShrink={0}>{rowButton(els, { key: `activity-agent-open-${agent.id}`, dimColor: true, onPress: () => input.openAgent(agent.id) }, T.viewTranscript)}</Box>
+      </Box>
     )
+  }
+  // 펼친 에이전트의 호출: 이 기록에 쌓인 것만(앞 턴 기록의 호출은 그 턴과 함께 지나갔다).
+  const agentFlow = (agent: AgentRecord) => {
+    const rows = flowRows(log, agent.id).slice(-FLOW_ROWS)
+    if (rows.length === 0) return [<Text key={`agent-flow-${agent.id}-none`} color={COLORS.muted}>{`    ${T.activityAgentNoCalls}`}</Text>]
+    return rows.map((row, index) => flowLine(row, `agent-flow-${agent.id}-${index}`, '    '))
   }
   // 머리 아래는 모두 한 줄짜리 줄의 목록이다: 창의 줄 수로 잘라 그릴 수 있게.
   const one = (key: string, row: unknown) => (
@@ -5317,7 +5447,11 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
   if (flow.length > 0) body.push(section(T.activityFlow, 'flow-title'), ...flow)
   if (input.turnAgents.length > 0) {
     gap('agents-gap')
-    body.push(section(T.activityAgents, 'agents-title'), ...input.turnAgents.map(agent => one(`agent-${agent.id}`, turnAgentRow(agent))))
+    body.push(section(T.activityAgents, 'agents-title'))
+    for (const agent of input.turnAgents) {
+      body.push(one(`agent-${agent.id}`, turnAgentRow(agent)))
+      if (input.expanded === agent.id) body.push(...agentFlow(agent))
+    }
   }
   if (input.shells.length > 0) {
     gap('shells-gap')
@@ -5339,6 +5473,8 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
       <Box columnGap={2} width={columns}>
         <Box flexGrow={1}>
           <Text color={COLORS.text} weight="semibold">{`${log.endedAt === null ? T.activityThisTurn : T.activityLastTurn} · ${formatElapsed(turnEnd - log.startedAt)}`}</Text>
+          {/* 글로만 답한 턴 뒤에도 기록은 도구를 쓴 마지막 턴에 머문다: 그 턴이 언제 끝났는지 붙여 멈춘 것으로 보이지 않게. */}
+          {log.endedAt !== null && now - log.endedAt >= 60_000 && <Text color={COLORS.muted}>{` · ${T.activityEndedAgo(ago(log.endedAt, now))}`}</Text>}
         </Box>
         <Text color={COLORS.muted} wrap="truncate-end">{facts.join(' · ')}</Text>
       </Box>

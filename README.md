@@ -97,7 +97,7 @@ Opened with `/desk-activity` or by clicking the lower line of the progress band.
 
 - **Time bars**: one for the main conversation, one per agent the turn started and one for its background shells, across the turn (and on until what the turn started has finished): `░` explore, `▓` edit, `▒` test (short events, drawn over a long command), `━` command or agent (colored apart), `─` Claude responding
 - **Flow**: Claude's notes (`◉`, the first sentence before its calls) and its calls in order, with the time since the turn began: reads and searches folded into one line (`Read 6 · Grep 3`), edits per file with `+N −M`, commands and tests with `✓`, `✗` or `▶` (running) and their time
-- **Agents** and **Background**: what the turn started, with status, tool uses and time; a running background shell shows the last line of its output. Click one for it in `/desk-tasks`
+- **Agents** and **Background**: what the turn started, with status, tool uses and time; a running background shell shows the last line of its output. Click an agent to unfold its own calls below it (`▸`/`▾`), in the same form as the flow; `View transcript` at the end of the row, or a click on a shell, opens it in `/desk-tasks`
 
 ### `/desk-tasks [number]`: background tasks
 
