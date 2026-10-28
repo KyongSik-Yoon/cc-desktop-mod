@@ -1431,6 +1431,46 @@ describe('진행 띠', () => {
     await pane.unmount()
   })
 
+  test('/desk-activity 패널: 앞 턴에 띄워 아직 도는 에이전트도 그리고, 글로만 답한 턴 뒤에는 기록 턴이 끝난 지 얼마인지 붙인다', KO, async ($, on) => {
+    let now = 1_000_000
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'route-agent', status: 'running' }] as never }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('turn.complete', () => ({ text: '끝' }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    // 에이전트는 턴보다 먼저 떠 있다
+    await $.command.run({ command: 'desk-tasks', args: '' } as never)
+    now += 60_000
+    await $.turn.start({ text: '진행중이야?', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'a7' } as never)
+    now += 7000
+    await $.turn.complete({ durationMs: 7000, reason: 'answer', answer: '돌고 있어요', turnId: 't1' } as never)
+    const paneProps = { title: '활동', isFocused: true, bodyColumns: 70 } as never
+    let pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('route-agent')
+    expect(drawn).toContain('경로 진행')
+    expect(drawn).not.toContain(' 전')
+    await pane.unmount()
+    // 글로만 답한 턴이 지나가도 기록은 t1 에 머물고, 끝난 지 얼마인지 붙는다
+    now += 12 * 60_000
+    await $.turn.start({ text: '남은 건?', turnId: 't2' } as never)
+    await $.turn.complete({ durationMs: 3000, reason: 'answer', answer: '두 개', turnId: 't2' } as never)
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('지난 턴 · 7s')
+    expect(drawn).toContain(' · 12분 전')
+    expect(drawn).toContain('route-agent')
+    await pane.unmount()
+  })
+
   test('/desk-activity 패널: 창이 몸통보다 작으면 머리(막대·범례)는 고정하고 아래 줄만 스크롤한다', KO, async ($, on) => {
     let now = 1_000_000
     on('process.run', gitStub as never)
