@@ -174,6 +174,8 @@ let spinnerFallbackStart = 0
 
 // 스트림이 막 엔진에 넘긴 도구 호출: 기록(session.append)에 나오기 전까지 묶음에 미리 넣어 둔다.
 let runCursor: RunCursor = null
+// 턴 도중에 끼워 넣은 입력이 다음 메인 단계에 실리는지: 그 단계에서 effort 가 새로 선다(effortInForce).
+let inputIntoTurn = false
 // 컨텍스트 패널의 세션 흐름. 패널을 닫아 둬도 쌓이지만 따로 묻거나 그리지 않는다:
 // 메인 턴이 끝날 때 칩을 위해 이미 읽은 값을 메모리에 한 점 적을 뿐이다(상태에 쓰지 않으니 다시 그리는 것도 없다).
 // 플러그인을 다시 올리면 비고, 창 안에서 세션을 바꾸면 refreshSessionState 가 비운다.
@@ -3109,6 +3111,8 @@ export const register: Register = (on, options) => {
     void refreshSurface($).catch(() => undefined)
     // 턴 도중에 끼어든 프롬프트도 열린 도구 묶음을 닫는다(computeRuns 가 프롬프트에서 끊듯이)
     runCursor = null
+    // 실행 중인 턴에 들어가는 입력(슬래시 명령·턴 끝까지 기다리게 한 것은 빼고)은 다음 단계의 effort 를 세운다
+    if (e.turnId !== undefined && e.command === undefined && !e.wait) inputIntoTurn = true
     // 사람이 어디서 입력했는지: 질문 카드가 Remote Control 세션에서 카드를 띄울지 고른다(ask.tsx)
     const origin = e.origin.kind
     if (origin === 'composer' || origin === 'bridge') await update($, promptOrigin, () => origin).catch(() => undefined)
@@ -3315,7 +3319,9 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
     if (id === undefined) {
-      await update($, stepEffort, held => effortInForce(held, e.index, e.effort))
+      const withInput = inputIntoTurn
+      inputIntoTurn = false
+      await update($, stepEffort, held => effortInForce(held, e.index, e.effort, withInput))
       const savePredicted = () => update($, runs, state => withPredicted(state, predicted))
       if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* placeCalls(next(e), savePredicted)
       return yield* placeCalls(gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS)), savePredicted)
@@ -5619,14 +5625,15 @@ export function spinnerDots(now: number): string {
   return ['●', '·', '·'].map((_, index) => (index === frame ? '●' : '·')).join('')
 }
 
-// 지금 서 있는 effort(turn.step 의 effort, 2.1.312 주석): 메시지마다 effort 를 받는 모델에서는 입력이 든 단계(턴의 첫 단계)에서
-// 정한 수준이 그 뒤 도구 단계 내내 서고, 턴 중에 바꾼 수준은 다음 메시지까지 기다린다. 숫자는 바로 나간다.
-// 모델이 메시지마다 받는지는 mod API 에 없어 늘 이 규칙을 따른다(아니면 바뀐 수준이 다음 메시지부터 보일 뿐이다).
+// 지금 서 있는 effort(turn.step 의 effort, 2.1.312 주석): 메시지마다 effort 를 받는 모델에서는 사람 입력이 든 단계에서
+// 정한 수준이 그 뒤 도구 단계 내내 서고, 턴 중에 바꾼 수준은 다음 입력까지 기다린다. 입력은 턴의 첫 단계만이 아니라
+// 턴 중에 끼워 넣은 메시지가 실린 단계에도 든다. 숫자는 바로 나간다.
+// 모델이 메시지마다 받는지는 mod API 에 없어 늘 이 규칙을 따른다(아니면 바뀐 수준이 다음 입력부터 보일 뿐이다).
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number
 
-export function effortInForce(held: Effort | null, index: number, effort: Effort | undefined): Effort | null {
+export function effortInForce(held: Effort | null, index: number, effort: Effort | undefined, withInput: boolean): Effort | null {
   if (effort === undefined) return null
-  if (index === 0 || held === null || typeof effort === 'number') return effort
+  if (index === 0 || withInput || held === null || typeof effort === 'number') return effort
   return held
 }
 
