@@ -1447,7 +1447,12 @@ describe('진행 띠', () => {
       opened.push((e as { id: string }).id)
       return { value: { isPlaced: true } } as never
     })
-    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'general-purpose', name: 'route-agent', status: 'running' }] as never }))
+    on('agent.list', () => ({
+      value: [
+        { id: 'a7', description: '경로 진행', type: 'general-purpose', name: 'route-agent', status: 'running' },
+        { id: 'a8', description: '자원 누락', type: 'general-purpose', status: 'running' },
+      ] as never,
+    }))
     on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
     on('turn.complete', () => ({ text: '끝' }) as never)
     on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
@@ -1462,10 +1467,11 @@ describe('진행 띠', () => {
     const paneProps = { title: '활동', isFocused: true, bodyColumns: 70 } as never
     let pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: paneProps })
     let drawn = JSON.stringify(await pane.drawn())
-    // 줄머리는 엔진 하단 목록과 같은 이름이다. 종류(general-purpose)는 에이전트마다 같아 구별이 안 된다
+    // 줄머리는 엔진 하단 목록처럼 이름, 이름이 없으면 설명뿐이다. 종류(general-purpose)는 에이전트마다 같아 구별이 안 된다
     expect(drawn).toContain('route-agent')
     expect(drawn).not.toContain('general-purpose')
     expect(drawn).toContain('경로 진행')
+    expect(drawn).toContain('자원 누락')
     expect(drawn).not.toContain(' 전')
     // 에이전트의 호출은 그 줄을 눌러야 펼친다. 다시 누르면 접고, 행 끝 칩은 에이전트 패널을 연다
     expect(drawn).not.toContain('a.ts')
@@ -1505,7 +1511,7 @@ describe('진행 띠', () => {
       throw new Error('ENOENT')
     })
     on('clock.now', () => ({ value: now }))
-    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'route-agent', status: 'running' }] as never }))
+    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'general-purpose', name: 'route-agent', status: 'running' }] as never }))
     on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
     on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
     await $.command.run({ command: 'desk-tasks', args: '' } as never)
@@ -1543,7 +1549,7 @@ describe('진행 띠', () => {
     })
     on('clock.now', () => ({ value: 1_000_000 }))
     on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
-    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'route-agent', status: 'running' }] as never }))
+    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'general-purpose', name: 'route-agent', status: 'running' }] as never }))
     on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
     on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
     // 엔진처럼: 패널은 연 순서의 탭, 앞에 오는 것은 focus 가 받아들여질 때뿐이고 사람이 패널을 잡고 있으면 거절된다.

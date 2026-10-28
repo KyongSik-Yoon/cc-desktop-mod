@@ -2306,7 +2306,7 @@ function agentsChip(els: Els, $: EngineInterface, records: Record<string, AgentR
   }
 }
 
-// 턴 끝 "Waiting for 2 background agents to finish" 아래 줄들: "··· general-purpose  설명 ›". 끝나면 상태를 단다.
+// 턴 끝 "Waiting for 2 background agents to finish" 아래 줄들: "··· route-agent  설명 ›"(이름 없으면 설명만). 끝나면 상태를 단다.
 // 그 줄은 에이전트가 끝나도 남으니 지금 상태는 에이전트 기록에서 읽는다. 기록이 아직 없으면 종류만.
 function waitingRows(els: Els, $: EngineInterface, waited: ReadonlyArray<{ id: string; agentType: string }>, records: Record<string, AgentRecord>, columns: number) {
   if (waited.length === 0) return null
@@ -2316,14 +2316,15 @@ function waitingRows(els: Els, $: EngineInterface, waited: ReadonlyArray<{ id: s
       {waited.map(({ id, agentType }) => {
         const agent = records[id]
         const live = agent === undefined || isLive(agent.status)
+        const label = agent ? AGENT_LABEL(agent) : agentType
         return (
           <Box key={`waiting-${id}`} columnGap={1}>
             <Text color={COLORS.clay}>{live ? '···' : '◆'}</Text>
-            <Text color={COLORS.muted}>{agent ? AGENT_LABEL(agent) : agentType}</Text>
+            {label && <Text color={COLORS.muted}>{label}</Text>}
             {rowButton(
               els,
               { key: `waiting-row-${id}`, dimColor: true, onPress: () => void openAgents($, id) },
-              clip(agent?.description ?? '', Math.max(10, columns - cellWidth(agent ? AGENT_LABEL(agent) : agentType) - 24)),
+              clip(agent?.description ?? '', Math.max(10, columns - cellWidth(label ?? '') - 24)),
               !live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{` ${T.agentStatus[agent.status] ?? agent.status}`}</Text>,
               <Text color={COLORS.muted}> ›</Text>,
             )}
@@ -2383,8 +2384,11 @@ const agentElapsed = (agent: AgentRecord, now: number) =>
 
 // 목록의 카드 한 장: 데스크톱 Background tasks 처럼 제목, 종류·시간, 모델·토큰·도구 수·하는 일·대화 보기.
 const KIND_LABEL = (agent: AgentRecord) => (agent.kind === 'shell' ? T.kindShell : agent.kind === 'monitor' ? T.kindMonitor : agent.type)
-// 줄머리에 붙는 에이전트 이름: 엔진 하단 목록처럼 SendMessage 이름(route-agent 등), 없으면 종류.
-const AGENT_LABEL = (agent: AgentRecord) => (agent.name ?? KIND_LABEL(agent))
+// 설명 앞 줄머리: 엔진 하단 목록처럼 SendMessage 이름(route-agent 등)이고, 이름 없는 에이전트는 비운다(설명만).
+// 셸·모니터는 종류. 에이전트 종류(general-purpose)는 여럿이 같아 구별이 안 된다.
+const AGENT_LABEL = (agent: AgentRecord) => agent.name ?? ((agent.kind ?? 'agent') === 'agent' ? undefined : KIND_LABEL(agent))
+// 이름표 하나만 쓰는 곳(진행 띠, 레인): 줄머리가 없으면 설명.
+const AGENT_TITLE = (agent: AgentRecord) => AGENT_LABEL(agent) ?? agent.description
 
 // 도는 작업의 멈춤 버튼: 한 번 누르면 "멈출까요?", 5초 안에 한 번 더 누르면 멈춘다.
 function stopButton(els: Els, $: EngineInterface, agent: AgentRecord, armed: Record<string, boolean>) {
@@ -2412,7 +2416,7 @@ function agentRow(els: Els, $: EngineInterface, agent: AgentRecord, number: numb
       {rowButton(els, { key: `agent-title-${agent.id}`, onPress: open }, clip(agent.description, Math.max(10, columns - 6)))}
       <Box columnGap={1}>
         <Text color={COLORS.muted}>{`${number}`}</Text>
-        <Text color={COLORS.muted}>{AGENT_LABEL(agent)}</Text>
+        {AGENT_LABEL(agent) && <Text color={COLORS.muted}>{AGENT_LABEL(agent)}</Text>}
         {elapsed && <Text color={COLORS.muted}>{elapsed}</Text>}
         {!live && <Text color={AGENT_STATUS_COLOR[agent.status] ?? COLORS.muted}>{T.agentStatus[agent.status] ?? agent.status}</Text>}
         {agent.id === inView && <Text color={COLORS.clay}>{`◉ ${T.agentInView}`}</Text>}
@@ -5197,7 +5201,7 @@ function nowLine(els: Elements['terminal'], input: BandInput) {
     const shown = live.slice(0, 2).map((agent, index) => (
       <Text>
         {index > 0 ? '   ' : ''}
-        <Text color={COLORS.link}>{AGENT_LABEL(agent)}</Text>
+        <Text color={COLORS.link}>{clip(AGENT_TITLE(agent), 24)}</Text>
         <Text color={COLORS.muted}>{` ${agent.activity ?? T.bandThinking} · ${T.bandTools(agent.toolUses)}${agent.startedAt ? ` · ${formatElapsed(now - agent.startedAt)}` : ''}`}</Text>
       </Text>
     ))
@@ -5290,7 +5294,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     lane(T.laneMain, laneSegments(main, { start: log.startedAt, end: turnEnd }, log.startedAt, end, width), 'lane-main'),
     ...input.turnAgents.slice(-LANE_AGENTS).map(agent =>
       lane(
-        AGENT_LABEL(agent),
+        AGENT_TITLE(agent),
         laneSegments(
           log.events.filter(event => event.loop === agent.id),
           { start: agent.startedAt ?? log.startedAt, end: agent.endedAt ?? end },
@@ -5396,7 +5400,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     const facts = [agent.activity && live ? agent.activity : undefined, isAgent ? T.bandTools(agent.toolUses) : undefined, agentElapsed(agent, now)].filter(Boolean).join(' · ')
     const parts = [
       <Text color={live ? COLORS.clay : failedAgent ? COLORS.danger : COLORS.success}>{live ? '▶ ' : failedAgent ? '✗ ' : '✓ '}</Text>,
-      <Text color={COLORS.text}>{`${AGENT_LABEL(agent)} `}</Text>,
+      AGENT_LABEL(agent) && <Text color={COLORS.text}>{`${AGENT_LABEL(agent)} `}</Text>,
       <Text color={COLORS.muted}>{`${agent.description} · ${facts}`}</Text>,
     ]
     if (!isAgent) return rowButton(els, { key: `activity-agent-${agent.id}`, onPress: () => input.openAgent(agent.id) }, '', ...parts)
