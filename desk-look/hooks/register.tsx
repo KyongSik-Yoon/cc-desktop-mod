@@ -2037,7 +2037,11 @@ async function logCall($: EngineInterface, event: ActivityLog['events'][number])
   const fresh = event.loop === undefined ? takeLogStart() : null
   await update($, activityLog, current => {
     const log = fresh ?? current
-    return log === null || (log.endedAt !== null && event.loop === undefined) ? log : { ...log, events: [...log.events, event].slice(-LOG_EVENTS) }
+    if (log === null || (log.endedAt !== null && event.loop === undefined)) return log
+    // 오래 도는 에이전트의 호출이 상한을 채워도 메인 대화의 호출은 밀어내지 않는다.
+    const events = [...log.events, event]
+    const kept = new Set([...events.filter(item => item.loop === undefined).slice(-LOG_EVENTS), ...events.filter(item => item.loop !== undefined).slice(-LOG_EVENTS)])
+    return { ...log, events: events.filter(item => kept.has(item)) }
   })
 }
 
@@ -3779,9 +3783,12 @@ export const register: Register = (on, options) => {
     const columns = Math.max(30, e.props.bodyColumns)
     const turnEnd = log.endedAt ?? now
     const inTurn = (agent: AgentRecord) => (agent.startedAt ?? 0) >= log.startedAt - 1000 && (agent.startedAt ?? 0) <= turnEnd
-    const all = [...orderAgents(records).live, ...orderAgents(records).done].filter(inTurn).reverse()
-    const turnAgents = all.filter(agent => (agent.kind ?? 'agent') === 'agent')
-    const shells = all.filter(agent => agent.kind === 'shell' || agent.kind === 'monitor')
+    // 에이전트는 앞 턴에 띄웠어도 이 턴 동안(또는 지금) 돌았으면 함께 그린다: 그 호출도 이 기록에 쌓인다.
+    // 셸은 띄운 턴에만: 개발 서버처럼 계속 떠 있는 셸이 턴마다 붙지 않게.
+    const overlaps = (agent: AgentRecord) => (agent.startedAt ?? 0) <= turnEnd && (isLive(agent.status) || (agent.endedAt ?? 0) >= log.startedAt)
+    const all = [...orderAgents(records).live, ...orderAgents(records).done].reverse()
+    const turnAgents = all.filter(agent => (agent.kind ?? 'agent') === 'agent' && (inTurn(agent) || overlaps(agent)))
+    const shells = all.filter(agent => (agent.kind === 'shell' || agent.kind === 'monitor') && inTurn(agent))
     const tail = await shellTail($, shells, now)
     // 턴이 끝났어도 이 턴에 띄운 에이전트·셸이 아직 돌면 지금까지, 끝났으면 가장 늦게 끝난 때까지 시간 축을 늘린다.
     const spawned = [...turnAgents, ...shells]
@@ -5388,6 +5395,8 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
       <Box columnGap={2} width={columns}>
         <Box flexGrow={1}>
           <Text color={COLORS.text} weight="semibold">{`${log.endedAt === null ? T.activityThisTurn : T.activityLastTurn} · ${formatElapsed(turnEnd - log.startedAt)}`}</Text>
+          {/* 글로만 답한 턴 뒤에도 기록은 도구를 쓴 마지막 턴에 머문다: 그 턴이 언제 끝났는지 붙여 멈춘 것으로 보이지 않게. */}
+          {log.endedAt !== null && now - log.endedAt >= 60_000 && <Text color={COLORS.muted}>{` · ${T.activityEndedAgo(ago(log.endedAt, now))}`}</Text>}
         </Box>
         <Text color={COLORS.muted} wrap="truncate-end">{facts.join(' · ')}</Text>
       </Box>
