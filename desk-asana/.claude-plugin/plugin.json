@@ -1,6 +1,6 @@
 {
   "name": "desk-asana",
-  "version": "0.65.7",
+  "version": "0.66.0",
   "description": "Claude Code mod that opens your Asana tasks in a side pane (/desk-asana): the tasks assigned to you, a search across the workspace and your projects' tasks by section, with details, comments, adding a comment, assignee, dropdown fields and status. Reads Asana through the Asana MCP server Claude Code already has connected. Pairs with desk-look",
   "keywords": [
     "claude-code",

@@ -252,6 +252,8 @@ declare module 'claude-code' {
       bandDoneAt: number | null
       // 스피너를 다시 그리게 하는 시계(ms).
       tick: number
+      // 메인 대화에 지금 서 있는 effort(수준 또는 숫자), effort 를 받지 않는 모델이면 null. 스피너 줄 끝에 단다.
+      stepEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number | null
       // 지금의 할 일 목록.
       tasks: TaskItem[]
       // 입력창 위 진행 띠의 "지금" 줄.
