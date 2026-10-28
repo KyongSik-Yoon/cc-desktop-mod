@@ -1337,6 +1337,7 @@ describe('진행 띠', () => {
     expect(rows[2]).toMatchObject({ added: 5, removed: 1 })
     expect(rows[3]).toMatchObject({ ms: 2000, isError: true })
     expect(rows[5]).toMatchObject({ ms: null })
+    expect(flowRows(log, 'agent-1').map(row => [row.kind, row.text])).toEqual([['explore', 'Read']])
     expect(outputFileOf('Command running in background with ID: b1. Output is being written to: /tmp/claude-1000/p/s/tasks/b1.output')).toBe('/tmp/claude-1000/p/s/tasks/b1.output')
     expect(outputFileOf('done')).toBeUndefined()
     expect(clockOf(125_000)).toBe('02:05')
@@ -1439,7 +1440,11 @@ describe('진행 띠', () => {
     })
     on('clock.now', () => ({ value: now }))
     on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
-    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    const opened: string[] = []
+    on('ui.open', ($, e) => {
+      opened.push((e as { id: string }).id)
+      return { value: { isPlaced: true } } as never
+    })
     on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'route-agent', status: 'running' }] as never }))
     on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
     on('turn.complete', () => ({ text: '끝' }) as never)
@@ -1458,6 +1463,17 @@ describe('진행 띠', () => {
     expect(drawn).toContain('route-agent')
     expect(drawn).toContain('경로 진행')
     expect(drawn).not.toContain(' 전')
+    // 에이전트의 호출은 그 줄을 눌러야 펼친다. 다시 누르면 접고, 행 끝 칩은 에이전트 패널을 연다
+    expect(drawn).not.toContain('a.ts')
+    await pane.press({ key: 'activity-agent-a7' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('a.ts')
+    expect(drawn).toContain('▾')
+    await pane.press({ key: 'activity-agent-a7' })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).not.toContain('a.ts')
+    await pane.press({ key: 'activity-agent-open-a7' })
+    expect(opened).toContain('desk-tasks')
     await pane.unmount()
     // 글로만 답한 턴이 지나가도 기록은 t1 에 머물고, 끝난 지 얼마인지 붙는다
     now += 12 * 60_000
@@ -1468,6 +1484,49 @@ describe('진행 띠', () => {
     expect(drawn).toContain('지난 턴 · 7s')
     expect(drawn).toContain(' · 12분 전')
     expect(drawn).toContain('route-agent')
+    await pane.unmount()
+  })
+
+  test('/desk-activity 패널: 사람이 패널을 잡고 있어 focus 가 거절돼도 에이전트 칩은 그 대화를 앞에 띄운다', KO, async ($, on) => {
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: 1_000_000 }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('agent.list', () => ({ value: [{ id: 'a7', description: '경로 진행', type: 'route-agent', status: 'running' }] as never }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    // 엔진처럼: 패널은 연 순서의 탭, 앞에 오는 것은 focus 가 받아들여질 때뿐이고 사람이 패널을 잡고 있으면 거절된다.
+    // 잡고 있던 패널이 닫히면 키는 입력창으로 돌아간다.
+    const up: string[] = []
+    let front: string | null = null
+    let held = false
+    on('ui.open', ($, e) => {
+      const pane = e as { id: string; focus?: true }
+      if (!up.includes(pane.id)) up.push(pane.id)
+      if (front === null || (pane.focus && !held)) front = pane.id
+      return { value: undefined } as never
+    })
+    on('ui.close', ($, e) => {
+      const id = (e as { id: string }).id
+      up.splice(up.indexOf(id), 1)
+      if (front === id) [front, held] = [up[up.length - 1] ?? null, false]
+      return { value: undefined } as never
+    })
+    on('ui.panes', () => ({ value: up.map(id => ({ id, title: id, isShown: id === front, isFocused: id === front && held, isPlaced: true })) }) as never)
+    await $.command.run({ command: 'desk-tasks', args: '' } as never)
+    await $.turn.start({ text: '진행중이야?', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    await $.tool.call({ tool: 'Edit', file_path: '/r/a.ts', old_string: 'a', new_string: 'b', agentId: 'a7' } as never)
+    await $.command.run({ command: 'desk-activity', args: '' } as never)
+    expect(front).toBe('desk-activity')
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: { title: '활동', isFocused: true, bodyColumns: 70 } as never })
+    held = true
+    await pane.press({ key: 'activity-agent-open-a7' })
+    expect(front).toBe('desk-tasks')
+    // 활동 패널은 닫히지 않고 뒤 탭으로 남는다
+    expect(up).toEqual(['desk-tasks', 'desk-activity'])
     await pane.unmount()
   })
 

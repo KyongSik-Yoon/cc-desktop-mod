@@ -251,10 +251,11 @@ export type FlowRow =
 
 // 패널의 흐름: 메인 대화의 설명 글과 호출을 시간 순으로. 이어진 탐색은 "Read 6 · Grep 3" 한 줄로,
 // 같은 파일을 잇달아 고친 것은 한 줄로 합친다. 도는 중인 호출은 ms 가 null.
-export function flowRows(log: ActivityLog): FlowRow[] {
+// loop 를 주면 그 에이전트의 호출만(설명 글은 메인 대화의 것이라 뺀다).
+export function flowRows(log: ActivityLog, loop?: string): FlowRow[] {
   const items = [
-    ...log.says.map(say => ({ at: say.at, say })),
-    ...log.events.filter(event => event.loop === undefined).map(event => ({ at: event.start, event })),
+    ...(loop === undefined ? log.says : []).map(say => ({ at: say.at, say })),
+    ...log.events.filter(event => event.loop === loop).map(event => ({ at: event.start, event })),
   ].sort((a, b) => a.at - b.at || ('say' in a ? -1 : 0) - ('say' in b ? -1 : 0))
   const rows: FlowRow[] = []
   let tally: Map<string, number> | null = null

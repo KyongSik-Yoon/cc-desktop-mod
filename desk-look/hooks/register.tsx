@@ -96,6 +96,8 @@ const activityClock = atom({ plugin: 'desk-look', key: 'activityClock' } as cons
 // /desk-activity 패널 몸통(머리 아래 줄)의 첫 줄. 끝(ACTIVITY_END)이면 늘어나는 줄을 따라간다.
 // 머리(제목·막대·범례)를 늘 보이게 하려고 패널이 스스로 스크롤한다: ui.scroll 을 next 없이 받아 이 값을 옮긴다.
 const activityTop = atom({ plugin: 'desk-look', key: 'activityTop' } as const, 0)
+// /desk-activity 패널에서 호출을 펼친 에이전트(에이전트 줄을 누르면 펴고, 다시 누르면 접는다).
+const activityAgentOpen = atom({ plugin: 'desk-look', key: 'activityAgentOpen' } as const, null as string | null)
 const ACTIVITY_END = Number.MAX_SAFE_INTEGER
 // 마지막으로 그린 몸통 창: pinned 면 머리를 고정해 그렸고, room 은 몸통에 보이는 줄 수, max 는 첫 줄의 끝.
 let activityWindow = { pinned: false, room: 0, max: 0 }
@@ -2206,7 +2208,22 @@ async function openAgents($: EngineInterface, id: string | null = null) {
   await update($, agentView, () => id)
   await refreshAgents($).catch(() => undefined)
   await refreshAgentDetail($).catch(() => undefined)
-  await $.ui.open({ ...(await paneLook($)), id: AGENTS_PANE, title: T.paneAgents, focus: true })
+  await openInFront($, { ...(await paneLook($)), id: AGENTS_PANE, title: T.paneAgents, focus: true })
+}
+
+// 사람이 다른 내 패널을 잡고 있으면(그 패널의 버튼을 눌렀을 때) 엔진은 focus 를 거절해 연 패널을 그 탭 뒤에 둔다.
+// 그때는 앞에 있던 패널을 닫았다가 뒤에 다시 열어, 연 패널이 앞에 오게 한다(스크롤 위치는 되돌린다).
+async function openInFront($: EngineInterface, pane: Parameters<EngineInterface['ui']['open']>[0]) {
+  await $.ui.open(pane)
+  // 앞으로 올리기는 연 뒤의 덤이다: 패널 목록을 못 읽으면 연 것으로 끝낸다.
+  const panes = await $.ui.panes().catch(() => [])
+  const front = panes.find(item => item.isShown)
+  if (!front || front.id === pane.id || !panes.some(item => item.id === pane.id)) return
+  const offset = paneOffsets.get(front.id) ?? 0
+  await $.ui.close({ id: front.id })
+  await $.ui.open(pane)
+  await $.ui.open({ ...(await paneLook($)), id: front.id, title: front.title })
+  if (offset > 0) await restoreScroll($, front.id, offset)
 }
 
 // 패널이 한동안 그려지지 않았거나(닫힘·접힘), 턴도 끝나고 도는 에이전트·셸도 없으면 멈춘다.
@@ -2228,7 +2245,7 @@ function startActivityClock($: EngineInterface) {
 }
 
 async function openActivity($: EngineInterface) {
-  await $.ui.open({ ...(await paneLook($)), id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
+  await openInFront($, { ...(await paneLook($)), id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
 }
 
 // 에이전트 대화를 메인 화면에 띄운다(엔진의 작업 목록에서 고른 것처럼). 그 뒤 Enter 는 그 에이전트에게 간다. id 가 없으면 메인 대화로.
@@ -3774,7 +3791,7 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     // 턴이나 이 턴이 띄운 일이 도는 동안은 패널 시계(2초)로 다시 그려 막대와 시간이 간다.
-    const [log, records, startedAt, top] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityClock)])
+    const [log, records, startedAt, top, expanded] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityAgentOpen), read($, activityClock)])
     if (log === null) return <Text color={COLORS.muted}>{T.activityNone}</Text>
     const now = await $.clock.now()
     activitySeen = now
@@ -3794,7 +3811,20 @@ export const register: Register = (on, options) => {
     const spawned = [...turnAgents, ...shells]
     const end = spawned.some(agent => isLive(agent.status)) ? now : Math.max(turnEnd, ...spawned.map(agent => agent.endedAt ?? turnEnd))
     const bodyRows = (e.props as { scroll?: { bodyRows: number } }).scroll?.bodyRows ?? 0
-    const drawn = activityPane(els, { log, now, end, columns, turnAgents, shells, tail, bodyRows, top, openAgent: id => void openAgents($, id) })
+    const drawn = activityPane(els, {
+      log,
+      now,
+      end,
+      columns,
+      turnAgents,
+      shells,
+      tail,
+      bodyRows,
+      top,
+      expanded,
+      openAgent: id => void openAgents($, id),
+      toggleAgent: id => void update($, activityAgentOpen, current => (current === id ? null : id)),
+    })
     activityWindow = drawn.window
     return drawn.tree
   })
@@ -5224,7 +5254,10 @@ type PaneInput = {
   // 엔진이 몸통에 준 줄 수(모르면 0)와 몸통 첫 줄(activityTop).
   bodyRows: number
   top: number
+  // 호출을 펼친 에이전트.
+  expanded: string | null
   openAgent: (id: string) => void
+  toggleAgent: (id: string) => void
 }
 
 export function activityPane(els: Elements['terminal'], input: PaneInput) {
@@ -5298,12 +5331,12 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     commands.length > 0 ? T.turnStats({ commands: commands.length, failed, agents: 0, tasksDone: 0, tasksTotal: 0 }) : '',
     files > 0 ? T.activityFiles(files) : '',
   ].filter(Boolean)
-  const rows = flowRows(log).slice(-FLOW_ROWS)
-  const at = (row: FlowRow) => <Text color={COLORS.muted}>{`${clockOf(row.at - log.startedAt)}  `}</Text>
-  const flow = rows.map((row, index) => {
+  // 흐름 한 줄. 펼친 에이전트의 호출은 indent 만큼 들여 그 에이전트 줄 아래에 둔다.
+  const flowLine = (row: FlowRow, key: string, indent = '') => {
+    const at = (row: FlowRow) => <Text color={COLORS.muted}>{`${indent}${clockOf(row.at - log.startedAt)}  `}</Text>
     if (row.kind === 'say') {
       return (
-        <Text key={`flow-${index}`} wrap="truncate-end">
+        <Text key={key} wrap="truncate-end">
           {at(row)}
           <Text color={COLORS.clay}>◉ </Text>
           <Text color={COLORS.text} weight="semibold">{row.text}</Text>
@@ -5312,7 +5345,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     }
     if (row.kind === 'explore') {
       return (
-        <Text key={`flow-${index}`} wrap="truncate-end">
+        <Text key={key} wrap="truncate-end">
           {at(row)}
           <Text color={KIND_COLOR.explore}>{`${KIND_GLYPH.explore} `}</Text>
           <Text color={COLORS.muted}>{row.text}</Text>
@@ -5321,7 +5354,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     }
     if (row.kind === 'edit') {
       return (
-        <Text key={`flow-${index}`} wrap="truncate-end">
+        <Text key={key} wrap="truncate-end">
           {at(row)}
           <Text color={row.isError ? COLORS.danger : KIND_COLOR.edit}>{`${KIND_GLYPH.edit} `}</Text>
           <Text color={COLORS.text}>{row.text}</Text>
@@ -5334,7 +5367,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
     const mark = row.ms === null ? '▶' : row.isError ? '✗' : row.kind === 'agent' ? '◆' : '✓'
     const markColor = row.ms === null ? COLORS.clay : row.isError ? COLORS.danger : row.kind === 'agent' ? COLORS.warning : COLORS.success
     return (
-      <Text key={`flow-${index}`} wrap="truncate-end">
+      <Text key={key} wrap="truncate-end">
         {at(row)}
         <Text color={markColor}>{`${mark} `}</Text>
         {row.kind === 'test' && <Text color={KIND_COLOR.test}>{`${T.kindName.test} `}</Text>}
@@ -5342,20 +5375,42 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
         <Text color={COLORS.muted}>{` · ${formatElapsed(row.ms ?? now - row.at)}`}</Text>
       </Text>
     )
-  })
+  }
+  const flow = flowRows(log)
+    .slice(-FLOW_ROWS)
+    .map((row, index) => flowLine(row, `flow-${index}`))
   const turnAgentRow = (agent: AgentRecord) => {
     const live = isLive(agent.status)
     const failedAgent = agent.status === 'failed' || agent.status === 'killed'
     const isAgent = (agent.kind ?? 'agent') === 'agent'
     const facts = [agent.activity && live ? agent.activity : undefined, isAgent ? T.bandTools(agent.toolUses) : undefined, agentElapsed(agent, now)].filter(Boolean).join(' · ')
-    return rowButton(
-      els,
-      { key: `activity-agent-${agent.id}`, onPress: () => input.openAgent(agent.id) },
-      '',
+    const parts = [
       <Text color={live ? COLORS.clay : failedAgent ? COLORS.danger : COLORS.success}>{live ? '▶ ' : failedAgent ? '✗ ' : '✓ '}</Text>,
       <Text color={COLORS.text}>{`${KIND_LABEL(agent)} `}</Text>,
       <Text color={COLORS.muted}>{`${agent.description} · ${facts}`}</Text>,
+    ]
+    if (!isAgent) return rowButton(els, { key: `activity-agent-${agent.id}`, onPress: () => input.openAgent(agent.id) }, '', ...parts)
+    // 에이전트 줄은 누르면 그 호출을 펴고 접는다. 대화는 행 끝 칩으로 에이전트 패널에서 본다.
+    return (
+      <Box columnGap={1}>
+        <Box flexGrow={1} flexShrink={1} overflow="hidden">
+          {rowButton(
+            els,
+            { key: `activity-agent-${agent.id}`, onPress: () => input.toggleAgent(agent.id) },
+            '',
+            <Text color={COLORS.muted}>{input.expanded === agent.id ? '▾ ' : '▸ '}</Text>,
+            ...parts,
+          )}
+        </Box>
+        <Box flexShrink={0}>{rowButton(els, { key: `activity-agent-open-${agent.id}`, dimColor: true, onPress: () => input.openAgent(agent.id) }, T.viewTranscript)}</Box>
+      </Box>
     )
+  }
+  // 펼친 에이전트의 호출: 이 기록에 쌓인 것만(앞 턴 기록의 호출은 그 턴과 함께 지나갔다).
+  const agentFlow = (agent: AgentRecord) => {
+    const rows = flowRows(log, agent.id).slice(-FLOW_ROWS)
+    if (rows.length === 0) return [<Text key={`agent-flow-${agent.id}-none`} color={COLORS.muted}>{`    ${T.activityAgentNoCalls}`}</Text>]
+    return rows.map((row, index) => flowLine(row, `agent-flow-${agent.id}-${index}`, '    '))
   }
   // 머리 아래는 모두 한 줄짜리 줄의 목록이다: 창의 줄 수로 잘라 그릴 수 있게.
   const one = (key: string, row: unknown) => (
@@ -5373,7 +5428,11 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
   if (flow.length > 0) body.push(section(T.activityFlow, 'flow-title'), ...flow)
   if (input.turnAgents.length > 0) {
     gap('agents-gap')
-    body.push(section(T.activityAgents, 'agents-title'), ...input.turnAgents.map(agent => one(`agent-${agent.id}`, turnAgentRow(agent))))
+    body.push(section(T.activityAgents, 'agents-title'))
+    for (const agent of input.turnAgents) {
+      body.push(one(`agent-${agent.id}`, turnAgentRow(agent)))
+      if (input.expanded === agent.id) body.push(...agentFlow(agent))
+    }
   }
   if (input.shells.length > 0) {
     gap('shells-gap')

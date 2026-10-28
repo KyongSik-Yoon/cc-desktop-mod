@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.65.3",
+  "version": "0.65.4",
   "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, a progress band of the current step and what runs now, GitHub/GitLab PR bar, diff, activity, context, background tasks and Markdown preview panes. The Asana and Slack panes are the separate desk-asana and desk-slack plugins",
   "keywords": [
     "claude-code",
