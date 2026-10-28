@@ -85,6 +85,8 @@ const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskSta
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
+// 메인 대화에 지금 서 있는 effort(turn.step 에서 effortInForce 로). 스피너 줄 끝에 단다.
+const stepEffort = atom({ plugin: 'desk-look', key: 'stepEffort' } as const, null as Effort | null)
 const IDLE_ACTIVITY: ActivityState = { calls: [], say: null, idleSince: null, proc: null, taskSince: {}, commands: 0, failed: 0, agents: 0 }
 const turnActivity = atom({ plugin: 'desk-look', key: 'activity' } as const, IDLE_ACTIVITY)
 const activityLog = atom({ plugin: 'desk-look', key: 'activityLog' } as const, null as ActivityLog | null)
@@ -3232,6 +3234,7 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId
     if (id === undefined) {
+      await update($, stepEffort, held => effortInForce(held, e.index, e.effort))
       const savePredicted = () => update($, runs, state => withPredicted(state, predicted))
       if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* placeCalls(next(e), savePredicted)
       return yield* placeCalls(gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS)), savePredicted)
@@ -3451,7 +3454,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
-    const [now, startedAt, , list, state, agentRecords, asked] = await Promise.all([
+    const [now, startedAt, , list, state, agentRecords, asked, effort] = await Promise.all([
       $.clock.now(),
       read($, turnStartedAt),
       read($, tick),
@@ -3459,6 +3462,7 @@ export const register: Register = (on, options) => {
       read($, turnActivity),
       read($, agents),
       read($, asking),
+      read($, stepEffort),
     ])
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
     spinnerSeen = now
@@ -3483,6 +3487,7 @@ export const register: Register = (on, options) => {
         <Text color={COLORS.clay}>{spinnerDots(now)}</Text>
         <Text color={COLORS.text}>{` ${spinnerWord(e.props.mode, e.props.message)}${e.props.suffix}`}</Text>
         <Text color={COLORS.muted}>{`  ${formatElapsed(elapsed)}`}</Text>
+        {effort !== null && <Text color={COLORS.muted}>{` · ${effortLabel(effort)}`}</Text>}
         {gatheredLines() > 0 && <Text color={COLORS.muted}>{` · ${T.gathered(gatheredLines())}`}</Text>}
         {hint !== null && <Text color={COLORS.muted}>{` · ${hint}`}</Text>}
       </Text>
@@ -5476,6 +5481,21 @@ export function spinnerWord(mode: keyof typeof SPINNER_WORDS, message: string | 
 export function spinnerDots(now: number): string {
   const frame = Math.floor(now / SPINNER_TICK) % 3
   return ['●', '·', '·'].map((_, index) => (index === frame ? '●' : '·')).join('')
+}
+
+// 지금 서 있는 effort(turn.step 의 effort, 2.1.312 주석): 메시지마다 effort 를 받는 모델에서는 입력이 든 단계(턴의 첫 단계)에서
+// 정한 수준이 그 뒤 도구 단계 내내 서고, 턴 중에 바꾼 수준은 다음 메시지까지 기다린다. 숫자는 바로 나간다.
+// 모델이 메시지마다 받는지는 mod API 에 없어 늘 이 규칙을 따른다(아니면 바뀐 수준이 다음 메시지부터 보일 뿐이다).
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number
+
+export function effortInForce(held: Effort | null, index: number, effort: Effort | undefined): Effort | null {
+  if (effort === undefined) return null
+  if (index === 0 || held === null || typeof effort === 'number') return effort
+  return held
+}
+
+export function effortLabel(effort: Effort): string {
+  return typeof effort === 'number' ? `effort ${effort}` : effort
 }
 
 export function formatElapsed(ms: number): string {

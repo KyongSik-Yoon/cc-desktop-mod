@@ -4798,6 +4798,55 @@ describe('답 글 블록째 보여주기(replyInBlocks)', () => {
   })
 })
 
+import { effortInForce } from '../hooks/register'
+
+// 2.1.312 turn.step 의 effort: 메시지마다 effort 를 받는 모델에서는 입력이 든 단계에서 정한 수준이 도구 단계 내내 선다.
+// 숫자는 바로 나간다. effort 가 없는 모델이면 아무것도 붙이지 않는다.
+describe('스피너의 effort', () => {
+  test('입력이 든 단계(턴의 첫 단계)에서 정하고, 도구 단계의 바뀐 수준은 다음 메시지까지 기다린다', () => {
+    expect(effortInForce(null, 0, 'high')).toBe('high')
+    expect(effortInForce('high', 1, 'low')).toBe('high')
+    expect(effortInForce('high', 0, 'low')).toBe('low')
+    expect(effortInForce('high', 2, 2048)).toBe(2048)
+    expect(effortInForce('high', 1, undefined)).toBe(null)
+    expect(effortInForce(null, 3, 'medium')).toBe('medium')
+  })
+
+  test('메인 단계의 effort 를 스피너 줄 경과 시간 뒤에 붙이고, 서브에이전트 단계는 보지 않는다', KO, async ($, on) => {
+    on('clock.now', () => ({ value: 1_000_000 }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('turn.step', async function* ($, e) {
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+    })
+    const step = async (index: number, effort?: string | number, agentId?: string) => {
+      const stream = $.turn.step({ turnId: 't', index, model: 'claude-sonnet-5-5', messageCount: 1, ...(effort === undefined ? {} : { effort }), ...(agentId ? { agentId } : {}) } as never)
+      while ((await stream.next()).done !== true);
+    }
+    const spinner = async () => {
+      const mounted = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never })
+      const text = JSON.stringify(await mounted.drawn())
+      await mounted.unmount()
+      return text
+    }
+    await step(0, 'high')
+    expect(await spinner()).toContain(' · high')
+    // 턴 중에 /effort low: 도구 단계에서는 아직 high 가 선다
+    await step(1, 'low')
+    await step(1, 'max', 'a1')
+    const held = await spinner()
+    expect(held).toContain(' · high')
+    expect(held).not.toContain('low')
+    expect(held).not.toContain('max')
+    await step(0, 'low')
+    expect(await spinner()).toContain(' · low')
+    await step(1, 2048)
+    expect(await spinner()).toContain(' · effort 2048')
+    // effort 를 받지 않는 모델
+    await step(0)
+    expect(await spinner()).not.toContain('effort')
+  })
+})
+
 test('256색 패널 바탕: 섞은 색을 밝기가 가장 가까운 팔레트 회색으로(어두운 회색이 #5f5f5f 로 밝아지지 않게)', () => {
   expect(gray256('#2c2d37')).toBe('#303030')
   expect(gray256('#ececec')).toBe('#eeeeee')
