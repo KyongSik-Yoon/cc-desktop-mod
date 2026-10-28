@@ -10,7 +10,7 @@ import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rang
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withPredicted } from './runs'
 import type { PredictedCall, RunCursor } from './runs'
-import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
+import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
@@ -2120,7 +2120,25 @@ async function refreshAgents($: EngineInterface) {
   const [list, now] = await Promise.all([$.agent.list(), $.clock.now()])
   const records = await read($, agents)
   if (!sameJson(mergeAgents(records, list, now), records)) await update($, agents, records => mergeAgents(records, list, now))
+  await settleShells($, now)
   if (Object.values(await read($, agents)).some(agent => isLive(agent.status))) startAgentClock($)
+}
+
+// 서브에이전트가 띄운 셸의 끝남 알림은 그 서브에이전트의 턴 안으로 배달돼 메인의 prompt.submit 에 오지 않는다.
+// 그래서 출력 파일 끝의 종료 줄로도 끝을 읽는다. 파일 크기가 바뀌었을 때만 다시 읽는다.
+const shellSizes = new Map<string, number>()
+
+async function settleShells($: EngineInterface, now: number) {
+  const live = Object.values(await read($, agents)).filter(task => task.kind === 'shell' && isLive(task.status) && task.outputFile)
+  for (const task of live) {
+    const file = task.outputFile ?? ''
+    const size = (await $.fs.stat(file).catch(() => null))?.size
+    if (size === undefined || shellSizes.get(task.id) === size) continue
+    shellSizes.set(task.id, size)
+    const raw = await $.fs.read(file).catch(() => null)
+    const status = typeof raw === 'string' ? exitStatusOf(raw) : undefined
+    if (status) await update($, agents, records => applyNotices(records, [{ id: task.id, status }], now))
+  }
 }
 
 // 도는 에이전트가 있는 동안 1초마다 경과 시간을 다시 그리고, 2초마다 엔진 목록으로 상태를 맞춘다.

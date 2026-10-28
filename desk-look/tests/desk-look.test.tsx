@@ -4,7 +4,7 @@ import { describe, expect, mock, test, type TestBody } from 'claude-code/testing
 import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
-import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
+import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
@@ -3888,6 +3888,9 @@ test('백그라운드 셸·모니터 순수 함수: 결과에서 작업, 알림 
   const orphans = parseNotices('<task-notification>\n<task-id>b8</task-id>\n<task-id>b9</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>2 background shell command tasks didn\'t finish</summary>\n</task-notification>')
   expect(orphans.map(notice => [notice.id, notice.status])).toEqual([['b8', 'stopped'], ['b9', 'stopped']])
   expect(tailOf('a\nb\nc\n', 2)).toBe('… 1줄 더\nb\nc')
+  expect(exitStatusOf('out\n\n[exited with code 0]\n')).toBe('completed')
+  expect(exitStatusOf('out\n[exited with code 144]')).toBe('failed')
+  expect(exitStatusOf('[exited with code 0]\nstill running\n')).toBeUndefined()
 })
 
 test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 알림 뒤 출력', KO, async ($, on) => {
@@ -3948,6 +3951,33 @@ test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 �
   expect(one).toContain('끝남 1')
   await pane.press({ key: 'tasks-clear-done' })
   expect(JSON.stringify(await pane.drawn())).toContain('끝난 작업을 목록에서 모두 지웠어요')
+  await pane.unmount()
+})
+
+test('끝남 알림을 못 받은 셸(서브에이전트가 띄운 것)은 출력 파일 끝의 종료 줄로 끝남이 된다', KO, async ($, on) => {
+  let output = 'line1\n'
+  let reads = 0
+  on('clock.now', () => ({ value: 1_000 }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: output.length, mtimeMs: 0, isLink: false } as never }))
+  on('fs.read', () => {
+    reads++
+    return { value: output as never }
+  })
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b5' }, text: 'Command running in background with ID: b5. Output is being written to: /tmp/t/b5.output. You will be notified' }) as never)
+  await $.tool.call({ tool: 'Bash', command: 'python3 v.py', description: '검증기 돌리기', run_in_background: true, agentId: 'a1' } as never)
+  await $.command.run({ command: 'desk-tasks', args: '1' } as never)
+  await $.command.run({ command: 'desk-tasks', args: '1' } as never)
+  // 크기가 그대로면 다시 읽지 않는다(상세 화면이 읽는 몫 하나씩 + 처음 한 번)
+  const before = reads
+  output += 'KeyError: x\n\n[exited with code 1]\n'
+  await $.command.run({ command: 'desk-tasks', args: '1' } as never)
+  expect(reads).toBe(before + 2)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 70 } as never })
+  const drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).toContain('실패')
+  expect(drawn).not.toContain('실행 중')
   await pane.unmount()
 })
 
