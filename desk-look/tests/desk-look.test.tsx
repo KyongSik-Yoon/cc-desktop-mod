@@ -3222,6 +3222,8 @@ test('diff 패널: 모두 접기·펴기 (z)', KO, async ($, on) => {
 })
 
 import { planOf } from '../hooks/runs'
+import { planInput, planTitle, reviseReason } from '../hooks/plan'
+import { planAskMode } from '../hooks/register'
 import { splitPlan } from '../hooks/register'
 
 const PLAN = ['# 빼기 추가', '', '- math.ts 에 subtract', '- 테스트 추가', '', '| 파일 | 변경 |', '|---|---|', '| math.ts | subtract |'].join('\n')
@@ -3296,6 +3298,104 @@ test('계획 카드: 상태와 마크다운 본문, 길면 Show all', KO, async 
   expect(shown).toContain('승인 대기')
   expect(shown).toContain('승인 창에서 계획을 보여 주고 있어요')
   await asking.unmount()
+})
+
+test('계획 카드: 계획 제목·입력 정리·고칠 점 사유', () => {
+  expect(planTitle(PLAN)).toBe('빼기 추가')
+  expect(planTitle('\n**바로** 시작\n- 단계')).toBe('바로 시작')
+  expect(planTitle('')).toBe('')
+  expect(planInput({ tool: 'ExitPlanMode', tool_use_id: 't1', plan: 'p', planFilePath: '/a.md' })).toEqual({ plan: 'p', planFilePath: '/a.md' })
+  expect(reviseReason('  2단계를 나눠 줘 ')).toContain('\n\n2단계를 나눠 줘\n\n')
+  expect(reviseReason('x')).toContain('call ExitPlanMode again')
+  expect(planAskMode(30, 2)).toEqual({ mode: 'full', rows: 10 })
+  expect(planAskMode(9, 2)).toEqual({ mode: 'compact', rows: 4 })
+  expect(planAskMode(3, 2)).toEqual({ mode: 'inline', rows: 2 })
+})
+
+// 카드 화면과 버튼은 실제 Claude 에서 본다: 하네스는 기다리는 훅이 쓴 상태를 훅이 끝나기 전에는 그리지 않는다(질문 카드도 같다).
+// 여기서는 카드 버튼이 파이프에 쓸 답을 cat 이 바로 돌려주게 해서 훅이 고르는 길을 본다.
+test('계획 카드 훅: 승인은 입력 그대로 allow, 고칠 점은 거절 사유, 기본 창은 엔진 흐름', KO, async ($, on) => {
+  const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  let reply = ''
+  const runs: string[] = []
+  const opened: string[] = []
+  const notified: string[] = []
+  const reached: Record<string, unknown>[] = []
+  on('clock.now', () => ({ value: 1_000 }))
+  on('env.get', () => ({ value: undefined as never }))
+  on('fs.list', () => {
+    throw new Error('ENOENT')
+  })
+  on('fs.read', () => ({ value: PLAN }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('session.surfaces', () => ({ value: ['terminal'] }) as never)
+  on('ui.notify', ($, e) => {
+    notified.push(JSON.stringify(e))
+    return { value: undefined } as never
+  })
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } } as never
+  })
+  on('process.run', ($, e) => {
+    runs.push(e.argv[0] ?? '')
+    if (e.argv[0] === 'mktemp') return ok('/tmp/plan-card\n')
+    if (e.argv[0] === 'cat') return ok(reply)
+    return ok()
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('tool.call', ($, e) => {
+    reached.push(e as never)
+    return { result: { plan: PLAN, isAgent: false } } as never
+  })
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const input = { plan: PLAN, planFilePath: '/h/.claude/plans/p.md' }
+
+  // 승인: 입력을 그대로 돌려줘 도구 본체가 돈다(엔진에서는 그게 모드를 계획 전으로 되돌린다)
+  reply = JSON.stringify({ kind: 'approve' })
+  const approved = await $.tool.call({ tool: 'ExitPlanMode', ...input } as never)
+  expect(approved.isError).toBeFalsy()
+  expect(reached).toHaveLength(1)
+  expect(reached[0]).toMatchObject(input)
+  expect(opened).toContain('desk-preview')
+  expect(notified.join()).toContain('빼기 추가')
+  expect(runs).toEqual(expect.arrayContaining(['mktemp', 'mkfifo', 'cat', 'rm']))
+
+  // 고칠 점: 도구는 돌지 않고, 모델은 고칠 점과 함께 다시 계획하라는 거절을 받는다
+  reply = JSON.stringify({ kind: 'revise', text: '테스트를 먼저 써 줘' })
+  const denied = await $.tool.call({ tool: 'ExitPlanMode', ...input } as never)
+  expect(denied.isError).toBe(true)
+  expect(denied.text).toContain('테스트를 먼저 써 줘')
+  expect(denied.text).toContain('call ExitPlanMode again')
+  expect(reached).toHaveLength(1)
+
+  // 기본 창: 훅이 비켜서 엔진 흐름(승인 창)으로
+  reply = JSON.stringify({ kind: 'engine' })
+  await $.tool.call({ tool: 'ExitPlanMode', ...input } as never)
+  expect(reached).toHaveLength(2)
+
+  // 계획 파일이 없으면(계획을 인자로만 받는 세션) 카드 없이 엔진 흐름
+  const before = runs.length
+  await $.tool.call({ tool: 'ExitPlanMode', plan: PLAN } as never)
+  expect(reached).toHaveLength(3)
+  expect(runs.slice(before)).not.toContain('mktemp')
+})
+
+test('계획 카드(기록): 거절된 호출은 입력의 계획을 그린다', KO, async $ => {
+  const row = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'ToolUse',
+    viewport: VIEWPORT,
+    props: { tool_use_id: 'p4', tool: 'ExitPlanMode', input: { plan: PLAN }, isRunning: false, isErrored: true, isInterrupted: false, output: 'The user reviewed the plan and wants changes' } as never,
+  })
+  const drawn = JSON.stringify(await row.drawn())
+  expect(drawn).toContain('거절됨')
+  expect(drawn).toContain('빼기 추가')
+  expect(drawn).not.toContain('기록에 계획 내용이 없어요')
+  await row.unmount()
 })
 
 test('계획 카드: 승인 직후 props 가 아직 실행 중이어도 저장한 결과로 승인됨', KO, async ($, on) => {

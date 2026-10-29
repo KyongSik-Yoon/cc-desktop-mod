@@ -292,6 +292,15 @@ const ko = {
   atMost: (max: number) => `${max} 이하여야 해요`,
   moreQuestions: (first: string, more: number) => `${first} (외 ${more}개)`,
   askTitle: 'Claude 질문',
+  // 계획 카드(엔진 승인 창 대신)
+  planAskTitle: 'Claude 계획',
+  planAskQuestion: '계획이 준비됐어요. 이대로 진행할까요?',
+  planApprove: '승인하고 시작',
+  planView: '◫ 계획 보기',
+  planReviseLabel: '고칠 점',
+  planRevise: '고쳐 달라고 하기',
+  planReviseEmpty: '고칠 점을 적어 주세요',
+  planHint: '1 승인 · 2 계획 보기 · 9 기본 창 · Esc 취소',
   // 답 글 블록째 보여주기: 붙잡고 있는 글
   gathered: (lines: number) => `${lines}줄 모으는 중`,
   // 입력창 위 진행 띠와 턴 끝 줄의 요약
@@ -603,6 +612,15 @@ const en: Strings = {
   atMost: max => `Must be at most ${max}`,
   moreQuestions: (first, more) => `${first} (+${more} more)`,
   askTitle: 'Claude question',
+  // Plan card (in place of the engine's approval dialog)
+  planAskTitle: 'Claude plan',
+  planAskQuestion: 'The plan is ready. Proceed with it?',
+  planApprove: 'Approve and start',
+  planView: '◫ View plan',
+  planReviseLabel: 'Changes',
+  planRevise: 'Ask for changes',
+  planReviseEmpty: 'Write what to change first',
+  planHint: '1 approve · 2 view plan · 9 default dialog · Esc cancel',
   gathered: lines => `${lines} line${lines === 1 ? '' : 's'} gathered`,
   bandResponding: 'Responding',
   bandThinking: 'thinking',
