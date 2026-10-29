@@ -4373,16 +4373,18 @@ export const register: Register = (on, options) => {
           : T.changesTitle
 
     // 커밋별 탭의 커밋 한 줄: 누르면 그 커밋의 파일을 펼친다.
-    const commitRow = (commit: CommitInfo) =>
-      rowButton(
+    const commitRow = (commit: CommitInfo) => {
+      const when = commit.authored ? `${commit.ago} (${T.commitAuthored(commit.authored)})` : commit.ago
+      return rowButton(
         els,
         { key: `commit-${commit.sha}`, onPress: () => void pickCommit($, commit.sha) },
         commit.short,
         ' ',
-        <Text color={COLORS.text}>{clip(commit.subject, Math.max(10, columns - cellWidth(commit.ago) - 16))}</Text>,
-        <Text color={COLORS.muted}>{` · ${commit.ago}`}</Text>,
+        <Text color={COLORS.text}>{clip(commit.subject, Math.max(10, columns - cellWidth(when) - 16))}</Text>,
+        <Text color={COLORS.muted}>{` · ${when}`}</Text>,
         <Text color={COLORS.muted}>{view.commitFiles[commit.sha] ? ' ⌄' : ' ›'}</Text>,
       )
+    }
 
     // 데스크톱 diff 패널의 파일 머리 띠: 바탕색 한 줄에 ⌄ 이름(굵게) 흐린 폴더 +N −M, 되돌리기.
     // 띠 Box 의 key(file-…)는 openDiffAt 이 스크롤해 갈 곳이라 패널이 보이는 곳만 그려도 늘 그린다.
