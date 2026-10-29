@@ -1033,7 +1033,7 @@ test('진행 표시 글자', KO, () => {
 })
 
 import { computeTasks } from '../hooks/tasks'
-import { callProcesses, childPids, clockOf, etimesOf, firstSentence, flowRows, ioBytes, isCallRoot, kindOf, laneSegments, procView, sayStrip, statPid, statRow, statTicks, stepStrip, turnNarration, uptimeTicks } from '../hooks/activity'
+import { callProcesses, childPids, clockOf, etimesOf, firstSentence, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, statTicks, stepStrip, turnNarration, uptimeTicks } from '../hooks/activity'
 
 test('할 일 목록 다시 세우기와 보일 줄', KO, () => {
   const ok = (id: string, result: unknown) => ({ tool_use_id: id, text: 'ok', isError: false, result })
@@ -1304,6 +1304,21 @@ describe('진행 띠', () => {
       ['idle', '─'],
       ['command', '━━━━'],
     ])
+    // 아무 줄도 살아 있지 않던 긴 시간은 한 칸으로 접고, 남은 칸을 일한 시간에 비례해 나눈다
+    const cells = laneCells([{ start: 0, end: 10_000 }, { start: 250_000, end: 260_000 }], 0, 260_000, 21)
+    expect(cells).toHaveLength(21)
+    expect(cells.filter(cell => cell.gap !== undefined)).toEqual([{ from: 10_000, to: 250_000, gap: 240_000 }])
+    expect(cells.findIndex(cell => cell.gap !== undefined)).toBe(10)
+    expect(
+      laneSegments([{ kind: 'explore', start: 0, end: 10_000 }], { start: 0, end: 10_000 }, 0, 260_000, 21, cells).map(segment => [segment.kind, segment.text]),
+    ).toEqual([
+      ['explore', '░'.repeat(10)],
+      ['gap', '┆'],
+      ['none', ' '.repeat(10)],
+    ])
+    // 짧은 쉼(1분 미만)이나 줄끼리 겹친 시간은 접지 않는다
+    expect(laneCells([{ start: 0, end: 10_000 }, { start: 40_000, end: 50_000 }], 0, 50_000, 10).some(cell => cell.gap !== undefined)).toBe(false)
+    expect(laneCells([{ start: 0, end: 10_000 }, { start: 5000, end: 600_000 }], 0, 600_000, 10).some(cell => cell.gap !== undefined)).toBe(false)
     // 살아 있던 구간 밖은 빈칸
     expect(laneSegments([], { start: 5000, end: 6000 }, 0, 10_000, 10).map(segment => [segment.kind, segment.text])).toEqual([
       ['none', '     '],
@@ -1494,6 +1509,48 @@ describe('진행 띠', () => {
     expect(drawn).toContain('지난 턴 · 7s')
     expect(drawn).toContain(' · 12분 전')
     expect(drawn).toContain('route-agent')
+    await pane.unmount()
+  })
+
+  test('/desk-activity 패널: 턴이 끝난 뒤 사람이 띄운 백그라운드 에이전트(/code-review)도 지난 턴 기록에 그린다', KO, async ($, on) => {
+    let now = 1_000_000
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    let list: unknown[] = [{ id: 'old', description: '앞 턴 일', type: 'general-purpose', status: 'completed' }]
+    on('agent.list', () => ({ value: list as never }))
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('turn.complete', () => ({ text: '끝' }) as never)
+    on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+    // 앞 턴 전에 끝난 에이전트는 이 기록에 붙지 않는다
+    await $.command.run({ command: 'desk-tasks', args: '' } as never)
+    now += 60_000
+    await $.turn.start({ text: '고쳐줘', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    now += 7000
+    await $.turn.complete({ durationMs: 7000, reason: 'answer', answer: '고쳤어요', turnId: 't1' } as never)
+    // 몇 분 뒤 사람이 /code-review 를 띄운다: 턴은 열리지 않고 에이전트만 돈다
+    now += 4 * 60_000
+    list = [...list, { id: 'cr', description: '/code-review medium', type: 'code-review', name: 'code-review', status: 'running' }]
+    await $.tool.call({ tool: 'Read', file_path: '/r/b.ts', agentId: 'cr' } as never)
+    // 모르는 에이전트의 첫 호출은 엔진 목록을 다시 읽어 기록에 넣는다(기다리지 않는 읽기)
+    await wait(20)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-activity', viewport: VIEWPORT, props: { title: '활동', isFocused: true, bodyColumns: 70 } as never })
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('code-review')
+    expect(drawn).not.toContain('앞 턴 일')
+    // 턴과 에이전트 사이 4분은 한 칸으로 접혀 메인 막대가 눌리지 않는다
+    expect(drawn).toContain('┆')
+    expect(drawn).toContain('빈 시간 4m 0s')
+    expect(drawn).toMatch(/─{20,}/)
+    // 펼치면 그 호출이 턴 시작에서 잰 시각에 붙는다
+    expect(drawn).not.toContain('04:07')
+    await pane.press({ key: 'activity-agent-cr' })
+    expect(JSON.stringify(await pane.drawn())).toContain('04:07')
     await pane.unmount()
   })
 

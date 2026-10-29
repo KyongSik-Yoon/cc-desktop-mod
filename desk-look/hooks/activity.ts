@@ -219,23 +219,73 @@ const PRIORITY: ActivityKind[] = ['edit', 'test', 'explore', 'agent', 'command',
 // 위임은 겹선: 사용자 테마가 두 색(claude·planMode)을 같게 잡아도 명령과 갈리게.
 export const KIND_GLYPH: Record<ActivityKind, string> = { explore: '░', edit: '▓', test: '▒', command: '━', agent: '═', other: '▪' }
 
-export type LaneSegment = { kind: ActivityKind | 'idle' | 'none'; text: string }
+export type LaneSegment = { kind: ActivityKind | 'idle' | 'none' | 'gap'; text: string }
 
-// 한 줄 시간 막대: from~to 를 width 칸으로 나눠 칸마다 겹친 호출의 종류(없고 살아 있으면 idle, 아니면 none).
-// alive 는 그 줄의 주인이 살아 있던 구간(메인은 턴 전체, 에이전트는 시작~끝).
-export function laneSegments(events: ReadonlyArray<Pick<ActivityEvent, 'kind' | 'start' | 'end'>>, alive: { start: number; end: number }, from: number, to: number, width: number): LaneSegment[] {
+// 막대의 한 칸이 맡는 시간. gap 은 아무 줄도 살아 있지 않아 한 칸으로 접은 시간(ms).
+export type LaneCell = { from: number; to: number; gap?: number }
+
+// 이보다 짧은 빈 시간은 접지 않는다(칸 몇 개짜리 쉼은 그대로 보여도 막대를 누르지 않는다).
+export const GAP_MIN_MS = 60_000
+export const GAP_GLYPH = '┆'
+
+const evenCells = (from: number, to: number, width: number): LaneCell[] =>
+  Array.from({ length: width }, (_, cell) => ({ from: from + ((to - from) * cell) / width, to: from + ((to - from) * (cell + 1)) / width }))
+
+// 막대들이 함께 쓰는 시간 축: from~to 를 width 칸으로. 어느 줄도 살아 있지 않은 긴 시간(턴이 끝난 뒤 사람이
+// 에이전트를 띄우기까지 등)은 한 칸으로 접고, 남은 칸을 일한 시간에 비례해 나눈다.
+export function laneCells(alive: ReadonlyArray<{ start: number; end: number }>, from: number, to: number, width: number): LaneCell[] {
   const span = Math.max(1, to - from)
-  const cells: LaneSegment['kind'][] = []
-  for (let cell = 0; cell < width; cell++) {
-    const a = from + (span * cell) / width
-    const b = from + (span * (cell + 1)) / width
-    const hits = events.filter(event => event.start < b && (event.end ?? to) >= a).map(event => event.kind)
-    const best = PRIORITY.find(kind => hits.includes(kind))
-    cells.push(best ?? (alive.start < b && alive.end >= a ? 'idle' : 'none'))
+  const spans = alive
+    .map(range => ({ start: Math.max(from, range.start), end: Math.min(to, range.end) }))
+    .filter(range => range.end >= range.start)
+    .sort((a, b) => a.start - b.start)
+  const gaps: { start: number; end: number }[] = []
+  let reach = from
+  for (const range of spans) {
+    if (range.start - reach >= Math.max(GAP_MIN_MS, (span / width) * 3)) gaps.push({ start: reach, end: range.start })
+    reach = Math.max(reach, range.end)
   }
+  if (gaps.length === 0 || width < gaps.length * 4) return evenCells(from, to, width)
+  const busy = span - gaps.reduce((sum, gap) => sum + gap.end - gap.start, 0)
+  const room = width - gaps.length
+  const cells: LaneCell[] = []
+  let at = from
+  let done = 0
+  let used = 0
+  const take = (end: number) => {
+    done += end - at
+    const count = Math.max(1, Math.round((done / busy) * room) - used)
+    used += count
+    cells.push(...evenCells(at, end, count))
+  }
+  for (const gap of gaps) {
+    take(gap.start)
+    cells.push({ from: gap.start, to: gap.end, gap: gap.end - gap.start })
+    at = gap.end
+  }
+  take(to)
+  return cells.slice(0, width)
+}
+
+// 한 줄 시간 막대: 칸마다 겹친 호출의 종류(없고 살아 있으면 idle, 아니면 none, 접은 시간이면 gap).
+// alive 는 그 줄의 주인이 살아 있던 구간(메인은 턴 전체, 에이전트는 시작~끝). cells 를 안 주면 from~to 를 고르게 나눈다.
+export function laneSegments(
+  events: ReadonlyArray<Pick<ActivityEvent, 'kind' | 'start' | 'end'>>,
+  alive: { start: number; end: number },
+  from: number,
+  to: number,
+  width: number,
+  cells: ReadonlyArray<LaneCell> = evenCells(from, to, Math.max(1, width)),
+): LaneSegment[] {
+  const kinds = cells.map((cell): LaneSegment['kind'] => {
+    if (cell.gap !== undefined) return 'gap'
+    const hits = events.filter(event => event.start < cell.to && (event.end ?? to) >= cell.from).map(event => event.kind)
+    const best = PRIORITY.find(kind => hits.includes(kind))
+    return best ?? (alive.start < cell.to && alive.end >= cell.from ? 'idle' : 'none')
+  })
   const segments: LaneSegment[] = []
-  for (const kind of cells) {
-    const glyph = kind === 'idle' ? '─' : kind === 'none' ? ' ' : KIND_GLYPH[kind]
+  for (const kind of kinds) {
+    const glyph = kind === 'idle' ? '─' : kind === 'none' ? ' ' : kind === 'gap' ? GAP_GLYPH : KIND_GLYPH[kind]
     const last = segments[segments.length - 1]
     if (last && last.kind === kind) last.text += glyph
     else segments.push({ kind, text: glyph })

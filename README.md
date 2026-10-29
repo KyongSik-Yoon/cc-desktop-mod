@@ -95,7 +95,7 @@ Per-file diffs in three scopes, like the desktop diff panel:
 
 Opened with `/desk-activity` or by clicking the lower line of the progress band. It shows the current turn, or the last one once it ends (a turn that only answers a background-task notice keeps the one before):
 
-- **Time bars**: one for the main conversation, one per agent the turn started and one for its background shells, across the turn (and on until what the turn started has finished): `░` explore, `▓` edit, `▒` test (short events, drawn over a long command), `━` command or agent (colored apart), `─` Claude responding
+- **Time bars**: one for the main conversation, one per agent that ran during or after the turn (including one you start yourself after it, like `/code-review`) and one for its background shells, across the turn (and on until those have finished): `░` explore, `▓` edit, `▒` test (short events, drawn over a long command), `━` command or agent (colored apart), `─` Claude responding. A minute or more when nothing ran folds into one `┆` column, with the folded time at the end of the legend
 - **Flow**: Claude's notes (`◉`, the first sentence before its calls) and its calls in order, with the time since the turn began: reads and searches folded into one line (`Read 6 · Grep 3`), edits per file with `+N −M`, commands and tests with `✓`, `✗` or `▶` (running) and their time
 - **Agents** and **Background**: what the turn started, with status, tool uses and time; a running background shell shows the last line of its output. Click an agent to unfold its own calls below it (`▸`/`▾`), in the same form as the flow; `View transcript` at the end of the row, or a click on a shell, opens it in `/desk-tasks`
 
