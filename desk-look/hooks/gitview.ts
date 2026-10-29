@@ -16,7 +16,9 @@ export function scopeOf(word: string): DiffScope | null {
   return (found?.[1] as DiffScope | undefined) ?? null
 }
 
-export const LOG_FORMAT = '--format=%H%x1f%h%x1f%s%x1f%an%x1f%ar'
+// 시간은 목록 순서와 같은 커밋 시각(%cr). rebase·cherry-pick 으로 작성 시각(%ar)과 벌어지면 그것도 보인다.
+export const LOG_FORMAT = '--format=%H%x1f%h%x1f%s%x1f%an%x1f%cr%x1f%ar%x1f%ct%x1f%at'
+const AUTHORED_GAP_SECONDS = 600
 export const MAX_COMMITS = 50
 
 export function parseCommits(text: string): CommitInfo[] {
@@ -24,8 +26,9 @@ export function parseCommits(text: string): CommitInfo[] {
     .split('\n')
     .filter(line => line.includes('\x1f'))
     .map(line => {
-      const [sha = '', short = '', subject = '', author = '', ago = ''] = line.split('\x1f')
-      return { sha, short, subject, author, ago }
+      const [sha = '', short = '', subject = '', author = '', ago = '', authoredAgo = '', committedAt = '0', authoredAt = '0'] = line.split('\x1f')
+      const authored = Math.abs(Number(committedAt) - Number(authoredAt)) >= AUTHORED_GAP_SECONDS ? authoredAgo : ''
+      return { sha, short, subject, author, ago, authored }
     })
 }
 

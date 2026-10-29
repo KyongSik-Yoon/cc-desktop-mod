@@ -3824,7 +3824,9 @@ test('/desk-pr 패널의 머지: 두 번 눌러야 하고, 머지한 뒤 다시 
 test('diff 범위: 기준 브랜치 후보, 커밋 목록, 범위 이름', KO, () => {
   expect(baseCandidates('develop', 'origin/main').slice(0, 3)).toEqual(['origin/develop', 'develop', 'origin/main'])
   expect(baseCandidates(null, null)[0]).toBe('origin/main')
-  expect(parseCommits('abc123\x1fabc\x1fAdd done\x1falice\x1f2 hours ago\n')).toEqual([{ sha: 'abc123', short: 'abc', subject: 'Add done', author: 'alice', ago: '2 hours ago' }])
+  expect(parseCommits('abc123\x1fabc\x1fAdd done\x1falice\x1f2 hours ago\x1f2 hours ago\x1f1000\x1f1000\n')).toEqual([{ sha: 'abc123', short: 'abc', subject: 'Add done', author: 'alice', ago: '2 hours ago', authored: '' }])
+  // rebase·cherry-pick 으로 작성 시각과 커밋 시각이 10분 넘게 벌어지면 작성 시각도 남긴다.
+  expect(parseCommits('abc123\x1fabc\x1fFix\x1falice\x1f1 minute ago\x1f85 minutes ago\x1f6000\x1f900\n')[0]?.authored).toBe('85 minutes ago')
   expect(scopeOf('branch')).toBe('branch')
   expect(scopeOf('커밋별')).toBe('commits')
   expect(scopeOf('a.txt')).toBe(null)

@@ -178,7 +178,7 @@ export type PrState = { status: 'loading' | 'ok' | 'none' | 'off'; branch: strin
 
 // diff 패널의 범위: 커밋 안 한 변경, 기본 브랜치에서 갈라진 뒤 전부, 커밋 하나씩.
 export type DiffScope = 'uncommitted' | 'branch' | 'commits'
-export type CommitInfo = { sha: string; short: string; subject: string; author: string; ago: string }
+export type CommitInfo = { sha: string; short: string; subject: string; author: string; ago: string; authored?: string }
 // base: 비교 기준(브랜치 이름과 merge-base), 못 찾으면 null. commit: 커밋별에서 펼친 커밋.
 // baseRef: 사람이 고른 기준 브랜치(null 이면 자동). bases: 기준 고르기 목록이 열려 있으면 그 후보, 닫혀 있으면 null.
 export type DiffView = {
