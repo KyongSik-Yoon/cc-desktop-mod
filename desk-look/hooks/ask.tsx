@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AskQuestion, AskState } from '../types'
+import type { AskQuestion, AskState, PlanAskState } from '../types'
 import { T } from './i18n'
 
 // 질문 카드: AskUserQuestion 을 엔진 창 대신 입력창 위 띠의 카드로 묻는다(데스크톱과 같은 자리).
@@ -13,6 +13,7 @@ import { T } from './i18n'
 type On = Parameters<Register>[0]
 
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
+const planAsking = atom({ plugin: 'desk-look', key: 'planAsk' } as const, null as PlanAskState | null)
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
 
 // 훅은 자기 코드 시간 10초 안에 끝나야 하지만, 엔진 호출($)을 기다리는 동안은 시계가 멈춘다($.clock.sleep 은 예외라 못 쓴다).
@@ -92,7 +93,7 @@ export function numberProblem(question: AskQuestion, text: string): string | nul
 }
 
 // 기다리는 cat 에 답을 넘긴다(register.tsx 의 replyAsk 와 같다: $ 는 파일을 넘지 못한다).
-async function reply($: EngineInterface, dir: string, payload: AskReply) {
+async function reply($: EngineInterface, dir: string, payload: AskReply | { kind: 'cancel' }) {
   await $.process.run(['tee', `${dir}/answer`], { stdin: JSON.stringify(payload), timeoutMs: 3000 })
 }
 
@@ -113,72 +114,88 @@ export function askNotice(questions: readonly AskQuestion[]): string {
   return questions.length > 1 ? T.moreQuestions(first, questions.length - 1) : first
 }
 
+// 카드로 물어도 되는 세션인지: 터미널 하나만 붙어 있고, 다른 카드(질문·계획)가 떠 있지 않고, 마지막 사람 입력이 앱에서 오지 않았어야 한다.
+// 되면 Remote Control 이 붙어 있는지(무반응이면 엔진 창으로 넘긴다)를, 안 되면 null(엔진 창).
+export async function cardSession($: EngineInterface): Promise<{ isRemote: boolean } | null> {
+  const surfaces = await $.session.surfaces()
+  if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return null
+  if ((await read($, asking)) !== null || (await read($, planAsking)) !== null) return null
+  // 앱(bridge)에서 온 입력이면 세션 상태 파일 없이도 Remote Control 이다. 파일은 엔진이 지우기도 한다.
+  const origin = await read($, promptOrigin)
+  if (origin === 'bridge') return null
+  const sessionId = await $.session.id().catch(() => '')
+  const isRemote = await isBridged($, sessionId).catch(() => false)
+  if (isRemote && origin !== 'composer') return null
+  return { isRemote }
+}
+
+// 답을 받을 임시 폴더와 그 안의 이름 있는 파이프(answer). 못 만들면 ''.
+export async function openReplyPipe($: EngineInterface): Promise<string> {
+  const made = await $.process.run(['mktemp', '-d'], { timeoutMs: 3000 }).catch(() => null)
+  const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
+  if (dir === '') return ''
+  const piped = await $.process.run(['mkfifo', `${dir}/answer`], { timeoutMs: 3000 }).catch(() => null)
+  if (piped?.exitCode === 0) return dir
+  await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
+  return ''
+}
+
+// 카드 버튼이 파이프에 쓴 답(JSON 글)을 기다린다. 엔진 창으로 넘겨야 하면 null. 끝나면 폴더를 지운다.
+// 턴을 중단하면(Esc) {"kind":"cancel"} 을 써서 기다리던 cat 을 끝낸다.
+export async function awaitReply($: EngineInterface, signal: AbortSignal, dir: string, isRemote: boolean, shownAt: number): Promise<string | null> {
+  const onAbort = () => void reply($, dir, { kind: 'cancel' }).catch(() => undefined)
+  signal.addEventListener('abort', onAbort)
+  const roundS = isRemote ? HANDOVER_ROUND_S : WAIT_ROUND_S
+  const rounds = Math.ceil((WAIT_ROUNDS * WAIT_ROUND_S) / roundS)
+  let touchedAt = shownAt
+  let touch = ''
+  let answered: string | null = JSON.stringify({ kind: 'cancel' })
+  for (let round = 0; round < rounds && !signal.aborted; round++) {
+    const startedAt = await $.clock.now()
+    // 시간이 다 되면 cat 이 죽고 호출은 거절된다(null): 한 바퀴가 끝난 것
+    const ran = await $.process.run(['cat', `${dir}/answer`], { timeoutMs: roundS * 1000 }).catch(() => null)
+    if (ran !== null && ran.exitCode === 0 && ran.stdout.trim() !== '') {
+      answered = ran.stdout
+      break
+    }
+    const now = await $.clock.now()
+    // 기다리지 못하고 곧바로 끝났으면(파이프가 사라졌다) 헛돌지 않고 엔진 창에 넘긴다
+    if (now - startedAt < 1000) {
+      answered = null
+      break
+    }
+    if (!isRemote) continue
+    const touched = await $.fs.read(`${dir}/touched`).catch(() => '')
+    if (touched !== touch) {
+      touch = touched
+      touchedAt = now
+    } else if (now - touchedAt >= HANDOVER_MS) {
+      answered = null
+      break
+    }
+  }
+  signal.removeEventListener('abort', onAbort)
+  await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
+  return answered
+}
+
 export function registerAsk(on: On, notify: boolean) {
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const questions = parseQuestions(e.questions)
     if (questions === null) return next(e)
-    const surfaces = await $.session.surfaces()
-    if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return next(e)
-    if ((await read($, asking)) !== null) return next(e)
-    // 앱(bridge)에서 온 입력이면 세션 상태 파일 없이도 Remote Control 이다. 파일은 엔진이 지우기도 한다.
-    const origin = await read($, promptOrigin)
-    if (origin === 'bridge') return next(e)
-    const sessionId = await $.session.id().catch(() => '')
-    const isRemote = await isBridged($, sessionId).catch(() => false)
-    if (isRemote && origin !== 'composer') return next(e)
-
-    const made = await $.process.run(['mktemp', '-d'], { timeoutMs: 3000 }).catch(() => null)
-    const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
+    const session = await cardSession($)
+    if (session === null) return next(e)
+    const dir = await openReplyPipe($)
     if (dir === '') return next(e)
-    const piped = await $.process.run(['mkfifo', `${dir}/answer`], { timeoutMs: 3000 }).catch(() => null)
-    if (piped?.exitCode !== 0) {
-      await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
-      return next(e)
-    }
     const id = e.tool_use_id ?? dir
     const shownAt = await $.clock.now()
     await update($, asking, () => ({ id, dir, questions, step: 0, picks: questions.map(() => []), texts: questions.map(() => ''), shownAt }))
     if (notify) {
       void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
     }
-
-    // 턴을 중단하면(Esc) 기다리던 cat 을 끝낸다.
-    const onAbort = () => void reply($, dir, { kind: 'cancel' }).catch(() => undefined)
-    next.signal.addEventListener('abort', onAbort)
-    const roundS = isRemote ? HANDOVER_ROUND_S : WAIT_ROUND_S
-    const rounds = Math.ceil((WAIT_ROUNDS * WAIT_ROUND_S) / roundS)
-    let touchedAt = shownAt
-    let touch = ''
-    let isHandedOver = false
-    let answered = ''
-    for (let round = 0; round < rounds && !next.signal.aborted; round++) {
-      const startedAt = await $.clock.now()
-      // 시간이 다 되면 cat 이 죽고 호출은 거절된다(null): 한 바퀴가 끝난 것
-      const ran = await $.process.run(['cat', `${dir}/answer`], { timeoutMs: roundS * 1000 }).catch(() => null)
-      if (ran !== null && ran.exitCode === 0 && ran.stdout.trim() !== '') {
-        answered = ran.stdout
-        break
-      }
-      const now = await $.clock.now()
-      // 기다리지 못하고 곧바로 끝났으면(파이프가 사라졌다) 헛돌지 않고 엔진 창에 넘긴다
-      if (now - startedAt < 1000) {
-        isHandedOver = true
-        break
-      }
-      if (!isRemote) continue
-      const touched = await $.fs.read(`${dir}/touched`).catch(() => '')
-      if (touched !== touch) {
-        touch = touched
-        touchedAt = now
-      } else if (now - touchedAt >= HANDOVER_MS) {
-        isHandedOver = true
-        break
-      }
-    }
-    next.signal.removeEventListener('abort', onAbort)
+    const answered = await awaitReply($, next.signal, dir, session.isRemote, shownAt)
     await update($, asking, () => null)
-    await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
-    if (isHandedOver) return next(e)
+    if (answered === null) return next(e)
 
     let answer: AskReply = { kind: 'cancel' }
     try {
@@ -198,4 +215,3 @@ export function registerAsk(on: On, notify: boolean) {
     }
   })
 }
-
