@@ -16,7 +16,7 @@ import { answerOf, numberProblem, registerAsk } from './ask'
 import type { AskReply } from './ask'
 import { gather, gatheredLines } from './gather'
 import { computeTasks } from './tasks'
-import { KIND_GLYPH, LOG_EVENTS, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
+import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
 import type { FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, gray256, parseSurface } from './theme'
@@ -3838,8 +3838,9 @@ export const register: Register = (on, options) => {
     const turnEnd = log.endedAt ?? now
     const inTurn = (agent: AgentRecord) => (agent.startedAt ?? 0) >= log.startedAt - 1000 && (agent.startedAt ?? 0) <= turnEnd
     // 에이전트는 앞 턴에 띄웠어도 이 턴 동안(또는 지금) 돌았으면 함께 그린다: 그 호출도 이 기록에 쌓인다.
+    // 턴이 끝난 뒤 사람이 띄운 에이전트(/code-review 같은 빌트인 백그라운드)도: 턴을 열지 않아 이 기록이 마지막 턴이다.
     // 셸은 띄운 턴에만: 개발 서버처럼 계속 떠 있는 셸이 턴마다 붙지 않게.
-    const overlaps = (agent: AgentRecord) => (agent.startedAt ?? 0) <= turnEnd && (isLive(agent.status) || (agent.endedAt ?? 0) >= log.startedAt)
+    const overlaps = (agent: AgentRecord) => isLive(agent.status) || (agent.endedAt ?? 0) >= log.startedAt
     const all = [...orderAgents(records).live, ...orderAgents(records).done].reverse()
     const turnAgents = all.filter(agent => (agent.kind ?? 'agent') === 'agent' && (inTurn(agent) || overlaps(agent)))
     const shells = all.filter(agent => (agent.kind === 'shell' || agent.kind === 'monitor') && inTurn(agent))
@@ -5252,6 +5253,7 @@ const KIND_COLOR: Record<LaneSegment['kind'], string> = {
   other: COLORS.muted,
   idle: COLORS.muted,
   none: COLORS.muted,
+  gap: COLORS.muted,
 }
 
 // 도는 백그라운드 셸의 출력 끝 줄: 다시 그릴 때마다 읽지 않게 3초에 한 번만 출력 파일을 읽는다.
@@ -5301,17 +5303,28 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
       </Text>
     </Box>
   )
+  const shownAgents = input.turnAgents.slice(-LANE_AGENTS)
+  const aliveOf = (agent: AgentRecord) => ({ start: agent.startedAt ?? log.startedAt, end: agent.endedAt ?? end })
+  // 모든 줄이 한 축을 쓴다. 아무 줄도 살아 있지 않던 긴 시간은 한 칸(┆)으로 접는다.
+  const cells = laneCells(
+    [{ start: log.startedAt, end: turnEnd }, ...shownAgents.map(aliveOf), ...input.shells.map(shell => ({ start: shell.startedAt ?? log.startedAt, end: shell.endedAt ?? end }))],
+    log.startedAt,
+    end,
+    width,
+  )
+  const folded = cells.reduce((sum, cell) => sum + (cell.gap ?? 0), 0)
   const lanes = [
-    lane(T.laneMain, laneSegments(main, { start: log.startedAt, end: turnEnd }, log.startedAt, end, width), 'lane-main'),
-    ...input.turnAgents.slice(-LANE_AGENTS).map(agent =>
+    lane(T.laneMain, laneSegments(main, { start: log.startedAt, end: turnEnd }, log.startedAt, end, width, cells), 'lane-main'),
+    ...shownAgents.map(agent =>
       lane(
         AGENT_TITLE(agent),
         laneSegments(
           log.events.filter(event => event.loop === agent.id),
-          { start: agent.startedAt ?? log.startedAt, end: agent.endedAt ?? end },
+          aliveOf(agent),
           log.startedAt,
           end,
           width,
+          cells,
         ),
         `lane-${agent.id}`,
       ),
@@ -5326,6 +5339,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
               log.startedAt,
               end,
               width,
+              cells,
             ),
             'lane-bg',
           ),
@@ -5346,6 +5360,7 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
         </Text>
       ))}
       <Text color={COLORS.muted}>{`─ ${T.bandResponding}`}</Text>
+      {folded > 0 && <Text color={COLORS.muted}>{`  ${GAP_GLYPH} ${T.activityGap(formatElapsed(folded))}`}</Text>}
     </Text>
   )
   const commands = main.filter(event => event.tool === 'Bash')
