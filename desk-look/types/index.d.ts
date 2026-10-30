@@ -16,6 +16,8 @@ export type RunCall = {
   isErrored: boolean
   isInterrupted: boolean
   output?: unknown
+  // 규칙·훅에 막혀 돌지 않았다(그릴 때만 notRun 기록에서 단다).
+  isNotRun?: boolean
 }
 
 // 답변 텍스트 없이 이어진 도구 호출 묶음. firstOf: 호출 id → 묶음 첫 호출 id.
@@ -239,6 +241,8 @@ declare module 'claude-code' {
       repo: RepoInfo | null
       surface: Surface | null
       runs: Runs
+      // 규칙·PreToolUse 훅에 막혀 돌지 않은 호출 id(tool.check 의 deny).
+      notRun: Record<string, true>
       images: Record<string, ImageInfo>
       // 터미널이 그림을 그리는 길(멀티플렉서 밖의 kitty·Ghostty, 전체 화면의 iTerm2). 못 그리면 null.
       graphics: Graphics

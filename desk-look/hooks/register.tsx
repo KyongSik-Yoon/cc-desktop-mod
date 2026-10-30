@@ -67,6 +67,10 @@ const diff = atom({ plugin: 'desk-look', key: 'diff' } as const, [] as FileDiff[
 const repo = atom({ plugin: 'desk-look', key: 'repo' } as const, null as RepoInfo | null)
 const surface = atom({ plugin: 'desk-look', key: 'surface' } as const, null as Surface | null)
 const runs = atom({ plugin: 'desk-look', key: 'runs' } as const, { firstOf: {}, calls: {} } as Runs)
+// 설정 규칙·PreToolUse 훅이 막아 돌지 않은 호출(tool.check 의 deny). 묶음 줄이 실패가 아니라 "not run" 으로 센다.
+const notRun = atom({ plugin: 'desk-look', key: 'notRun' } as const, {} as Record<string, true>)
+// 같은 호출의 tool.call 이 바로 알도록 둔 사본: tool.check 에서 쓴 atom 은 next(e) 가 풀린 직후엔 아직 안 보인다.
+const deniedCalls = new Set<string>()
 const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Record<string, ImageInfo>)
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, null as Graphics)
 // herdr 에 `herdr --remote` 클라이언트가 붙어 있는지. 원격 터미널은 알 수 없고(foot 처럼 kitty 그림을 버리는 곳도 있다)
@@ -296,7 +300,7 @@ export function cardFor(cards: ReadonlyArray<TurnCard>, durationMs: number): Tur
 
 const EDITING_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit', 'Bash'])
 
-type Call = Pick<ToolGroupCall, 'tool' | 'input' | 'isRunning' | 'isErrored' | 'isInterrupted' | 'output'>
+type Call = Pick<ToolGroupCall, 'tool' | 'input' | 'isRunning' | 'isErrored' | 'isInterrupted' | 'output'> & { isNotRun?: boolean }
 
 type Category = 'command' | 'read' | 'edit' | 'create' | 'search' | 'web' | 'agent' | 'todo' | 'ask' | 'other'
 
@@ -355,7 +359,11 @@ const VERB: Record<Category, string> = {
 
 const categoryOf = (tool: string): Category => CATEGORY_OF[tool] ?? 'other'
 
-export function describeCalls(calls: ReadonlyArray<Call>): string {
+// 막혀 돌지 않은 호출은 동사에 넣지 않고 끝에 "· N not run" 으로 따로 센다(엔진 2.1.314 의 묶음 줄처럼).
+export function describeCalls(all: ReadonlyArray<Call>): string {
+  const calls = all.filter(call => !call.isNotRun)
+  const skipped = all.length - calls.length
+  if (calls.length === 0 && skipped > 0) return skipped === 1 ? 'Not run' : `${skipped} actions not run`
   const counts = new Map<Category, number>()
   for (const call of calls) {
     const category = categoryOf(call.tool)
@@ -368,7 +376,7 @@ export function describeCalls(calls: ReadonlyArray<Call>): string {
   const rest = entries.slice(3).reduce((sum, [, count]) => sum + count, 0)
   const text = rest > 0 ? `${shown.join(', ')}, and ${rest} more action${rest === 1 ? '' : 's'}` : shown.join(', ')
   const failed = calls.filter(call => call.isErrored).length
-  return text.charAt(0).toUpperCase() + text.slice(1) + (failed > 0 ? ` (${failed} failed)` : '')
+  return text.charAt(0).toUpperCase() + text.slice(1) + (failed > 0 ? ` (${failed} failed)` : '') + (skipped > 0 ? ` · ${skipped} not run` : '')
 }
 
 const fieldsOf = (input: unknown): Record<string, unknown> =>
@@ -1960,7 +1968,8 @@ export function callLabel(tool: string, input: unknown): string {
   return target === '' ? tool : `${tool} ${target}`
 }
 
-async function settleCall($: EngineInterface, id: string, tool: string) {
+// 막혀 돌지 않은 명령(isNotRun)은 턴 셈의 명령 수에 넣지 않는다.
+async function settleCall($: EngineInterface, id: string, tool: string, isNotRun: boolean) {
   const now = await $.clock.now()
   await update($, turnActivity, state => {
     const calls = (state.calls ?? []).filter(call => call.id !== id)
@@ -1968,7 +1977,7 @@ async function settleCall($: EngineInterface, id: string, tool: string) {
       ...state,
       calls,
       idleSince: calls.length === 0 ? now : state.idleSince,
-      commands: (state.commands ?? 0) + (tool === 'Bash' ? 1 : 0),
+      commands: (state.commands ?? 0) + (tool === 'Bash' && !isNotRun ? 1 : 0),
       agents: (state.agents ?? 0) + (isAgentTool(tool) ? 1 : 0),
     }
   })
@@ -2915,7 +2924,8 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
           stat && ' ',
           stat && diffChips(els.Text, stat.added, stat.removed),
           answer && <Text color={COLORS.text}>{` → ${clip(answer, Math.floor(room / 2))}`}</Text>,
-          call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}> failed</Text>,
+          call.isNotRun && <Text color={COLORS.muted}> not run</Text>,
+          call.isErrored && !call.isInterrupted && !call.isNotRun && <Text color={COLORS.danger}> failed</Text>,
           call.isInterrupted && <Text color={COLORS.muted}> interrupted</Text>,
           <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
         )}
@@ -2983,6 +2993,9 @@ export function planRow(ids: ReadonlyArray<string>, runs: Runs): RowPlan {
 // 더 큰 묶음의 일부인 행에는 쓰지 않는다: 그 묶음의 다른 행이 비어 있어 넘기면 호출이 사라진다.
 export const hasOtherRows = (props: { calls: ReadonlyArray<ToolGroupCall>; isCallsOnly?: boolean }) =>
   props.isCallsOnly === false && !props.calls.some(call => call.isErrored || call.isInterrupted)
+
+// 막혀 돌지 않은 호출에 표시를 단다(notRun 기록에서).
+const markNotRun = (calls: RunCall[], marks: Record<string, true>): RunCall[] => calls.map(call => (marks[call.tool_use_id] ? { ...call, isNotRun: true } : call))
 
 const asRunCall = (call: ToolGroupCall | (Call & { tool_use_id: string })): RunCall => ({
   tool_use_id: call.tool_use_id ?? '',
@@ -3350,6 +3363,17 @@ export const register: Register = (on, options) => {
     return { text: T.prOpened(state?.pr ? prRef(state.pr) : null) }
   })
 
+  // 규칙·PreToolUse 훅이 막은 호출을 적어 둔다. 엔진은 막힌 호출도 오류 결과로 넘겨 tool.call 만으로는 실패와 가를 수 없다.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    const id = e.tool_use_id
+    if (verdict.decision === 'deny' && id !== undefined) {
+      deniedCalls.add(id)
+      await update($, notRun, marks => ({ ...marks, [id]: true })).catch(() => undefined)
+    }
+    return verdict
+  })
+
   on('tool.call', async ($, e, next) => {
     // 서브에이전트 안의 호출: 에이전트 패널의 도구 수와 지금 하는 일.
     const agentId = e.agentId
@@ -3364,14 +3388,16 @@ export const register: Register = (on, options) => {
       await update($, turnActivity, state => ({ ...state, calls: [...(state.calls ?? []), call] })).catch(() => undefined)
       if (tool === 'Bash') startProcWatch($)
     }
+    let isNotRun = false
     const ran = await next(e).finally(() => {
+      isNotRun = deniedCalls.delete(e.tool_use_id)
       void settleLog($, e.tool_use_id).catch(() => undefined)
       if (agentId !== undefined) return
-      void settleCall($, e.tool_use_id, tool).catch(() => undefined)
+      void settleCall($, e.tool_use_id, tool, isNotRun).catch(() => undefined)
     })
     const editStat = FILE_EDITING.has(tool) && !ran.isError ? diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false, output: ran.result }) : null
     if (ran.isError === true || editStat) void patchLog($, e.tool_use_id, { isError: ran.isError === true, ...(editStat ?? {}) }).catch(() => undefined)
-    if (agentId === undefined && tool === 'Bash' && ran.isError === true) void update($, turnActivity, state => ({ ...state, failed: (state.failed ?? 0) + 1 })).catch(() => undefined)
+    if (agentId === undefined && tool === 'Bash' && ran.isError === true && !isNotRun) void update($, turnActivity, state => ({ ...state, failed: (state.failed ?? 0) + 1 })).catch(() => undefined)
     if (agentId !== undefined) await patchAgent($, agentId, agent => (agent.activity === activity ? { activity: undefined } : {})).catch(() => undefined)
     // 백그라운드로 넘어간 셸·모니터는 백그라운드 작업 패널에 올린다. 모델이 멈춘 작업은 멈춤으로.
     if (!ran.isError && ran.result !== undefined) {
@@ -3506,11 +3532,11 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const els = $.ui.resolve(e)
-    const [state, openState] = await Promise.all([read($, runs), read($, open)])
+    const [state, openState, marks] = await Promise.all([read($, runs), read($, open), read($, notRun)])
     const plan = planRow([e.props.tool_use_id], state)
     if (plan.kind === 'hide') return <els.Box display="none" />
-    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80)
-    const own = asRunCall(e.props)
+    if (plan.kind === 'run') return runLine(els, $, plan.first, markNotRun(plan.calls, marks), openState, e.viewport?.columns ?? 80)
+    const own: RunCall = { ...asRunCall(e.props), ...(marks[e.props.tool_use_id] ? { isNotRun: true } : {}) }
     // 계획은 엔진이 준 결과에 계획 글이 없을 수 있어(결과 글만 남은 기록) 저장해 둔 요약을 먼저 쓴다.
     // 승인 직후엔 저장한 결과가 먼저 오고 이 행의 props 는 아직 실행 중일 수 있어, 상태도 저장한 쪽을 따른다.
     const saved = isPlanTool(own.tool) ? state.calls[state.firstOf[own.tool_use_id] ?? '']?.find(item => item.tool_use_id === own.tool_use_id) : undefined
@@ -3536,13 +3562,13 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const els = $.ui.resolve(e)
-    const [state, openState] = await Promise.all([read($, runs), read($, open)])
+    const [state, openState, marks] = await Promise.all([read($, runs), read($, open), read($, notRun)])
     const ids = e.props.calls.map(call => call.tool_use_id).filter((id): id is string => id !== undefined)
     const plan = planRow(ids, state)
     if (plan.kind === 'hide') return <els.Box display="none" />
-    if (plan.kind === 'run') return runLine(els, $, plan.first, plan.calls, openState, e.viewport?.columns ?? 80)
+    if (plan.kind === 'run') return runLine(els, $, plan.first, markNotRun(plan.calls, marks), openState, e.viewport?.columns ?? 80)
     if (hasOtherRows(e.props)) return next(e)
-    return runLine(els, $, e.requestId, e.props.calls.map(asRunCall), openState, e.viewport?.columns ?? 80)
+    return runLine(els, $, e.requestId, markNotRun(e.props.calls.map(asRunCall), marks), openState, e.viewport?.columns ?? 80)
   })
 
   // 진행 표시: 데스크톱의 "··· Running… 2m 29s". 클레이색 점 셋이 돌고, 경과 시간은 흐리게.

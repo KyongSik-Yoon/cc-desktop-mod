@@ -267,6 +267,35 @@ describe('도구 활동', () => {
     await group.unmount()
   })
 
+  test('규칙에 막혀 돌지 않은 호출은 실패가 아니라 not run 으로 센다', KO, async ($, on) => {
+    on('tool.check', (_$, e) => ((e as { tool_use_id?: string }).tool_use_id === 'd' ? { decision: 'deny', reason: 'denied', rule: 'Bash(cat *)' } : { decision: 'allow' }))
+    await $.tool.check({ tool: 'Bash', input: { command: 'cat x.txt' }, tool_use_id: 'd' } as never)
+    await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'k' } as never)
+    const group = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolGroup',
+      requestId: 'g-deny',
+      viewport: VIEWPORT,
+      props: {
+        calls: [
+          { tool_use_id: 'd', ...call('Bash', { command: 'cat x.txt' }, { isErrored: true, output: 'Permission to use Bash with command cat x.txt has been denied.' }) },
+          { tool_use_id: 'k', ...call('Bash', { command: 'ls' }, { output: 'x.txt' }) },
+          { tool_use_id: 'f', ...call('Bash', { command: 'false' }, { isErrored: true, output: 'exit 1' }) },
+        ],
+        isActive: false,
+        isExpanded: false,
+      },
+    })
+    expect(JSON.stringify(await group.drawn())).toContain('Ran 2 commands (1 failed) · 1 not run')
+    await group.press({ key: 'run-g-deny' })
+    const denied = JSON.stringify(await group.find({ type: 'Button', key: 'row-d' }))
+    expect(denied).toContain(' not run')
+    expect(denied).not.toContain(' failed')
+    expect(JSON.stringify(await group.find({ type: 'Button', key: 'row-f' }))).toContain(' failed')
+    await group.unmount()
+  })
+
   test('묶음을 펼치면 편집 diff 가 바로, 다시 누르면 접힌다', KO, async $ => {
     const group = await $.ui.mount({
       plugin: 'desk-look',
@@ -401,6 +430,8 @@ test('순수 함수', KO, async () => {
     'Ran 2 commands, created a file, edited a file, and 2 more actions',
   )
   expect(describeCalls([call('Bash', {}), call('mcp__x__y', {})])).toBe('Ran a command, used a tool')
+  expect(describeCalls([call('Bash', {}), { ...call('Bash', {}, { isErrored: true }), isNotRun: true }])).toBe('Ran a command · 1 not run')
+  expect(describeCalls([{ ...call('Bash', {}, { isErrored: true }), isNotRun: true }, { ...call('Read', {}, { isErrored: true }), isNotRun: true }])).toBe('2 actions not run')
   expect(diffStat(call('Edit', { old_string: 'a\nb', new_string: 'c' }))).toEqual({ added: 1, removed: 2 })
   // Write 로 있던 파일을 덮어쓰면 결과의 헌크로 센다(내용 전체가 + 가 아니라)
   const overwrite = { structuredPatch: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' a', '-b', '+c', '+d', ' e'] }] }
@@ -1237,6 +1268,36 @@ describe('진행 띠', () => {
     ;({ mounted, drawn } = await above())
     expect(drawn).not.toContain('이제 돌릴게요.')
     await mounted.unmount()
+  })
+
+  test('턴 끝 셈: 규칙에 막혀 돌지 않은 명령은 명령 수에도 실패 수에도 넣지 않는다', KO, async ($, on) => {
+    on('process.run', gitStub as never)
+    on('fs.read', () => {
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: 1_000_000 }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('turn.complete', () => ({ text: '끝' }) as never)
+    on('ui.render', { component: 'TurnDuration' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-line</Text>
+    })
+    on('tool.check', (_$, e) => (String((e.input as { command?: string }).command).startsWith('cat') ? { decision: 'deny', reason: 'denied' } : { decision: 'allow' }))
+    on('tool.call', (_$, e) =>
+      ((e as { command?: string }).command === 'ls'
+        ? { result: { stdout: 'x.txt', stderr: '', interrupted: false } }
+        : { result: 'Error', text: 'Error', isError: true }) as never,
+    )
+    await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'cat x.txt' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'false' } as never)
+    await wait(30)
+    await $.turn.complete({ durationMs: 20_000, reason: 'answer', answer: '끝', turnId: 't1' } as never)
+    const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'TurnDuration', viewport: VIEWPORT, props: { durationMs: 20_000 } as never })
+    expect(JSON.stringify(await row.drawn())).toContain('명령 2 (실패 1)')
+    await row.unmount()
   })
 
   test('bandAfterTurn: off 는 바로, keep 은 닫을 때까지, 기본 30초', () => {
