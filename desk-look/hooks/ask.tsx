@@ -7,14 +7,14 @@ import { T } from './i18n'
 // 질문 카드: AskUserQuestion 을 엔진 창 대신 입력창 위 띠의 카드로 묻는다(데스크톱과 같은 자리).
 // 도구 호출 훅이 답을 기다리며 결과를 직접 돌려주고, 엔진은 그 결과를 도구의 원래 변환기로 모델에게 넘긴다.
 // 입력창이 비어 있으면 숫자 키가 띠의 버튼을 바로 누른다: 1-8 선택지, 0 제출(여러 개 고르기), 9 엔진 창.
-// 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로. Remote Control 세션은 아래 REMOTE 참고.
+// 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로. 폰에서 입력한 세션은 아래 PHONE 참고.
 // 엔진 창은 뜰 때 알림(permission_prompt)을 보내지만 카드는 도구가 도는 중이라 엔진이 보내지 않는다. 그래서 카드가 직접 알린다(askNotify).
 
 type On = Parameters<Register>[0]
 
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
 const planAsking = atom({ plugin: 'desk-look', key: 'planAsk' } as const, null as PlanAskState | null)
-const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
+const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as PromptOrigin | null)
 
 // 훅은 자기 코드 시간 10초 안에 끝나야 하지만, 엔진 호출($)을 기다리는 동안은 시계가 멈춘다($.clock.sleep 은 예외라 못 쓴다).
 // 그래서 임시 폴더에 이름 있는 파이프(answer)를 만들고 cat 으로 읽으며 기다린다. 카드 버튼이 tee 로 답을 써 넣으면 cat 이 끝난다.
@@ -22,14 +22,31 @@ const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const,
 // 셸은 쓰지 않는다: 디렉터리 검사가 셸·인라인 스크립트를 리뷰어에게 넘긴다.
 const WAIT_ROUND_S = 540
 const WAIT_ROUNDS = 40
-// 카드를 건드렸다는 표시(touched 파일). 기다리는 도구 훅은 그동안 바뀐 상태를 읽지 못해(훅이 시작할 때 값을 본다) 파일로 알린다.
-// 버튼이 매번 다른 글을 써서, 훅은 글이 바뀌었는지로 안다.
-// Remote Control(Claude 앱)은 surfaces() 에 잡히지 않는다(앱이 attach 하지 않는다). 카드를 띄우면 엔진이
-// 원격 응답 요청을 보내지 않아 앱에서 답할 수 없다. 그래서 마지막 사람 입력이 앱에서 왔으면 엔진 창이고,
-// 세션 상태 파일에 bridgeSessionId 가 있으면 마지막 사람 입력이 터미널에서 왔을 때만 카드를 띄우고, 카드를 HANDOVER_MS 동안 아무도 건드리지 않으면
-// (자리를 떠 앱으로 보는 중) 엔진 창에 넘겨 앱에도 묻게 한다. 그동안은 HANDOVER_ROUND_S 초마다 돌아와 살핀다.
-export const HANDOVER_MS = 60_000
-const HANDOVER_ROUND_S = 5
+// PHONE: 카드는 폰에서 답할 수 없다. Remote Control(Claude 앱)은 surfaces() 에 잡히지 않고(앱이 attach 하지 않는다),
+// 카드를 띄우면 엔진이 앱에 응답 요청을 보내지 않는다. collie(herdr 화면을 폰에 비추는 플러그인)는 폰 입력을 터미널 키로
+// 넣어 엔진에겐 터미널(composer) 입력으로 보인다. 그래서 마지막 사람 입력이 어디서 왔는지로 고른다:
+// 앱(bridge)이나 collie 면 엔진 창, 터미널이면 카드를 시간 제한 없이 띄운다. 다음 입력 전까지 그대로라,
+// 책상에서 묻고 자리를 뜨면 폰에는 질문이 가지 않는다(사용자가 고른 타협).
+// 입력이 없었으면(다시 연 세션에 알림이 턴을 연 경우 등) Remote Control 이 붙어 있을 때만 엔진 창.
+export type PromptOrigin = 'composer' | 'bridge' | 'phone'
+
+// collie 는 폰에서 보낸 글을 받으면 sends/<id>.json 을 쓰고, 보내기(mode "send")면 Enter 를 넣을 때 submitSentAt 을 찍는다
+// (엔진이 프롬프트를 보기 전). 이 패널(paneId = HERDR_PANE_ID)로 PHONE_SEND_MS 안에 Enter 까지 넣은 기록이면 그 입력은 폰에서 왔다.
+// 세션 id(paneGeneration)로는 맞추지 않는다: herdr 가 아직 모르면(새 세션, /clear·/resume 직후) collie 는 "claude:-" 로 쓴다.
+// 글만 넣는 append·replace 는 Enter 를 사람이 책상에서 칠 수 있어 보지 않는다.
+export const PHONE_SEND_MS = 20_000
+export const PHONE_SENDS_READ = 5
+
+export function isPhoneSend(text: string, paneId: string, now: number): boolean {
+  let record: { paneId?: unknown; mode?: unknown; submitSentAt?: unknown }
+  try {
+    record = JSON.parse(text) as typeof record
+  } catch {
+    return false
+  }
+  if (paneId === '' || record?.paneId !== paneId || record.mode !== 'send' || typeof record.submitSentAt !== 'number') return false
+  return now - record.submitSentAt >= 0 && now - record.submitSentAt < PHONE_SEND_MS
+}
 
 // 세션 상태 파일(~/.claude/sessions/*.json) 하나가 이 세션의 것이고 Remote Control 이 붙어 있는지.
 export function isBridgedRecord(text: string, sessionId: string): boolean {
@@ -114,19 +131,16 @@ export function askNotice(questions: readonly AskQuestion[]): string {
   return questions.length > 1 ? T.moreQuestions(first, questions.length - 1) : first
 }
 
-// 카드로 물어도 되는 세션인지: 터미널 하나만 붙어 있고, 다른 카드(질문·계획)가 떠 있지 않고, 마지막 사람 입력이 앱에서 오지 않았어야 한다.
-// 되면 Remote Control 이 붙어 있는지(무반응이면 엔진 창으로 넘긴다)를, 안 되면 null(엔진 창).
-export async function cardSession($: EngineInterface): Promise<{ isRemote: boolean } | null> {
+// 카드로 물어도 되는 세션인지: 터미널 하나만 붙어 있고, 다른 카드(질문·계획)가 떠 있지 않고, 마지막 사람 입력이 폰에서 오지 않았어야 한다(PHONE).
+export async function cardSession($: EngineInterface): Promise<boolean> {
   const surfaces = await $.session.surfaces()
-  if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return null
-  if ((await read($, asking)) !== null || (await read($, planAsking)) !== null) return null
-  // 앱(bridge)에서 온 입력이면 세션 상태 파일 없이도 Remote Control 이다. 파일은 엔진이 지우기도 한다.
+  if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return false
+  if ((await read($, asking)) !== null || (await read($, planAsking)) !== null) return false
   const origin = await read($, promptOrigin)
-  if (origin === 'bridge') return null
+  if (origin !== null) return origin === 'composer'
+  // 입력이 없었을 때만 세션 상태 파일로 Remote Control 을 본다. 파일은 엔진이 지우기도 한다.
   const sessionId = await $.session.id().catch(() => '')
-  const isRemote = await isBridged($, sessionId).catch(() => false)
-  if (isRemote && origin !== 'composer') return null
-  return { isRemote }
+  return !(await isBridged($, sessionId).catch(() => false))
 }
 
 // 답을 받을 임시 폴더와 그 안의 이름 있는 파이프(answer). 못 만들면 ''.
@@ -142,18 +156,14 @@ export async function openReplyPipe($: EngineInterface): Promise<string> {
 
 // 카드 버튼이 파이프에 쓴 답(JSON 글)을 기다린다. 엔진 창으로 넘겨야 하면 null. 끝나면 폴더를 지운다.
 // 턴을 중단하면(Esc) {"kind":"cancel"} 을 써서 기다리던 cat 을 끝낸다.
-export async function awaitReply($: EngineInterface, signal: AbortSignal, dir: string, isRemote: boolean, shownAt: number): Promise<string | null> {
+export async function awaitReply($: EngineInterface, signal: AbortSignal, dir: string): Promise<string | null> {
   const onAbort = () => void reply($, dir, { kind: 'cancel' }).catch(() => undefined)
   signal.addEventListener('abort', onAbort)
-  const roundS = isRemote ? HANDOVER_ROUND_S : WAIT_ROUND_S
-  const rounds = Math.ceil((WAIT_ROUNDS * WAIT_ROUND_S) / roundS)
-  let touchedAt = shownAt
-  let touch = ''
   let answered: string | null = JSON.stringify({ kind: 'cancel' })
-  for (let round = 0; round < rounds && !signal.aborted; round++) {
+  for (let round = 0; round < WAIT_ROUNDS && !signal.aborted; round++) {
     const startedAt = await $.clock.now()
     // 시간이 다 되면 cat 이 죽고 호출은 거절된다(null): 한 바퀴가 끝난 것
-    const ran = await $.process.run(['cat', `${dir}/answer`], { timeoutMs: roundS * 1000 }).catch(() => null)
+    const ran = await $.process.run(['cat', `${dir}/answer`], { timeoutMs: WAIT_ROUND_S * 1000 }).catch(() => null)
     if (ran !== null && ran.exitCode === 0 && ran.stdout.trim() !== '') {
       answered = ran.stdout
       break
@@ -161,15 +171,6 @@ export async function awaitReply($: EngineInterface, signal: AbortSignal, dir: s
     const now = await $.clock.now()
     // 기다리지 못하고 곧바로 끝났으면(파이프가 사라졌다) 헛돌지 않고 엔진 창에 넘긴다
     if (now - startedAt < 1000) {
-      answered = null
-      break
-    }
-    if (!isRemote) continue
-    const touched = await $.fs.read(`${dir}/touched`).catch(() => '')
-    if (touched !== touch) {
-      touch = touched
-      touchedAt = now
-    } else if (now - touchedAt >= HANDOVER_MS) {
       answered = null
       break
     }
@@ -183,8 +184,7 @@ export function registerAsk(on: On, notify: boolean) {
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const questions = parseQuestions(e.questions)
     if (questions === null) return next(e)
-    const session = await cardSession($)
-    if (session === null) return next(e)
+    if (!(await cardSession($))) return next(e)
     const dir = await openReplyPipe($)
     if (dir === '') return next(e)
     const id = e.tool_use_id ?? dir
@@ -193,7 +193,7 @@ export function registerAsk(on: On, notify: boolean) {
     if (notify) {
       void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
     }
-    const answered = await awaitReply($, next.signal, dir, session.isRemote, shownAt)
+    const answered = await awaitReply($, next.signal, dir)
     await update($, asking, () => null)
     if (answered === null) return next(e)
 
