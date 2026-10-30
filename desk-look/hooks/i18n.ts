@@ -278,6 +278,8 @@ const ko = {
   askHowMulti: '숫자로 고르고 0 제출',
   askHowPick: '숫자로 고르기',
   askHintTail: '9 기본 창 · Esc 취소',
+  // 엔진은 입력창 위 띠를 접을 수 있고(ctrl+x ctrl+a, [-]) 접힌 동안 카드를 버린다. mod 는 접힘을 모른다.
+  bandToggle: '안 보이면 ctrl+x ctrl+a',
   answerInDefault: '기본 창에서 답하기',
   toDefault: '기본 창으로',
   close: '닫기',
@@ -602,6 +604,7 @@ const en: Strings = {
   askHowMulti: 'pick by number, 0 to submit',
   askHowPick: 'pick by number',
   askHintTail: '9 default dialog · Esc cancel',
+  bandToggle: 'hidden? ctrl+x ctrl+a',
   answerInDefault: 'Answer in the default dialog',
   toDefault: 'Default dialog',
   close: 'Close',

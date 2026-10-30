@@ -1871,7 +1871,7 @@ test('질문 도구 줄: 질문과 답', KO, () => {
 })
 
 import { agentOf } from '../hooks/runs'
-import { askHint, askRows, askTextRows, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
+import { askHint, askRows, hintTail, askTextRows, formatTokens, looksLikeMarkdown, textKey } from '../hooks/register'
 
 test('서브에이전트 카드 요약과 묶음', KO, () => {
   const raw = {
@@ -1907,6 +1907,10 @@ test('명령 출력 마크다운 판별과 질문 힌트', KO, async $ => {
   expect(looksLikeMarkdown('# 제목\n본문')).toBe(true)
   expect(looksLikeMarkdown('Total cost: $0.12\nTotal duration: 3m')).toBe(false)
   expect(askHint({ kind: 'choice', multiSelect: true })).toContain('0 제출')
+  // 엔진이 띠를 접으면 카드가 안 보여 힌트 줄(접혀도 보임)에 펴는 키를 둔다: tail 은 끝에서 잘리니 맨 앞에,
+  // 입력칸에 글이 있으면 숫자 키가 버튼을 누르지 않으니 펴는 키만
+  expect(hintTail('숫자로 고르기', false)).toBe('  안 보이면 ctrl+x ctrl+a · 숫자로 고르기')
+  expect(hintTail('숫자로 고르기', true)).toBe('  안 보이면 ctrl+x ctrl+a')
   const row = await $.ui.mount({
     plugin: 'desk-look',
     surface: 'terminal',
