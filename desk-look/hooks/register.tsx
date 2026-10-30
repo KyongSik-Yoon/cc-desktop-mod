@@ -200,6 +200,8 @@ let claudePid: number | null | undefined
 // 시작했지만 아직 메인 작업(도구 호출·호출 앞 설명)이 없는 턴의 시작 시각. /desk-activity 기록은 첫 메인 작업이 올 때
 // 이 턴으로 바꾼다: 그 전에는 지난 턴을 그대로 보이고, 글로만 답한 턴이나 백그라운드 끝남 알림 턴은 기록을 건드리지 않는다.
 let pendingLogStart: number | null = null
+// 메인 작업 없이 끝난 가장 늦은 턴의 시간. advisor 만 부르고 글로 답한 턴의 기록을 늦게 여는 데 쓴다.
+let quietTurn: { startedAt: number; endedAt: number } | null = null
 // 패널 시계: 막대와 시간은 2초 단위면 충분하다(스피너처럼 초당 두 번 그리면 턴 중 비용이 크게 는다).
 const ACTIVITY_TICK = 2000
 let activityTimer: Timer | null = null
@@ -2268,6 +2270,8 @@ function startActivityClock($: EngineInterface) {
       if (at - activitySeen > 2 * ACTIVITY_TICK + 1000 || !busy) {
         activityTimer?.cancel()
         activityTimer = null
+        // 턴 끝 바로 뒤의 틱이면 마지막 단계의 줄이 아직 안 붙었을 수 있어(200ms 안쪽) 한 번 더 읽는다.
+        if (advisorOn) $.clock.after(1000, () => void syncAdvisor($).catch(() => undefined))
         // 멈추기 전에 한 번 더 그려 끝난 모습을 남긴다.
         await update($, activityClock, () => at)
         return
@@ -2358,34 +2362,45 @@ async function readAdvisor($: EngineInterface) {
   if (hasCalls || advisorPending.size > 0) await placeAdvisor($)
 }
 
-const advisorEvent = (call: AdvisorCall): ActivityLog['events'][number] => {
+// endedAt: 그 턴이 끝난 시각. 결과 없이 턴이 끝났으면(사람이 끊음) 그때 중단된 것으로 닫는다.
+const advisorEvent = (call: AdvisorCall, endedAt: number | null): ActivityLog['events'][number] => {
+  const stopped = call.end === undefined && endedAt !== null
+  const error = call.error ?? (stopped ? T.advisorStopped : undefined)
+  const end = call.end ?? (stopped ? Math.max(call.start, endedAt) : undefined)
   // 흐름 줄이 앞에 종류(조언)를 붙이므로 모델을 모르면 비워 둔다.
-  const facts = [modelLabel(call.model), call.error ?? (call.input === undefined ? '' : T.advisorTokens(formatTokens(call.input), formatTokens(call.output ?? 0)))]
+  const facts = [modelLabel(call.model), error ?? (call.input === undefined ? '' : T.advisorTokens(formatTokens(call.input), formatTokens(call.output ?? 0)))]
   return {
     id: call.id,
     tool: 'advisor',
     label: facts.filter(Boolean).join(' · '),
     kind: 'advisor',
     start: call.start,
-    ...(call.end === undefined ? {} : { end: call.end }),
-    ...(call.error === undefined ? {} : { isError: true }),
+    ...(end === undefined ? {} : { end }),
+    ...(error === undefined ? {} : { isError: true }),
   }
 }
 
 // 이 턴 기록의 시간 안에 든 호출만 넣는다. 턴이 끝난 뒤(endedAt)에 읽혀도 넣는다: 기록은 단계가 끝난 뒤 붙는다.
-// 턴 기록은 첫 메인 도구 호출이 와야 열려서, 그 전에 부른 호출은 advisorPending 에 두었다가 기록이 열리면 넣는다.
-// 기록보다 앞선 호출(도구 없이 답한 턴의 것)은 더 기다리지 않는다.
+// 턴 기록은 첫 메인 도구 호출이 와야 열린다. 도는 턴의 호출이면 여기서 그 턴의 기록을 열고, 도구 없이 끝난 턴
+// (quietTurn)의 호출이면 그 턴의 기록을 연다. 둘 다 아니면 advisorPending 에 두었다가 기록이 열리면 넣는다.
 async function placeAdvisor($: EngineInterface) {
-  await update($, activityLog, log => {
+  const running = pendingLogStart
+  const fresh = running !== null && [...advisorSeen.values()].some(call => call.start >= running) ? takeLogStart() : null
+  await update($, activityLog, current => {
     const calls = [...advisorSeen.values()]
+    const quiet = quietTurn
+    const isQuiet = quiet !== null && (current === null || quiet.startedAt > current.startedAt) && calls.some(call => call.start >= quiet.startedAt && call.start <= quiet.endedAt)
+    if (isQuiet) quietTurn = null
+    const log = fresh ?? (isQuiet ? { startedAt: quiet.startedAt, endedAt: quiet.endedAt, events: [], says: [] } : current)
     advisorPending = new Set(calls.filter(call => log === null || call.start >= log.startedAt).map(call => call.id))
     if (log === null) return log
     const inTurn = (call: AdvisorCall) => call.start >= log.startedAt && (log.endedAt === null || call.start <= log.endedAt)
     const placed = calls.filter(inTurn)
-    for (const call of placed) advisorPending.delete(call.id)
+    // 결과가 아직 없는 호출은 턴이 끝날 때까지 남겨, 끝나면 중단으로 닫는다.
+    for (const call of placed) if (call.end !== undefined || log.endedAt !== null) advisorPending.delete(call.id)
     const changed = new Map(
       placed
-        .map(advisorEvent)
+        .map(call => advisorEvent(call, log.endedAt))
         .filter(event => !sameJson(log.events.find(item => item.id === event.id), event))
         .map(event => [event.id, event]),
     )
@@ -3351,8 +3366,11 @@ export const register: Register = (on, options) => {
       stopProcWatch()
       await update($, turnActivity, state => ({ ...state, calls: [], proc: null, idleSince: null }))
       // 메인 작업이 없던 턴(글로만 답한 턴, 백그라운드 끝남 알림)은 지난 턴 기록을 그대로 둔다.
-      if (pendingLogStart !== null) pendingLogStart = null
-      else await update($, activityLog, log => (log === null ? log : { ...log, endedAt: log.startedAt + e.durationMs }))
+      // 그 턴의 시간만 남겨, 나중에 읽은 advisor 호출이 그 안에 들면 그때 그 턴의 기록을 연다.
+      if (pendingLogStart !== null) {
+        quietTurn = { startedAt: pendingLogStart, endedAt: pendingLogStart + e.durationMs }
+        pendingLogStart = null
+      } else await update($, activityLog, log => (log === null ? log : { ...log, endedAt: log.startedAt + e.durationMs }))
       await update($, pendingEdits, () => [])
       await update($, turnStartedAt, () => null)
       if (bandStay > 0) {
@@ -3985,9 +4003,13 @@ export const register: Register = (on, options) => {
     const { Box, Text } = els
     // 턴이나 이 턴이 띄운 일이 도는 동안은 패널 시계(2초)로 다시 그려 막대와 시간이 간다.
     const [log, records, startedAt, top, expanded, clockAt] = await Promise.all([read($, activityLog), read($, agents), read($, turnStartedAt), read($, activityTop), read($, activityAgentOpen), read($, activityClock)])
-    if (log === null) return <Text color={COLORS.muted}>{T.activityNone}</Text>
     const now = await $.clock.now()
     activitySeen = now
+    if (log === null) {
+      // 기록이 아직 없어도 턴이 돌면 시계를 건다: advisor 만 부른 턴은 시계가 읽어야 기록이 열린다.
+      if (activityTimer === null && startedAt !== null) startActivityClock($)
+      return <Text color={COLORS.muted}>{T.activityNone}</Text>
+    }
     const columns = Math.max(30, e.props.bodyColumns)
     const bodyRows = (e.props as { scroll?: { bodyRows: number } }).scroll?.bodyRows ?? 0
     const interactive = {
