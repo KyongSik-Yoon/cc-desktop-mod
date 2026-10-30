@@ -217,7 +217,7 @@ export function kindOf(tool: string, command?: string): ActivityKind {
 const PRIORITY: ActivityKind[] = ['edit', 'test', 'explore', 'agent', 'command', 'advisor', 'other']
 // 오래 걸리는 일(명령·위임)은 굵은 선, 짧은 사건은 블록. 응답 중(idle)은 가는 선.
 // 위임은 겹선: 사용자 테마가 두 색(claude·planMode)을 같게 잡아도 명령과 갈리게.
-export const KIND_GLYPH: Record<ActivityKind, string> = { explore: '░', edit: '▓', test: '▒', command: '━', agent: '═', advisor: '▞', other: '▪' }
+export const KIND_GLYPH: Record<ActivityKind, string> = { explore: '░', edit: '▓', test: '▒', command: '━', agent: '═', advisor: '┅', other: '▪' }
 
 // advisor(엔진의 실험 기능)의 호출 한 번. 엔진 API 에 없어 대화 기록 JSONL 에서 읽는다. 조언 본문은 서버가
 // 암호화해 보내(advisor_redacted_result) 클라이언트에 오지 않으므로 모델·시간·토큰·오류만 있다.
