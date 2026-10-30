@@ -1064,7 +1064,7 @@ test('진행 표시 글자', KO, () => {
 })
 
 import { computeTasks } from '../hooks/tasks'
-import { callProcesses, childPids, clockOf, etimesOf, firstSentence, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, statTicks, stepStrip, turnNarration, uptimeTicks } from '../hooks/activity'
+import { advisorCalls, callProcesses, childPids, clockOf, etimesOf, firstSentence, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, statTicks, stepStrip, turnNarration, uptimeTicks } from '../hooks/activity'
 
 test('할 일 목록 다시 세우기와 보일 줄', KO, () => {
   const ok = (id: string, result: unknown) => ({ tool_use_id: id, text: 'ok', isError: false, result })
@@ -1418,6 +1418,35 @@ describe('진행 띠', () => {
     expect(outputFileOf('done')).toBeUndefined()
     expect(clockOf(125_000)).toBe('02:05')
     expect(clockOf(3_725_000)).toBe('1:02:05')
+  })
+
+  test('advisor 호출을 대화 기록 줄에서: 시작·끝 시각, 응답의 iterations 와 차례로 짝, 오류 코드, 조각 이어 읽기', () => {
+    // 엔진이 쓰는 모양 그대로(2026-10-30 실제 기록에서 줄임): 응답 하나를 블록마다 한 줄, 줄마다 같은 iterations.
+    const iterations = [
+      { type: 'message', input_tokens: 2, output_tokens: 26 },
+      { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 64_861, output_tokens: 212, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      { type: 'message', input_tokens: 2, output_tokens: 4 },
+      { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 500 },
+    ]
+    const line = (at: string, content: unknown[], usage: unknown = { iterations }) => JSON.stringify({ type: 'assistant', timestamp: at, message: { id: 'msg_1', content, usage } })
+    const first = [
+      line('2026-10-30T04:21:51.975Z', [{ type: 'server_tool_use', id: 'srv_a', name: 'advisor', input: {} }]),
+      line('2026-10-30T04:21:58.762Z', [{ type: 'advisor_tool_result', tool_use_id: 'srv_a', content: { type: 'advisor_redacted_result', encrypted_content: 'Eu…' } }]),
+      line('2026-10-30T04:21:59.000Z', [{ type: 'server_tool_use', id: 'srv_b', name: 'advisor', input: {} }]),
+      JSON.stringify({ type: 'assistant', timestamp: '2026-10-30T04:21:59.100Z', message: { id: 'msg_0', content: [{ type: 'text', text: 'advisor 라는 글만 있는 줄' }] } }),
+    ].join('\n')
+    const calls = advisorCalls(`${first}\n`)
+    expect([...calls.values()]).toEqual([
+      { id: 'srv_a', message: 'msg_1', index: 0, start: Date.parse('2026-10-30T04:21:51.975Z'), end: Date.parse('2026-10-30T04:21:58.762Z'), model: 'claude-fable-5-1', input: 64_861, output: 212 },
+      { id: 'srv_b', message: 'msg_1', index: 1, start: Date.parse('2026-10-30T04:21:59.000Z'), model: 'claude-fable-5-1', input: 1500, output: 50 },
+    ])
+    // 다음 조각에서 결과(오류)가 와도 앞 조각의 호출에 붙는다. 잘린 줄은 건너뛴다.
+    const next = advisorCalls(`{"type":"assi\n${line('2026-10-30T04:22:03.000Z', [{ type: 'advisor_tool_result', tool_use_id: 'srv_b', content: { type: 'advisor_tool_result_error', error_code: 'overloaded' } }])}\n`, calls)
+    expect(next.get('srv_b')).toMatchObject({ end: Date.parse('2026-10-30T04:22:03.000Z'), error: 'overloaded' })
+    expect(next.get('srv_a')).toEqual(calls.get('srv_a'))
+    // 흐름에서는 조언 줄 하나로, 끝나지 않았으면 도는 중.
+    const log = { startedAt: 0, endedAt: null, says: [], events: [{ id: 'srv_b', tool: 'advisor', label: 'Fable 5.1', kind: 'advisor' as const, start: 10 }] }
+    expect(flowRows(log)).toEqual([{ at: 10, kind: 'advisor', text: 'Fable 5.1', ms: null, isError: false }])
   })
 
   test('/desk-activity 패널: 턴의 막대·흐름·명령, 끝나면 지난 턴, 띠를 누르면 열림', KO, async ($, on) => {

@@ -79,7 +79,8 @@ export type ActivityCall = { id: string; tool: string; label: string; startedAt:
 export type ActivityProc = { name: string; cpu: number | null; quietSince: number | null; isNetwork: boolean }
 // /desk-activity 패널의 턴 기록: 도구 호출마다 한 줄(loop 는 서브에이전트 id, 메인이면 없음)과 모델이 쓴 설명 글.
 // endedAt 은 턴이 끝난 시각(끝난 뒤에도 다음 턴까지 지난 턴으로 보여 준다).
-export type ActivityKind = 'explore' | 'edit' | 'command' | 'test' | 'agent' | 'other'
+// advisor: 엔진의 advisor 호출(대화 기록에서 읽는다, 메인 대화에만).
+export type ActivityKind = 'explore' | 'edit' | 'command' | 'test' | 'agent' | 'advisor' | 'other'
 export type ActivityEvent = {
   id: string
   loop?: string

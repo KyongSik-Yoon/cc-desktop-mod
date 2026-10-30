@@ -214,10 +214,60 @@ export function kindOf(tool: string, command?: string): ActivityKind {
 }
 
 // 막대에서 한 칸을 무엇으로 칠할지: 같은 칸에 여럿이 겹치면 짧은 사건(편집·테스트·탐색)이 이겨 긴 명령에 묻히지 않는다.
-const PRIORITY: ActivityKind[] = ['edit', 'test', 'explore', 'agent', 'command', 'other']
+const PRIORITY: ActivityKind[] = ['edit', 'test', 'explore', 'agent', 'command', 'advisor', 'other']
 // 오래 걸리는 일(명령·위임)은 굵은 선, 짧은 사건은 블록. 응답 중(idle)은 가는 선.
 // 위임은 겹선: 사용자 테마가 두 색(claude·planMode)을 같게 잡아도 명령과 갈리게.
-export const KIND_GLYPH: Record<ActivityKind, string> = { explore: '░', edit: '▓', test: '▒', command: '━', agent: '═', other: '▪' }
+export const KIND_GLYPH: Record<ActivityKind, string> = { explore: '░', edit: '▓', test: '▒', command: '━', agent: '═', advisor: '▞', other: '▪' }
+
+// advisor(엔진의 실험 기능)의 호출 한 번. 엔진 API 에 없어 대화 기록 JSONL 에서 읽는다. 조언 본문은 서버가
+// 암호화해 보내(advisor_redacted_result) 클라이언트에 오지 않으므로 모델·시간·토큰·오류만 있다.
+// message·index: 그 호출이 든 응답과 응답 안에서 몇 번째 advisor 호출인지(토큰을 짝짓는 데 쓴다).
+export type AdvisorCall = { id: string; message: string; index: number; start: number; end?: number; model?: string; input?: number; output?: number; error?: string }
+
+type TranscriptLine = { timestamp?: string; message?: { id?: string; content?: unknown; usage?: { iterations?: unknown } } }
+type AdvisorIteration = { type?: string; model?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+
+// 대화 기록 JSONL 조각에서 advisor 호출을 모아 known 에 이어 붙인다. 엔진은 응답(message.id) 하나를 블록마다
+// 한 줄로, 줄마다 블록이 끝난 시각과 응답 전체의 usage.iterations 를 달아 쓴다. k 번째 advisor_message 가 그 응답의
+// k 번째 advisor 호출의 토큰이다. 시작은 호출 블록 줄, 끝은 결과 블록 줄의 시각.
+export function advisorCalls(text: string, known: ReadonlyMap<string, AdvisorCall> = new Map()): Map<string, AdvisorCall> {
+  const calls = new Map(known)
+  for (const raw of text.split('\n')) {
+    // 블록의 type 으로 거른다: 단계마다 쓰는 요청 기록 줄도 도구 목록에 advisor 를 담아 이름으로는 다 걸리고,
+    // 응답마다 usage 에 "server_tool_use":{…} 필드가 있어 type 까지 본다.
+    if (!raw.includes('"type":"server_tool_use"') && !raw.includes('"type":"advisor_tool_result"')) continue
+    let line: TranscriptLine
+    try {
+      line = JSON.parse(raw) as TranscriptLine
+    } catch {
+      continue
+    }
+    const message = line.message
+    const at = Date.parse(line.timestamp ?? '')
+    if (!message?.id || !Array.isArray(message.content) || Number.isNaN(at)) continue
+    const id = message.id
+    for (const block of message.content as Array<Record<string, unknown>>) {
+      if (block.type === 'server_tool_use' && block.name === 'advisor' && typeof block.id === 'string' && !calls.has(block.id)) {
+        const index = [...calls.values()].filter(call => call.message === id).length
+        calls.set(block.id, { id: block.id, message: id, index, start: at })
+      }
+      const call = block.type === 'advisor_tool_result' && typeof block.tool_use_id === 'string' ? calls.get(block.tool_use_id) : undefined
+      if (call) {
+        const content = block.content as { type?: string; error_code?: string } | null | undefined
+        calls.set(call.id, { ...call, end: at, ...(content?.type === 'advisor_tool_result_error' ? { error: content.error_code ?? 'error' } : {}) })
+      }
+    }
+    const iterations = Array.isArray(message.usage?.iterations) ? (message.usage.iterations as AdvisorIteration[]) : []
+    const used = iterations.filter(item => item?.type === 'advisor_message')
+    for (const call of calls.values()) {
+      const item = call.message === id ? used[call.index] : undefined
+      if (!item) continue
+      const input = (item.input_tokens ?? 0) + (item.cache_read_input_tokens ?? 0) + (item.cache_creation_input_tokens ?? 0)
+      calls.set(call.id, { ...call, ...(item.model ? { model: item.model } : {}), input, output: item.output_tokens ?? 0 })
+    }
+  }
+  return calls
+}
 
 export type LaneSegment = { kind: ActivityKind | 'idle' | 'none' | 'gap'; text: string }
 
@@ -297,7 +347,7 @@ export type FlowRow =
   | { at: number; kind: 'say'; text: string }
   | { at: number; kind: 'explore'; text: string }
   | { at: number; kind: 'edit'; text: string; added: number; removed: number; isError: boolean }
-  | { at: number; kind: 'command' | 'test' | 'agent' | 'other'; text: string; ms: number | null; isError: boolean }
+  | { at: number; kind: 'command' | 'test' | 'agent' | 'advisor' | 'other'; text: string; ms: number | null; isError: boolean }
 
 // 패널의 흐름: 메인 대화의 설명 글과 호출을 시간 순으로. 이어진 탐색은 "Read 6 · Grep 3" 한 줄로,
 // 같은 파일을 잇달아 고친 것은 한 줄로 합친다. 도는 중인 호출은 ms 가 null.
