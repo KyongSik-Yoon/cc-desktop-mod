@@ -1,7 +1,4 @@
-import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
-
-import type { AskQuestion, AskState, PlanAskState } from '../types'
+import type { AskQuestion } from '../types'
 import { T } from './i18n'
 
 // 질문 카드: AskUserQuestion 을 엔진 창 대신 입력창 위 띠의 카드로 묻는다(데스크톱과 같은 자리).
@@ -9,19 +6,8 @@ import { T } from './i18n'
 // 입력창이 비어 있으면 숫자 키가 띠의 버튼을 바로 누른다: 1-8 선택지, 0 제출(여러 개 고르기), 9 엔진 창.
 // 터미널 말고 다른 화면이 붙은 세션은 엔진 창 그대로. 폰에서 입력한 세션은 아래 PHONE 참고.
 // 엔진 창은 뜰 때 알림(permission_prompt)을 보내지만 카드는 도구가 도는 중이라 엔진이 보내지 않는다. 그래서 카드가 직접 알린다(askNotify).
+// 엔진을 부르는 부분($: 훅, 기다리기)은 register.tsx 에 있고, 여기는 순수 함수만 둔다($ 는 다른 파일 함수로 넘기지 못한다).
 
-type On = Parameters<Register>[0]
-
-const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
-const planAsking = atom({ plugin: 'desk-look', key: 'planAsk' } as const, null as PlanAskState | null)
-const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as PromptOrigin | null)
-
-// 훅은 자기 코드 시간 10초 안에 끝나야 하지만, 엔진 호출($)을 기다리는 동안은 시계가 멈춘다($.clock.sleep 은 예외라 못 쓴다).
-// 그래서 임시 폴더에 이름 있는 파이프(answer)를 만들고 cat 으로 읽으며 기다린다. 카드 버튼이 tee 로 답을 써 넣으면 cat 이 끝난다.
-// process.run 은 한 번에 10분까지라, WAIT_ROUND_S 초(9분)마다 시간이 다 돼 끊기면 다시 기다린다.
-// 셸은 쓰지 않는다: 디렉터리 검사가 셸·인라인 스크립트를 리뷰어에게 넘긴다.
-const WAIT_ROUND_S = 540
-const WAIT_ROUNDS = 40
 // PHONE: 카드는 폰에서 답할 수 없다. Remote Control(Claude 앱)은 surfaces() 에 잡히지 않고(앱이 attach 하지 않는다),
 // 카드를 띄우면 엔진이 앱에 응답 요청을 보내지 않는다. collie(herdr 화면을 폰에 비추는 플러그인)는 폰 입력을 터미널 키로
 // 넣어 엔진에겐 터미널(composer) 입력으로 보인다. 그래서 마지막 사람 입력이 어디서 왔는지로 고른다:
@@ -109,109 +95,8 @@ export function numberProblem(question: AskQuestion, text: string): string | nul
   return null
 }
 
-// 기다리는 cat 에 답을 넘긴다(register.tsx 의 replyAsk 와 같다: $ 는 파일을 넘지 못한다).
-async function reply($: EngineInterface, dir: string, payload: AskReply | { kind: 'cancel' }) {
-  await $.process.run(['tee', `${dir}/answer`], { stdin: JSON.stringify(payload), timeoutMs: 3000 })
-}
-
-async function isBridged($: EngineInterface, sessionId: string): Promise<boolean> {
-  const [configDir, home] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), $.env.get('HOME')])
-  const base = configDir || (home ? `${home}/.claude` : '')
-  if (!base || sessionId === '') return false
-  for (const entry of await $.fs.list(`${base}/sessions`).catch(() => [])) {
-    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    if (isBridgedRecord(await $.fs.read(`${base}/sessions/${entry.name}`).catch(() => ''), sessionId)) return true
-  }
-  return false
-}
-
 // 알림 본문: 첫 질문, 여러 개면 "외 N개".
 export function askNotice(questions: readonly AskQuestion[]): string {
   const first = questions[0]?.question ?? ''
   return questions.length > 1 ? T.moreQuestions(first, questions.length - 1) : first
-}
-
-// 카드로 물어도 되는 세션인지: 터미널 하나만 붙어 있고, 다른 카드(질문·계획)가 떠 있지 않고, 마지막 사람 입력이 폰에서 오지 않았어야 한다(PHONE).
-export async function cardSession($: EngineInterface): Promise<boolean> {
-  const surfaces = await $.session.surfaces()
-  if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return false
-  if ((await read($, asking)) !== null || (await read($, planAsking)) !== null) return false
-  const origin = await read($, promptOrigin)
-  if (origin !== null) return origin === 'composer'
-  // 입력이 없었을 때만 세션 상태 파일로 Remote Control 을 본다. 파일은 엔진이 지우기도 한다.
-  const sessionId = await $.session.id().catch(() => '')
-  return !(await isBridged($, sessionId).catch(() => false))
-}
-
-// 답을 받을 임시 폴더와 그 안의 이름 있는 파이프(answer). 못 만들면 ''.
-export async function openReplyPipe($: EngineInterface): Promise<string> {
-  const made = await $.process.run(['mktemp', '-d'], { timeoutMs: 3000 }).catch(() => null)
-  const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
-  if (dir === '') return ''
-  const piped = await $.process.run(['mkfifo', `${dir}/answer`], { timeoutMs: 3000 }).catch(() => null)
-  if (piped?.exitCode === 0) return dir
-  await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
-  return ''
-}
-
-// 카드 버튼이 파이프에 쓴 답(JSON 글)을 기다린다. 엔진 창으로 넘겨야 하면 null. 끝나면 폴더를 지운다.
-// 턴을 중단하면(Esc) {"kind":"cancel"} 을 써서 기다리던 cat 을 끝낸다.
-export async function awaitReply($: EngineInterface, signal: AbortSignal, dir: string): Promise<string | null> {
-  const onAbort = () => void reply($, dir, { kind: 'cancel' }).catch(() => undefined)
-  signal.addEventListener('abort', onAbort)
-  let answered: string | null = JSON.stringify({ kind: 'cancel' })
-  for (let round = 0; round < WAIT_ROUNDS && !signal.aborted; round++) {
-    const startedAt = await $.clock.now()
-    // 시간이 다 되면 cat 이 죽고 호출은 거절된다(null): 한 바퀴가 끝난 것
-    const ran = await $.process.run(['cat', `${dir}/answer`], { timeoutMs: WAIT_ROUND_S * 1000 }).catch(() => null)
-    if (ran !== null && ran.exitCode === 0 && ran.stdout.trim() !== '') {
-      answered = ran.stdout
-      break
-    }
-    const now = await $.clock.now()
-    // 기다리지 못하고 곧바로 끝났으면(파이프가 사라졌다) 헛돌지 않고 엔진 창에 넘긴다
-    if (now - startedAt < 1000) {
-      answered = null
-      break
-    }
-  }
-  signal.removeEventListener('abort', onAbort)
-  await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
-  return answered
-}
-
-export function registerAsk(on: On, notify: boolean) {
-  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
-    const questions = parseQuestions(e.questions)
-    if (questions === null) return next(e)
-    if (!(await cardSession($))) return next(e)
-    const dir = await openReplyPipe($)
-    if (dir === '') return next(e)
-    const id = e.tool_use_id ?? dir
-    const shownAt = await $.clock.now()
-    await update($, asking, () => ({ id, dir, questions, step: 0, picks: questions.map(() => []), texts: questions.map(() => ''), shownAt }))
-    if (notify) {
-      void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
-    }
-    const answered = await awaitReply($, next.signal, dir)
-    await update($, asking, () => null)
-    if (answered === null) return next(e)
-
-    let answer: AskReply = { kind: 'cancel' }
-    try {
-      answer = JSON.parse(answered) as AskReply
-    } catch {
-      answer = { kind: 'cancel' }
-    }
-    switch (answer.kind) {
-      case 'answer':
-        return { result: { questions: e.questions, answers: answer.answers } }
-      case 'engine':
-        return next(e)
-      case 'dismiss':
-        return { deny: 'The user closed the question without answering.' }
-      case 'cancel':
-        return { deny: 'The question was cancelled before the user answered.' }
-    }
-  })
 }

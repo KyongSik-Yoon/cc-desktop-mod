@@ -12,7 +12,7 @@ import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withP
 import type { PredictedCall, RunCursor } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
-import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, awaitReply, cardSession, isPhoneSend, numberProblem, openReplyPipe, registerAsk, type PromptOrigin } from './ask'
+import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, askNotice, isBridgedRecord, isPhoneSend, numberProblem, parseQuestions, type PromptOrigin } from './ask'
 import type { AskReply } from './ask'
 import { CANCEL_REASON, DISMISS_REASON, planInput, planTitle, reviseReason } from './plan'
 import type { PlanReply } from './plan'
@@ -67,10 +67,8 @@ const diff = atom({ plugin: 'desk-look', key: 'diff' } as const, [] as FileDiff[
 const repo = atom({ plugin: 'desk-look', key: 'repo' } as const, null as RepoInfo | null)
 const surface = atom({ plugin: 'desk-look', key: 'surface' } as const, null as Surface | null)
 const runs = atom({ plugin: 'desk-look', key: 'runs' } as const, { firstOf: {}, calls: {} } as Runs)
-// 설정 규칙·PreToolUse 훅이 막아 돌지 않은 호출(tool.check 의 deny). 묶음 줄이 실패가 아니라 "not run" 으로 센다.
+// 설정 규칙·모드가 막아 돌지 않은 호출. 묶음 줄이 실패가 아니라 "not run" 으로 센다(isDenied 참고).
 const notRun = atom({ plugin: 'desk-look', key: 'notRun' } as const, {} as Record<string, true>)
-// 같은 호출의 tool.call 이 바로 알도록 둔 사본: tool.check 에서 쓴 atom 은 next(e) 가 풀린 직후엔 아직 안 보인다.
-const deniedCalls = new Set<string>()
 const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Record<string, ImageInfo>)
 const graphics = atom({ plugin: 'desk-look', key: 'graphics' } as const, null as Graphics)
 // herdr 에 `herdr --remote` 클라이언트가 붙어 있는지. 원격 터미널은 알 수 없고(foot 처럼 kitty 그림을 버리는 곳도 있다)
@@ -3191,6 +3189,15 @@ export function bandStayMs(options: Record<string, unknown>): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 30_000
 }
 
+// 오류로 끝난 호출이 막혀 돌지 않았는지. 엔진은 막힌 호출도 오류 결과로 넘겨 tool.call 만으로는 실패와 가를 수 없어서
+// 같은 호출을 $.tool.check 에 다시 묻는다(설정 규칙·모드의 판정). 판정을 엿보는 tool.check 훅은 디렉터리가 막는다
+// (그대로 넘기는 return next(e)·고정 deny/ask 만 받는다). $.tool.check 는 PreToolUse 훅을 돌리지 않아 훅이 막은 호출은 실패로 남는다.
+async function isDenied($: EngineInterface, tool: string, e: object): Promise<boolean> {
+  const { tool: _tool, tool_use_id: _id, agentId: _agent, ...input } = e as Record<string, unknown>
+  const verdict = await $.tool.check({ tool, input }).catch(() => null)
+  return verdict?.decision === 'deny'
+}
+
 export const register: Register = (on, options) => {
   const side = bubbleSide(options)
   const edge = side === 'right' ? 'flex-end' : 'flex-start'
@@ -3543,17 +3550,6 @@ export const register: Register = (on, options) => {
     return { text: T.prOpened(state?.pr ? prRef(state.pr) : null) }
   })
 
-  // 규칙·PreToolUse 훅이 막은 호출을 적어 둔다. 엔진은 막힌 호출도 오류 결과로 넘겨 tool.call 만으로는 실패와 가를 수 없다.
-  on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
-    const id = e.tool_use_id
-    if (verdict.decision === 'deny' && id !== undefined) {
-      deniedCalls.add(id)
-      await update($, notRun, marks => ({ ...marks, [id]: true as const })).catch(() => undefined)
-    }
-    return verdict
-  })
-
   on('tool.call', async ($, e, next) => {
     // 서브에이전트 안의 호출: 에이전트 패널의 도구 수와 지금 하는 일.
     const agentId = e.agentId
@@ -3568,13 +3564,22 @@ export const register: Register = (on, options) => {
       await update($, turnActivity, state => ({ ...state, calls: [...(state.calls ?? []), call] })).catch(() => undefined)
       if (tool === 'Bash') startProcWatch($)
     }
-    let isNotRun = false
-    const ran = await next(e).finally(() => {
-      isNotRun = deniedCalls.delete(e.tool_use_id)
+    const settle = (isNotRun: boolean) => {
       void settleLog($, e.tool_use_id).catch(() => undefined)
       if (agentId !== undefined) return
       void settleCall($, e.tool_use_id, tool, isNotRun).catch(() => undefined)
-    })
+    }
+    let ran: Awaited<ReturnType<typeof next>>
+    try {
+      ran = await next(e)
+    } catch (error) {
+      settle(false)
+      throw error
+    }
+    // 서브에이전트 호출은 묶음 줄에 그리지 않고, $.tool.check 는 메인 세션 기준으로 답해 묻지 않는다.
+    const isNotRun = agentId === undefined && ran.isError === true && (await isDenied($, tool, e))
+    settle(isNotRun)
+    if (isNotRun) await update($, notRun, marks => ({ ...marks, [e.tool_use_id]: true as const })).catch(() => undefined)
     const editStat = FILE_EDITING.has(tool) && !ran.isError ? diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false, output: ran.result }) : null
     if (ran.isError === true || editStat) void patchLog($, e.tool_use_id, { isError: ran.isError === true, ...(editStat ?? {}) }).catch(() => undefined)
     if (agentId === undefined && tool === 'Bash' && ran.isError === true && !isNotRun) void update($, turnActivity, state => ({ ...state, failed: (state.failed ?? 0) + 1 })).catch(() => undefined)
@@ -5276,6 +5281,112 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
       </Box>
     </Box>
   )
+}
+
+// 질문 카드 훅(어떻게·왜는 ask.tsx). 엔진을 부르는 부분은 계획 카드와 함께 이 파일에 둔다: $ 는 다른 파일 함수로 넘기지 못한다.
+// 훅은 자기 코드 시간 10초 안에 끝나야 하지만, 엔진 호출($)을 기다리는 동안은 시계가 멈춘다($.clock.sleep 은 예외라 못 쓴다).
+// 그래서 임시 폴더에 이름 있는 파이프(answer)를 만들고 cat 으로 읽으며 기다린다. 카드 버튼이 tee 로 답을 써 넣으면 cat 이 끝난다.
+// process.run 은 한 번에 10분까지라, WAIT_ROUND_S 초(9분)마다 시간이 다 돼 끊기면 다시 기다린다.
+// 셸은 쓰지 않는다: 디렉터리 검사가 셸·인라인 스크립트를 리뷰어에게 넘긴다.
+const WAIT_ROUND_S = 540
+const WAIT_ROUNDS = 40
+
+// Remote Control 이 붙어 있는지: 세션 상태 파일(~/.claude/sessions/*.json) 중 이 세션의 것에 bridgeSessionId 가 있으면.
+async function isBridged($: EngineInterface, sessionId: string): Promise<boolean> {
+  const [configDir, home] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), $.env.get('HOME')])
+  const base = configDir || (home ? `${home}/.claude` : '')
+  if (!base || sessionId === '') return false
+  for (const entry of await $.fs.list(`${base}/sessions`).catch(() => [])) {
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    if (isBridgedRecord(await $.fs.read(`${base}/sessions/${entry.name}`).catch(() => ''), sessionId)) return true
+  }
+  return false
+}
+
+// 카드로 물어도 되는 세션인지: 터미널 하나만 붙어 있고, 다른 카드(질문·계획)가 떠 있지 않고, 마지막 사람 입력이 폰에서 오지 않았어야 한다(PHONE).
+async function cardSession($: EngineInterface): Promise<boolean> {
+  const surfaces = await $.session.surfaces()
+  if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return false
+  if ((await read($, asking)) !== null || (await read($, planAsking)) !== null) return false
+  const origin = await read($, promptOrigin)
+  if (origin !== null) return origin === 'composer'
+  // 입력이 없었을 때만 세션 상태 파일로 Remote Control 을 본다. 파일은 엔진이 지우기도 한다.
+  const sessionId = await $.session.id().catch(() => '')
+  return !(await isBridged($, sessionId).catch(() => false))
+}
+
+// 답을 받을 임시 폴더와 그 안의 이름 있는 파이프(answer). 못 만들면 ''.
+async function openReplyPipe($: EngineInterface): Promise<string> {
+  const made = await $.process.run(['mktemp', '-d'], { timeoutMs: 3000 }).catch(() => null)
+  const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
+  if (dir === '') return ''
+  const piped = await $.process.run(['mkfifo', `${dir}/answer`], { timeoutMs: 3000 }).catch(() => null)
+  if (piped?.exitCode === 0) return dir
+  await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
+  return ''
+}
+
+// 카드 버튼이 파이프에 쓴 답(JSON 글)을 기다린다. 엔진 창으로 넘겨야 하면 null. 끝나면 폴더를 지운다.
+// 턴을 중단하면(Esc) {"kind":"cancel"} 을 써서 기다리던 cat 을 끝낸다.
+async function awaitReply($: EngineInterface, signal: AbortSignal, dir: string): Promise<string | null> {
+  const onAbort = () => void replyAsk($, dir, { kind: 'cancel' }).catch(() => undefined)
+  signal.addEventListener('abort', onAbort)
+  let answered: string | null = JSON.stringify({ kind: 'cancel' })
+  for (let round = 0; round < WAIT_ROUNDS && !signal.aborted; round++) {
+    const startedAt = await $.clock.now()
+    // 시간이 다 되면 cat 이 죽고 호출은 거절된다(null): 한 바퀴가 끝난 것
+    const ran = await $.process.run(['cat', `${dir}/answer`], { timeoutMs: WAIT_ROUND_S * 1000 }).catch(() => null)
+    if (ran !== null && ran.exitCode === 0 && ran.stdout.trim() !== '') {
+      answered = ran.stdout
+      break
+    }
+    const now = await $.clock.now()
+    // 기다리지 못하고 곧바로 끝났으면(파이프가 사라졌다) 헛돌지 않고 엔진 창에 넘긴다
+    if (now - startedAt < 1000) {
+      answered = null
+      break
+    }
+  }
+  signal.removeEventListener('abort', onAbort)
+  await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
+  return answered
+}
+
+// AskUserQuestion 을 카드로 묻고, 고른 답을 도구 결과로 돌려준다.
+function registerAsk(on: Parameters<Register>[0], notify: boolean) {
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const questions = parseQuestions(e.questions)
+    if (questions === null) return next(e)
+    if (!(await cardSession($))) return next(e)
+    const dir = await openReplyPipe($)
+    if (dir === '') return next(e)
+    const id = e.tool_use_id ?? dir
+    const shownAt = await $.clock.now()
+    await update($, asking, () => ({ id, dir, questions, step: 0, picks: questions.map(() => []), texts: questions.map(() => ''), shownAt }))
+    if (notify) {
+      void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
+    }
+    const answered = await awaitReply($, next.signal, dir)
+    await update($, asking, () => null)
+    if (answered === null) return next(e)
+
+    let answer: AskReply = { kind: 'cancel' }
+    try {
+      answer = JSON.parse(answered) as AskReply
+    } catch {
+      answer = { kind: 'cancel' }
+    }
+    switch (answer.kind) {
+      case 'answer':
+        return { result: { questions: e.questions, answers: answer.answers } }
+      case 'engine':
+        return next(e)
+      case 'dismiss':
+        return { deny: 'The user closed the question without answering.' }
+      case 'cancel':
+        return { deny: 'The question was cancelled before the user answered.' }
+    }
+  })
 }
 
 // 계획 카드 훅(어떻게·왜는 plan.ts). 계획 파일을 미리보기 패널로 여는 함수가 이 파일에 있어 여기서 등록한다.

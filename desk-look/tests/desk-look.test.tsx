@@ -268,9 +268,17 @@ describe('도구 활동', () => {
   })
 
   test('규칙에 막혀 돌지 않은 호출은 실패가 아니라 not run 으로 센다', KO, async ($, on) => {
-    on('tool.check', (_$, e) => ((e as { tool_use_id?: string }).tool_use_id === 'd' ? { decision: 'deny', reason: 'denied', rule: 'Bash(cat *)' } : { decision: 'allow' }))
-    await $.tool.check({ tool: 'Bash', input: { command: 'cat x.txt' }, tool_use_id: 'd' } as never)
-    await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'k' } as never)
+    // 엔진은 막힌 호출도 오류 결과로 넘긴다: 실패와 막힘은 $.tool.check 의 판정으로만 갈린다.
+    on('clock.now', () => ({ value: 1_000_000 }))
+    on('tool.check', (_$, e) => (String((e.input as { command?: string }).command).startsWith('cat') ? { decision: 'deny', reason: 'denied', rule: 'Bash(cat *)' } : { decision: 'allow' }))
+    on('tool.call', (_$, e) =>
+      ((e as { command?: string }).command === 'ls'
+        ? { result: { stdout: 'x.txt', stderr: '', interrupted: false } }
+        : { result: 'Error', text: 'Error', isError: true }) as never,
+    )
+    await $.tool.call({ tool: 'Bash', command: 'cat x.txt', tool_use_id: 'd' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'k' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'false', tool_use_id: 'f' } as never)
     const group = await $.ui.mount({
       plugin: 'desk-look',
       surface: 'terminal',
