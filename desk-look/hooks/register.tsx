@@ -3824,14 +3824,15 @@ export const register: Register = (on, options) => {
     return renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, (e.viewport?.columns ?? 80) - 4)
   })
 
-  // 힌트 줄: 질문·계획 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다.
+  // 힌트 줄: 질문·계획 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다. 띠를 접어 카드가 안 보일 때 펴는 키를
+  // 맨 앞에 둔다(tail 은 줄 끝에서 잘린다). 입력칸에 글이 있으면 숫자 키가 버튼을 누르지 않으니 펴는 키만.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || e.props.isDraft) return next(e)
+    if (e.surface !== 'terminal') return next(e)
     const state = await read($, asking)
     const question = state?.questions[state.step]
-    if (question) return next({ ...e, props: { ...e.props, tail: askHint(question) } })
-    if ((await read($, planAsking)) !== null) return next({ ...e, props: { ...e.props, tail: `  ${T.planHint}` } })
-    return next(e)
+    const isPlan = !question && (await read($, planAsking)) !== null
+    if (!question && !isPlan) return next(e)
+    return next({ ...e, props: { ...e.props, tail: hintTail(question ? askHint(question) : T.planHint, e.props.isDraft) } })
   })
 
   // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 위에 그대로 둔다.
@@ -4974,9 +4975,13 @@ export function looksLikeMarkdown(text: string): boolean {
   return parseBlocks(text).some(block => block.kind === 'table' || block.kind === 'heading' || block.kind === 'code' || block.kind === 'quote')
 }
 
+export function hintTail(keys: string, isDraft: boolean): string {
+  return `  ${T.bandToggle}${isDraft ? '' : ` · ${keys}`}`
+}
+
 export function askHint(question: { kind: string; multiSelect: boolean }): string {
   const how = question.kind !== 'choice' ? T.askHowText : question.multiSelect ? T.askHowMulti : T.askHowPick
-  return `  ${how} · ${T.askHintTail}`
+  return `${how} · ${T.askHintTail}`
 }
 
 // 질문 카드(입력창 위 띠). 묻는 상태와 도구 호출 훅은 ask.tsx, 그리기와 버튼은 여기($ 는 파일을 넘지 못한다).
@@ -5598,7 +5603,9 @@ const KIND_COLOR: Record<LaneSegment['kind'], string> = {
   test: 'merged',
   command: COLORS.clay,
   agent: 'planMode',
-  advisor: COLORS.warning,
+  // 사용자가 고른 키(엔진 Advising 점에서 본 색). warning 은 테마에 따라 claude·link 와 같은 색이라 묻힌다.
+  // 흐름 줄의 실패는 ✗ 로 가르지만 막대에는 실패 표시가 없다.
+  advisor: COLORS.danger,
   other: COLORS.muted,
   idle: COLORS.muted,
   none: COLORS.muted,
