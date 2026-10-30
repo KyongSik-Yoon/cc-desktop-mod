@@ -324,7 +324,9 @@ const ko = {
   activityGap: (when: string) => `빈 시간 ${when}`,
   laneMain: '메인',
   laneBackground: '백그라운드',
-  kindName: { explore: '탐색', edit: '편집', test: '테스트', command: '명령', agent: '위임', other: '기타' } as Record<'explore' | 'edit' | 'test' | 'command' | 'agent' | 'other', string>,
+  kindName: { explore: '탐색', edit: '편집', test: '테스트', command: '명령', agent: '위임', advisor: '조언', other: '기타' } as Record<'explore' | 'edit' | 'test' | 'command' | 'agent' | 'advisor' | 'other', string>,
+  advisorHidden: '본문은 비공개',
+  advisorTokens: (input: string, output: string) => `읽음 ${input} · 씀 ${output}`,
   bandQuiet: (time: string) => `! 변화 없음 ${time}`,
   bandNoIo: (time: string) => `입출력 없음 ${time}`,
   turnStats: (stats: { commands: number; failed: number; agents: number; tasksDone: number; tasksTotal: number }) =>
@@ -642,7 +644,9 @@ const en: Strings = {
   activityGap: when => `${when} idle`,
   laneMain: 'Main',
   laneBackground: 'Background',
-  kindName: { explore: 'explore', edit: 'edit', test: 'test', command: 'command', agent: 'agent', other: 'other' },
+  kindName: { explore: 'explore', edit: 'edit', test: 'test', command: 'command', agent: 'agent', advisor: 'advisor', other: 'other' },
+  advisorHidden: 'advice not shown',
+  advisorTokens: (input, output) => `read ${input} · wrote ${output}`,
   bandQuiet: time => `! no change ${time}`,
   bandNoIo: time => `no I/O ${time}`,
   turnStats: stats =>

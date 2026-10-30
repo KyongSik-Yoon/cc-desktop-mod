@@ -18,8 +18,8 @@ import { CANCEL_REASON, DISMISS_REASON, planInput, planTitle, reviseReason } fro
 import type { PlanReply } from './plan'
 import { gather, gatheredLines } from './gather'
 import { computeTasks } from './tasks'
-import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
-import type { FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
+import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
+import type { AdvisorCall, FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, gray256, parseSurface } from './theme'
 import { limitName, contextChipMode, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage, barRuns, cacheShares, chartColumns, chartRows, chartTop, columnOf, compactionPoints, hhmm, sparkline, splitOf, sumSplits, turnCosts } from './usage'
@@ -204,6 +204,16 @@ let pendingLogStart: number | null = null
 const ACTIVITY_TICK = 2000
 let activityTimer: Timer | null = null
 let activitySeen = 0
+// /desk-activity 에 넣는 advisor 호출. advisorOn: 설정 advisorModel 이 있을 때(/advisor 로 켬)만 읽는다.
+// advisorFile: 이 세션의 대화 기록 파일(못 찾았으면 path 가 null, missedAt 뒤 ADVISOR_RETRY 동안 다시 찾지 않는다).
+// advisorOffset: 그 파일에서 읽은 데까지(바이트, 늘 줄 경계). advisorSeen: 이 세션에서 읽은 호출.
+let advisorOn = false
+let advisorFile: { session: string; path: string | null; missedAt: number } | null = null
+let advisorOffset = 0
+let advisorSeen = new Map<string, AdvisorCall>()
+// 읽었지만 아직 턴 기록에 못 넣은 호출(기록이 열리기 전에 부른 것).
+let advisorPending = new Set<string>()
+let advisorRead: Promise<void> | null = null
 // 엔진이 백그라운드 안내("(ctrl+b to run in background)")를 띄운 호출과 그 글. 스피너 줄 끝에 단다.
 const backgroundHints = new Map<string, string>()
 
@@ -1763,6 +1773,7 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
   void refreshGraphics($).catch(() => undefined)
   void refreshOpenSessions($).catch(() => undefined)
   void update($, lang, () => currentLang()).catch(() => undefined)
+  void refreshAdvisorGate($).catch(() => undefined)
 }
 
 // 0.55.0 에서 Asana·Slack 패널이 desk-asana·desk-slack 플러그인으로 옮겨 갔다. 그 MCP 서버를 쓰는데 플러그인이
@@ -2246,11 +2257,14 @@ async function openInFront($: EngineInterface, pane: Parameters<EngineInterface[
 }
 
 // 패널이 한동안 그려지지 않았거나(닫힘·접힘), 턴도 끝나고 도는 에이전트·셸도 없으면 멈춘다.
+// advisor 호출은 이 시계에서만 읽는다: 패널이 닫혀 있으면 시계가 서 있어 읽지 않는다. 엔진은 단계가 끝난 뒤에
+// 그 응답의 줄들을 파일에 붙이므로(줄의 시각은 블록마다 끝난 때) 멈추기 전 마지막 한 번이 턴의 마지막 단계를 받는다.
 function startActivityClock($: EngineInterface) {
   activityTimer = $.clock.every(ACTIVITY_TICK, () => {
     void (async () => {
       const [at, startedAt, records] = await Promise.all([$.clock.now(), read($, turnStartedAt), read($, agents)])
       const busy = startedAt !== null || Object.values(records).some(agent => isLive(agent.status))
+      await syncAdvisor($).catch(() => undefined)
       if (at - activitySeen > 2 * ACTIVITY_TICK + 1000 || !busy) {
         activityTimer?.cancel()
         activityTimer = null
@@ -2263,8 +2277,126 @@ function startActivityClock($: EngineInterface) {
   })
 }
 
+// 패널을 열 때 advisor 설정도 다시 본다: /config 나 설정 파일로 켜고 끈 것은 /advisor 훅을 거치지 않는다.
 async function openActivity($: EngineInterface) {
   await openInFront($, { ...(await paneLook($)), id: ACTIVITY_PANE, title: T.paneActivity, focus: true })
+  await refreshAdvisorGate($).catch(() => undefined)
+  await syncAdvisor($).catch(() => undefined)
+}
+
+// ── advisor 호출 ──
+// 엔진 API 에는 advisor 가 없어 대화 기록 JSONL 에서 읽는다. $.fs.read 는 4 MiB 넘는 파일을 거절하고 process.run 의
+// 출력도 그쯤에서 표시 없이 잘려, 지난번에 읽은 곳부터 늘어난 만큼만 tail 로 읽는다. 패널을 오래 닫아 두어 그보다
+// 많이 늘었으면 끝의 ADVISOR_CHUNK 만 읽는다(그 앞의 호출은 지난 턴의 것이라 패널에 안 나온다).
+const ADVISOR_CHUNK = 3_000_000
+const ADVISOR_RETRY = 30_000
+
+async function refreshAdvisorGate($: EngineInterface) {
+  const settings = (await $.settings.read()) as { advisorModel?: unknown }
+  advisorOn = typeof settings.advisorModel === 'string' && settings.advisorModel !== ''
+}
+
+// 대화 기록은 ~/.claude/projects/<작업 폴더의 영숫자 밖 글자를 - 로>/<세션>.jsonl. 폴더 이름이 길어 줄였거나
+// 세션 중에 작업 폴더를 옮겼으면 프로젝트 폴더들에서 찾는다.
+// 새 세션은 첫 메시지 전까지 파일이 없다: 추측한 경로는 매번 보고(stat 하나), 폴더를 다 뒤지는 것만 ADVISOR_RETRY 에 한 번.
+async function advisorPath($: EngineInterface): Promise<string | null> {
+  const [session, now] = await Promise.all([$.session.id(), $.clock.now()])
+  if (advisorFile?.session === session && advisorFile.path !== null) return advisorFile.path
+  if (advisorFile?.session !== session) {
+    advisorOffset = 0
+    advisorSeen = new Map()
+    advisorPending = new Set()
+    advisorFile = { session, path: null, missedAt: 0 }
+  }
+  const root = `${await $.env.get('HOME')}/.claude/projects`
+  const name = `${session}.jsonl`
+  const guess = `${root}/${(await $.session.cwd()).replace(/[^a-zA-Z0-9]/g, '-')}/${name}`
+  let path = (await $.fs.stat(guess).catch(() => null)) ? guess : null
+  if (path === null && now - advisorFile.missedAt >= ADVISOR_RETRY) {
+    const folders = (await $.fs.list(root).catch(() => [])).filter(entry => entry.kind === 'dir')
+    const found = await Promise.all(folders.map(folder => $.fs.stat(`${root}/${folder.name}/${name}`).then(() => `${root}/${folder.name}/${name}`, () => null)))
+    path = found.find(item => item !== null) ?? null
+    if (path === null) advisorFile = { session, path, missedAt: now }
+  }
+  if (path !== null) advisorFile = { session, path, missedAt: 0 }
+  return path
+}
+
+// 시계 틱과 패널 열기가 겹치면 도는 읽기 하나를 나눠 받는다.
+function syncAdvisor($: EngineInterface): Promise<void> {
+  if (!advisorOn) return Promise.resolve()
+  advisorRead ??= readAdvisor($).finally(() => {
+    advisorRead = null
+  })
+  return advisorRead
+}
+
+async function readAdvisor($: EngineInterface) {
+  const path = await advisorPath($)
+  if (path === null) return
+  const size = (await $.fs.stat(path)).size
+  // 파일이 줄었으면(다른 파일로 바뀜) 처음부터.
+  if (size < advisorOffset) advisorOffset = 0
+  if (size === advisorOffset) {
+    if (advisorPending.size > 0) await placeAdvisor($)
+    return
+  }
+  const from = Math.max(advisorOffset, size - ADVISOR_CHUNK)
+  const skipped = from > advisorOffset
+  const ran = await $.process.run(['tail', '-c', `+${from + 1}`, path], { timeoutMs: 5000 })
+  const cut = ran.stdout.lastIndexOf('\n')
+  if (ran.exitCode !== 0 || cut < 0) return
+  // 마지막 줄은 아직 쓰는 중일 수 있어 줄바꿈까지만 받는다.
+  const whole = ran.stdout.slice(0, cut + 1)
+  // 건너뛴 자리가 글자 가운데면 앞의 남은 바이트(1~3개)가 저마다 U+FFFD(3바이트)로 읽혀 2바이트씩 더 세진다.
+  const stray = skipped ? (/^�*/.exec(whole)?.[0].length ?? 0) : 0
+  advisorOffset = from + new TextEncoder().encode(whole).length - 2 * stray
+  // 건너뛰고 읽기 시작한 자리는 줄 가운데라 첫 줄을 버린다.
+  const text = skipped ? whole.slice(whole.indexOf('\n') + 1) : whole
+  const hasCalls = text.includes('"type":"server_tool_use"') || text.includes('"type":"advisor_tool_result"')
+  if (hasCalls) advisorSeen = advisorCalls(text, advisorSeen)
+  if (hasCalls || advisorPending.size > 0) await placeAdvisor($)
+}
+
+const advisorEvent = (call: AdvisorCall): ActivityLog['events'][number] => {
+  // 흐름 줄이 앞에 종류(조언)를 붙이므로 모델을 모르면 비워 둔다.
+  const facts = [modelLabel(call.model), call.error ?? (call.input === undefined ? '' : T.advisorTokens(formatTokens(call.input), formatTokens(call.output ?? 0)))]
+  return {
+    id: call.id,
+    tool: 'advisor',
+    label: facts.filter(Boolean).join(' · '),
+    kind: 'advisor',
+    start: call.start,
+    ...(call.end === undefined ? {} : { end: call.end }),
+    ...(call.error === undefined ? {} : { isError: true }),
+  }
+}
+
+// 이 턴 기록의 시간 안에 든 호출만 넣는다. 턴이 끝난 뒤(endedAt)에 읽혀도 넣는다: 기록은 단계가 끝난 뒤 붙는다.
+// 턴 기록은 첫 메인 도구 호출이 와야 열려서, 그 전에 부른 호출은 advisorPending 에 두었다가 기록이 열리면 넣는다.
+// 기록보다 앞선 호출(도구 없이 답한 턴의 것)은 더 기다리지 않는다.
+async function placeAdvisor($: EngineInterface) {
+  await update($, activityLog, log => {
+    const calls = [...advisorSeen.values()]
+    advisorPending = new Set(calls.filter(call => log === null || call.start >= log.startedAt).map(call => call.id))
+    if (log === null) return log
+    const inTurn = (call: AdvisorCall) => call.start >= log.startedAt && (log.endedAt === null || call.start <= log.endedAt)
+    const placed = calls.filter(inTurn)
+    for (const call of placed) advisorPending.delete(call.id)
+    const changed = new Map(
+      placed
+        .map(advisorEvent)
+        .filter(event => !sameJson(log.events.find(item => item.id === event.id), event))
+        .map(event => [event.id, event]),
+    )
+    if (changed.size === 0) return log
+    // 이미 있는 호출은 제자리에서 바꾼다(끝·토큰이 나중에 온다). 배열 순서는 logCall 의 상한 자르기가 쓴다.
+    const known = new Set(log.events.map(event => event.id))
+    return {
+      ...log,
+      events: [...log.events.map(event => changed.get(event.id) ?? event), ...[...changed.values()].filter(event => !known.has(event.id))],
+    }
+  })
 }
 
 // 에이전트 대화를 메인 화면에 띄운다(엔진의 작업 목록에서 고른 것처럼). 그 뒤 Enter 는 그 에이전트에게 간다. id 가 없으면 메인 대화로.
@@ -3106,6 +3238,13 @@ export const register: Register = (on, options) => {
     return done
   })
 
+  // /advisor 로 켜고 끄면 /desk-activity 가 읽을지도 따라간다. 훅 안에서는 바뀌기 전 설정이 읽혀 답한 뒤에 읽는다.
+  on('command.run', { command: 'advisor' }, async ($, e, next) => {
+    const done = await next(e)
+    $.clock.after(300, () => void refreshAdvisorGate($).catch(() => undefined))
+    return done
+  })
+
   // 압축은 컨텍스트 패널의 세션 흐름에 ▲ 로 남긴다. 압축이 일어날 때만 불려 평소엔 하는 일이 없다.
   // precompute 는 아무것도 바꾸지 않고, 에이전트의 압축은 메인 대화의 창이 아니다.
   on('session.compact', async ($, e, next) => {
@@ -3369,7 +3508,7 @@ export const register: Register = (on, options) => {
     const id = e.tool_use_id
     if (verdict.decision === 'deny' && id !== undefined) {
       deniedCalls.add(id)
-      await update($, notRun, marks => ({ ...marks, [id]: true })).catch(() => undefined)
+      await update($, notRun, marks => ({ ...marks, [id]: true as const })).catch(() => undefined)
     }
     return verdict
   })
@@ -5437,6 +5576,7 @@ const KIND_COLOR: Record<LaneSegment['kind'], string> = {
   test: 'merged',
   command: COLORS.clay,
   agent: 'planMode',
+  advisor: COLORS.warning,
   other: COLORS.muted,
   idle: COLORS.muted,
   none: COLORS.muted,
@@ -5535,8 +5675,9 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
   ]
   const total = formatElapsed(end - log.startedAt)
   const axis = `${' '.repeat(LANE_LABEL)}0${' '.repeat(Math.max(1, width - 1 - total.length))}${total}`
-  // 기타(MCP·Skill·질문 등)는 그 턴에 있을 때만: 늘 붙이면 범례가 길어진다.
-  const kinds: ActivityKind[] = ['explore', 'edit', 'test', 'command', 'agent', ...(log.events.some(event => event.kind === 'other') ? (['other'] as const) : [])]
+  // 조언·기타(MCP·Skill·질문 등)는 그 턴에 있을 때만: 늘 붙이면 범례가 길어진다.
+  const optional = (['advisor', 'other'] as const).filter(kind => log.events.some(event => event.kind === kind))
+  const kinds: ActivityKind[] = ['explore', 'edit', 'test', 'command', 'agent', ...optional]
   const legend = (
     <Text wrap="truncate-end">
       {' '.repeat(LANE_LABEL)}
@@ -5597,9 +5738,10 @@ export function activityPane(els: Elements['terminal'], input: PaneInput) {
       <Text key={key} wrap="truncate-end">
         {at(row)}
         <Text color={markColor}>{`${mark} `}</Text>
-        {row.kind === 'test' && <Text color={KIND_COLOR.test}>{`${T.kindName.test} `}</Text>}
+        {(row.kind === 'test' || row.kind === 'advisor') && <Text color={KIND_COLOR[row.kind]}>{`${T.kindName[row.kind]} `}</Text>}
         <Text color={COLORS.text}>{row.text}</Text>
         <Text color={COLORS.muted}>{` · ${formatElapsed(row.ms ?? now - row.at)}`}</Text>
+        {row.kind === 'advisor' && <Text color={COLORS.muted}>{` · ${T.advisorHidden}`}</Text>}
       </Text>
     )
   }
