@@ -2841,7 +2841,9 @@ const TASK_MARK: Record<string, { mark: string; color: string }> = {
   killed: { mark: '■', color: COLORS.muted },
 }
 
-function taskRow(els: Els, task: { status?: string; toolUseId?: string; durationMs?: number }, text: string, state: Runs) {
+// 기록에 있는 작업이면 제목을 누를 수 있다: /desk-tasks 에서 그 작업의 상세(에이전트의 답·셸의 출력)를 연다.
+// /code-review 같은 백그라운드 에이전트는 결과를 모델에게만 넘기므로, 사람은 여기서 그 답을 읽는다.
+function taskRow(els: Els, $: EngineInterface, task: { id?: string; status?: string; toolUseId?: string; durationMs?: number }, text: string, state: Runs, known: boolean) {
   const { Box, Text } = els
   const call = Object.values(state.calls)
     .flat()
@@ -2851,12 +2853,17 @@ function taskRow(els: Els, task: { status?: string; toolUseId?: string; duration
     stringField(fields, 'description') ?? (call ? summarize(call.tool, call.input) : undefined) ?? text.split('\n')[0] ?? ''
   const style = TASK_MARK[task.status ?? ''] ?? { mark: '◆', color: COLORS.clay }
   const facts = [task.status, task.durationMs !== undefined ? formatElapsed(task.durationMs) : null].filter(Boolean).join(' · ')
+  const id = known ? task.id : undefined
   return (
     <Box columnGap={1}>
       <Text color={style.color}>{style.mark}</Text>
-      <Text color={COLORS.text} wrap="truncate-end">
-        {title}
-      </Text>
+      {id !== undefined ? (
+        rowButton(els, { key: `task-open-${id}`, onPress: () => void openAgents($, id) }, title, <Text color={COLORS.muted}> ›</Text>)
+      ) : (
+        <Text color={COLORS.text} wrap="truncate-end">
+          {title}
+        </Text>
+      )}
       {facts !== '' && <Text color={COLORS.muted}>{facts}</Text>}
     </Box>
   )
@@ -3595,8 +3602,8 @@ export const register: Register = (on, options) => {
     // 백그라운드 작업 알림과 에이전트가 보낸 메시지: 데스크톱처럼 그 자리에서 펼치는 줄. ctrl+o 화면은 엔진 그대로.
     if (e.surface === 'terminal' && !e.props.isExpanded && (e.props.from || e.props.task)) {
       const els = $.ui.resolve(e)
-      const [openState, state] = await Promise.all([read($, open), read($, runs)])
-      if (e.props.task) return taskRow(els, e.props.task, e.props.text, state)
+      const [openState, state, records] = await Promise.all([read($, open), read($, runs), read($, agents)])
+      if (e.props.task) return taskRow(els, $, e.props.task, e.props.text, state, e.props.task.id !== undefined && e.props.task.id in records)
       return peerRow(els, $, e.props.from?.name ?? 'agent', e.props.text, openState, e.viewport?.columns ?? 80)
     }
     if (e.surface !== 'terminal' || e.props.origin.kind !== 'composer') {
