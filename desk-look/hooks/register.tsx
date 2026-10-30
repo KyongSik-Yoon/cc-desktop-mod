@@ -12,7 +12,7 @@ import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withP
 import type { PredictedCall, RunCursor } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
-import { answerOf, awaitReply, cardSession, numberProblem, openReplyPipe, registerAsk } from './ask'
+import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, awaitReply, cardSession, isPhoneSend, numberProblem, openReplyPipe, registerAsk, type PromptOrigin } from './ask'
 import type { AskReply } from './ask'
 import { CANCEL_REASON, DISMISS_REASON, planInput, planTitle, reviseReason } from './plan'
 import type { PlanReply } from './plan'
@@ -93,7 +93,23 @@ const bandDoneAt = atom({ plugin: 'desk-look', key: 'bandDoneAt' } as const, nul
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
 // 계획 카드 상태(plan.ts, ask.tsx 의 것과 같은 키).
 const planAsking = atom({ plugin: 'desk-look', key: 'planAsk' } as const, null as PlanAskState | null)
-const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | null)
+const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as PromptOrigin | null)
+
+// 터미널 입력이 collie 가 폰에서 보낸 것인지(ask.tsx PHONE): 최근 전송 기록 몇 개만 읽는다.
+// collie 는 herdr 패널에만 입력하므로 herdr 밖이면 읽지 않는다. collie 가 없으면 목록이 없어 false.
+async function typedOnPhone($: EngineInterface): Promise<boolean> {
+  const [paneId, stateHome, home] = await Promise.all([$.env.get('HERDR_PANE_ID'), $.env.get('XDG_STATE_HOME'), $.env.get('HOME')])
+  const base = stateHome || (home ? `${home}/.local/state` : '')
+  if (!paneId || !base) return false
+  const dir = `${base}/collie/sends`
+  const [entries, now] = await Promise.all([$.fs.list(dir).catch(() => []), $.clock.now()])
+  const newest = entries
+    .filter(entry => entry.kind === 'file' && entry.name.endsWith('.json') && now - entry.mtimeMs < PHONE_SEND_MS)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, PHONE_SENDS_READ)
+  const texts = await Promise.all(newest.map(entry => $.fs.read(`${dir}/${entry.name}`).catch(() => '')))
+  return texts.some(text => isPhoneSend(String(text), paneId, now))
+}
 const tasks = atom({ plugin: 'desk-look', key: 'tasks' } as const, [] as TaskItem[])
 const tick = atom({ plugin: 'desk-look', key: 'tick' } as const, 0)
 // 메인 대화에 지금 서 있는 effort(turn.step 에서 effortInForce 로). 스피너 줄 끝에 단다.
@@ -3294,9 +3310,9 @@ export const register: Register = (on, options) => {
     runCursor = null
     // 실행 중인 턴에 들어가는 입력(슬래시 명령·턴 끝까지 기다리게 한 것은 빼고)은 다음 단계의 effort 를 세운다
     if (e.turnId !== undefined && e.command === undefined && !e.wait) inputIntoTurn = true
-    // 사람이 어디서 입력했는지: 질문 카드가 Remote Control 세션에서 카드를 띄울지 고른다(ask.tsx)
-    const origin = e.origin.kind
-    if (origin === 'composer' || origin === 'bridge') await update($, promptOrigin, () => origin).catch(() => undefined)
+    // 사람이 어디서 입력했는지: 질문·계획 카드를 띄울지 고른다(ask.tsx PHONE). 엔진이 만든 프롬프트는 기록을 두고 간다.
+    const origin = e.origin.kind === 'composer' && (await typedOnPhone($).catch(() => false)) ? 'phone' : e.origin.kind
+    if (origin === 'composer' || origin === 'bridge' || origin === 'phone') await update($, promptOrigin, () => origin).catch(() => undefined)
     // 백그라운드 작업이 끝났다는 알림: 셸·모니터는 이것으로만 끝을 안다.
     if (e.origin.kind === 'task-notification') {
       const notices = parseNotices(e.text)
@@ -4997,12 +5013,6 @@ async function replyAsk($: EngineInterface, dir: string, payload: AskReply) {
   await $.process.run(['tee', `${dir}/answer`], { stdin: JSON.stringify(payload), timeoutMs: 3000 })
 }
 
-// 카드를 건드렸다고 알린다: Remote Control 세션에서 엔진 창으로 넘기는 시계를 다시 센다(ask.tsx).
-// 매번 다른 글을 써서 기다리는 훅이 바뀐 것을 안다(답과 같은 tee 로).
-let askTouches = 0
-function touchAsk($: EngineInterface, dir: string) {
-  void $.process.run(['tee', `${dir}/touched`], { stdin: String(++askTouches), timeoutMs: 3000 }).catch(() => undefined)
-}
 
 // 지금 질문에 답을 정하고 다음 질문으로, 마지막이면 답을 보낸다.
 // 선택지 하나를 눌렀을 때. 질문이 바뀐 직후(ASK_SETTLE)의 키는 앞 질문에서 넘어온 것이라 버린다:
@@ -5016,7 +5026,6 @@ async function pickAsk($: EngineInterface, state: AskState, label: string, isPic
   if (!question.multiSelect) return advanceAsk($, state, [label], '')
   const picks = state.picks[state.step] ?? []
   const value = isPicked ? picks.filter(item => item !== label) : [...picks, label]
-  touchAsk($, state.dir)
   await update($, asking, current =>
     current && current.id === state.id ? { ...current, picks: current.picks.map((item, index) => (index === current.step ? value : item)) } : current,
   )
@@ -5033,7 +5042,6 @@ async function advanceAsk($: EngineInterface, state: AskState, picks: string[], 
   const nextPicks = state.picks.map((value, index) => (index === state.step ? picks : value))
   const nextTexts = state.texts.map((value, index) => (index === state.step ? text : value))
   if (state.step + 1 < state.questions.length) {
-    touchAsk($, state.dir)
     const shownAt = await $.clock.now()
     await update($, asking, current =>
       current && current.id === state.id ? { ...current, step: current.step + 1, picks: nextPicks, texts: nextTexts, shownAt } : current,
@@ -5075,7 +5083,6 @@ let askClearRound = 0
 let askBand: string | null = null
 
 async function clearAskText($: EngineInterface, state: AskState) {
-  touchAsk($, state.dir)
   askClearRound++
   await update($, asking, current =>
     current && current.id === state.id ? { ...current, texts: current.texts.map((item, index) => (index === current.step ? '' : item)) } : current,
@@ -5095,7 +5102,6 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
   const isLast = state.step + 1 === total
   const k = `${state.id}-${state.step}`
   const setText = (value: string) => {
-    touchAsk($, state.dir)
     return update($, asking, current =>
       current && current.id === state.id ? { ...current, texts: current.texts.map((item, index) => (index === current.step ? value : item)) } : current,
     )
@@ -5280,15 +5286,14 @@ function registerPlanAsk(on: Parameters<Register>[0], notify: boolean) {
     const plan = typeof input.plan === 'string' ? input.plan : ''
     const path = typeof input.planFilePath === 'string' && isMarkdown(input.planFilePath) ? input.planFilePath : ''
     if (plan.trim() === '' || path === '') return next(e)
-    const session = await cardSession($)
-    if (session === null) return next(e)
+    if (!(await cardSession($))) return next(e)
     const dir = await openReplyPipe($)
     if (dir === '') return next(e)
     const shownAt = await $.clock.now()
     await update($, planAsking, () => ({ id: e.tool_use_id ?? dir, dir, plan, path, text: '', shownAt }))
     if (notify) void $.ui.notify(planTitle(plan) || T.planAskQuestion, { title: T.planAskTitle }).catch(() => undefined)
     await openPreview($, path).catch(() => undefined)
-    const answered = await awaitReply($, next.signal, dir, session.isRemote, shownAt)
+    const answered = await awaitReply($, next.signal, dir)
     await update($, planAsking, () => null)
     if (answered === null) return next(e)
     let answer: PlanReply = { kind: 'cancel' }
@@ -5331,7 +5336,6 @@ async function revisePlan($: EngineInterface, state: PlanAskState, text: string)
 }
 
 async function viewPlan($: EngineInterface, state: PlanAskState) {
-  touchAsk($, state.dir)
   if (state.path) await openPreview($, state.path, true).catch(() => undefined)
 }
 
@@ -5354,7 +5358,6 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], column
   const textRows = askTextRows({ kind: 'text' }, state.text)
   const { mode, rows } = planAskMode(room, textRows)
   const setText = (value: string) => {
-    touchAsk($, state.dir)
     return update($, planAsking, current => (current && current.id === state.id ? { ...current, text: value } : current))
   }
   const head = (

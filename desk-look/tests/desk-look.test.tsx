@@ -1838,7 +1838,7 @@ describe('진행 띠', () => {
   })
 })
 
-import { answerOf, askNotice, numberProblem, parseQuestions } from '../hooks/ask'
+import { answerOf, askNotice, isPhoneSend, numberProblem, parseQuestions } from '../hooks/ask'
 
 test('질문 카드: 그릴 수 있는 질문과 답 모양', KO, () => {
   setLang('ko')
@@ -2172,8 +2172,7 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
     if (e.argv[0] === 'mktemp') return done('/tmp/ask-test\n')
     // 훅은 파이프를 cat 으로 읽으며 기다리고, 카드는 tee 로 답을 넣는다
     if (e.argv[0] === 'cat') return done(await waiting)
-    // 카드를 건드리면(입력·지우기) touched 를 쓴다
-    if (e.argv[0] === 'tee' && e.argv[1] !== '/tmp/ask-test/touched') {
+    if (e.argv[0] === 'tee') {
       expect(e.argv[1]).toBe('/tmp/ask-test/answer')
       answer(e.init?.stdin ?? '')
       return done('')
@@ -2264,8 +2263,7 @@ test('질문 카드: 세션 상태 파일이 없어도 앱(bridge)에서 입력�
 })
 
 // Remote Control 이 붙은 세션: 세션 상태 파일(~/.claude/sessions/*.json)에 이 세션 id 와 bridgeSessionId 가 있다.
-// other 는 그 밖의 파일 읽기(없으면 undefined 로 실패).
-function bridgedSession(on: On, readPaths: string[] = [], other: (path: string) => string | undefined = () => undefined) {
+function bridgedSession(on: On, readPaths: string[] = []) {
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('fs.list', ($, e) =>
     (e as { path?: string }).path === '/home/u/.claude/sessions'
@@ -2274,27 +2272,17 @@ function bridgedSession(on: On, readPaths: string[] = [], other: (path: string) 
   )
   on('fs.read', ($, e) => {
     const path = (e as { path: string }).path
-    if (!path.startsWith('/home/u/.claude/sessions/')) {
-      const text = other(path)
-      if (text === undefined) throw new Error('ENOENT')
-      return { value: text } as never
-    }
+    if (!path.startsWith('/home/u/.claude/sessions/')) throw new Error('ENOENT')
     readPaths.push(path)
     return { value: JSON.stringify({ pid: 4242, sessionId: 'sess-1', bridgeSessionId: 'cse_1' }) } as never
   })
 }
 
-// Remote Control 세션에서 마지막 입력이 터미널이면 카드를 띄운다. 기다림은 5초씩 돌아오고(시계를 5초씩 민다),
-// 카드를 1분 동안 건드리지 않으면 엔진 창으로 넘긴다. pressAt 번째 기다림에서 카드를 누른다.
-async function remoteAsk($: Parameters<TestBody>[0], on: On, pressAt: number | null) {
+test('질문 카드: Remote Control 세션이라도 터미널에서 입력했으면 카드, 오래 두어도 엔진 창으로 넘기지 않는다', KO, async ($, on) => {
   let now = 1_000_000
   let rounds = 0
-  let touched = false
-  // pressAt 번째 기다림은 테스트가 카드를 누를 때까지 붙잡아 둔다
-  let reached: () => void = () => undefined
-  let release: () => void = () => undefined
-  const atPress = new Promise<void>(resolve => (reached = resolve))
-  const pressed = new Promise<void>(resolve => (release = resolve))
+  let answer: (stdout: string) => void = () => undefined
+  const answered = new Promise<string>(resolve => (answer = resolve))
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.id', () => ({ value: 'sess-1' }))
   on('clock.now', () => ({ value: now }))
@@ -2305,56 +2293,108 @@ async function remoteAsk($: Parameters<TestBody>[0], on: On, pressAt: number | n
     const { Text } = $.ui.resolve(e)
     return <Text>engine-band</Text>
   })
-  // 카드가 건드림 파일(touched)에 매번 다른 글을 쓴다. 없을 때 읽으면 실패.
-  let touches = 0
-  bridgedSession(on, [], path => (path === '/tmp/ask-remote/touched' && touches > 0 ? String(touches) : undefined))
+  bridgedSession(on)
   on('process.run', async ($, e) => {
-    const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (e.argv[0] === 'mktemp') return out('/tmp/ask-remote\n')
-    if (e.argv[0] === 'tee' && e.argv[1] === '/tmp/ask-remote/touched') {
-      touched = true
-      touches++
+    if (e.argv[0] === 'tee' && e.argv[1] === '/tmp/ask-remote/answer') {
+      answer(e.init?.stdin ?? '')
       return out('')
     }
     if (e.argv[0] !== 'cat') return out('')
-    // 5초씩 기다리고, 시간이 다 되면 cat 이 죽어 호출이 거절된다
-    expect(e.init?.timeoutMs).toBe(5000)
+    // 9분씩 기다린다. 처음 세 번(27분)은 아무도 답하지 않아 시간이 다 된다
+    expect(e.init?.timeoutMs).toBe(540_000)
     rounds++
-    if (rounds === pressAt) {
-      reached()
-      await pressed
+    if (rounds <= 3) {
+      now += 540_000
+      throw new Error('timed out')
     }
-    now += 5000
-    throw new Error('timed out')
+    return out(await answered)
   })
   await $.prompt.submit({ text: '터미널에서', origin: { kind: 'composer' }, wait: false } as never)
   const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 96 } as never })
   const call = $.tool.call({
     tool: 'AskUserQuestion',
-    questions: [{ question: '어느 쪽?', header: '방향', multiSelect: true, options: [{ label: '왼쪽' }, { label: '오른쪽' }] }],
+    questions: [{ question: '어느 쪽?', header: '방향', multiSelect: false, options: [{ label: '왼쪽' }, { label: '오른쪽' }] }],
   } as never)
-  if (pressAt !== null) {
-    await atPress
-    const key = /"key":"(ask-[^"]+-1)"/.exec(JSON.stringify(await band.drawn()))?.[1]
-    await band.press({ key: key ?? '' })
-    // 고른 것이 카드에 반영될 때까지
-    for (let tries = 0; tries < 50 && !touched; tries++) await wait(10)
-    expect(JSON.stringify(await band.drawn())).toContain('☑')
-    release()
-  }
-  const result = await call
-  expect(await band.find({ type: 'Text', text: '어느 쪽?' })).toBeUndefined()
+  for (let tries = 0; tries < 50 && rounds < 4; tries++) await wait(10)
+  expect(rounds).toBe(4)
+  const key = /"key":"(ask-[^"]+-1)"/.exec(JSON.stringify(await band.drawn()))?.[1]
+  await band.press({ key: key ?? '' })
+  expect(((await call) as { result?: { answers?: Record<string, string> } }).result?.answers).toEqual({ '어느 쪽?': '오른쪽' })
   await band.unmount()
-  return { result, rounds }
-}
-
-test('질문 카드: Remote Control 세션이라도 터미널에서 입력했으면 카드, 1분 손대지 않으면 엔진 창으로', KO, async ($, on) => {
-  expect(await remoteAsk($, on, null)).toEqual({ result: { result: 'engine' }, rounds: 12 })
 })
 
-test('질문 카드: 넘기기 전에 카드를 건드리면 1분을 다시 센다', KO, async ($, on) => {
-  // 6번째 기다림(30초)에 누르면 그 뒤로 1분: 6 + 12 = 18번
-  expect(await remoteAsk($, on, 6)).toEqual({ result: { result: 'engine' }, rounds: 18 })
+test('질문 카드: collie 가 폰에서 보낸 입력이면 엔진 창, 다른 패널로 보낸 기록이면 카드', KO, async ($, on) => {
+  const now = 1_000_000
+  const scripts: (readonly string[])[] = []
+  let record = ''
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('clock.now', () => ({ value: now }))
+  on('ui.notify', () => ({ value: { isSent: true, channel: 'ghostty' } }))
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  on('tool.call', () => ({ result: 'engine' }) as never)
+  const env: Record<string, string> = { XDG_STATE_HOME: '/state', HOME: '/home/u', HERDR_PANE_ID: 'w1:p2' }
+  on('env.get', ($, e) => ({ value: env[e.name] }))
+  // 20초보다 오래된 기록은 읽지도 않는다
+  on('fs.list', ($, e) =>
+    (e as { path?: string }).path === '/state/collie/sends'
+      ? ({ value: [{ name: 'stale.json', kind: 'file', size: 1, mtimeMs: now - 60_000, isLink: false }, { name: 'new.json', kind: 'file', size: 1, mtimeMs: now - 800, isLink: false }] } as never)
+      : ({ value: [] } as never),
+  )
+  const reads: string[] = []
+  on('fs.read', ($, e) => {
+    const path = (e as { path: string }).path
+    if (path.includes('/collie/')) reads.push(path)
+    return { value: path === '/state/collie/sends/new.json' ? record : '{}' } as never
+  })
+  on('process.run', ($, e) => {
+    scripts.push(e.argv)
+    // 카드를 띄웠으면 곧바로 엔진 창 버튼을 누른 답
+    const stdout = e.argv[0] === 'mktemp' ? '/tmp/ask-phone\n' : e.argv[0] === 'cat' ? JSON.stringify({ kind: 'engine' }) : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const ask = () => $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: '어느 쪽?', header: '', options: [{ label: 'a' }] }] } as never)
+  const carded = () => scripts.filter(argv => argv[0] === 'mktemp').length
+  // herdr 가 세션 id 를 아직 몰라 "claude:-" 로 쓴 기록도 패널로 맞춘다
+  record = JSON.stringify({ paneId: 'w1:p2', paneGeneration: 'claude:-', mode: 'send', acceptedAt: now - 1500, submitSentAt: now - 800 })
+  await $.prompt.submit({ text: '폰에서', origin: { kind: 'composer' }, wait: false } as never)
+  expect(await ask()).toEqual({ result: 'engine' })
+  expect(carded()).toBe(0)
+  expect(reads).toEqual(['/state/collie/sends/new.json'])
+  // 엔진이 만든 프롬프트(작업 끝남 알림)는 기록을 바꾸지 않는다
+  record = ''
+  await $.prompt.submit({ text: '<task-notification></task-notification>', origin: { kind: 'task-notification' }, wait: false } as never)
+  expect(await ask()).toEqual({ result: 'engine' })
+  expect(carded()).toBe(0)
+  // 다른 패널로 보낸 기록이면 이 입력은 터미널에서 왔다
+  record = JSON.stringify({ paneId: 'w1:p3', mode: 'send', submitSentAt: now - 800 })
+  await $.prompt.submit({ text: '터미널에서', origin: { kind: 'composer' }, wait: false } as never)
+  await ask()
+  expect(carded()).toBe(1)
+  // herdr 밖이면 collie 기록을 보지 않는다
+  record = JSON.stringify({ paneId: 'w1:p2', mode: 'send', submitSentAt: now - 800 })
+  delete env.HERDR_PANE_ID
+  reads.length = 0
+  await $.prompt.submit({ text: '터미널에서', origin: { kind: 'composer' }, wait: false } as never)
+  await ask()
+  expect(carded()).toBe(2)
+  expect(reads).toEqual([])
+})
+
+test('collie 전송 기록: 이 패널로 20초 안에 Enter 까지 넣은 보내기만 폰 입력', KO, () => {
+  const at = (fields: Record<string, unknown>) => JSON.stringify({ paneId: 'w1:p2', mode: 'send', ...fields })
+  expect(isPhoneSend(at({ submitSentAt: 990, acceptedAt: 100 }), 'w1:p2', 1000)).toBe(true)
+  // 사이 띄어쓰기·들여쓰기가 달라도
+  expect(isPhoneSend(JSON.stringify(JSON.parse(at({ submitSentAt: 990 })), null, 2), 'w1:p2', 1000)).toBe(true)
+  // Enter 를 넣기 전, 글만 넣는 append·replace 는 책상에서 Enter 를 칠 수 있어 아니다
+  expect(isPhoneSend(at({ acceptedAt: 990 }), 'w1:p2', 1000)).toBe(false)
+  expect(isPhoneSend(at({ mode: 'append', acceptedAt: 990, submitSentAt: 990 }), 'w1:p2', 1000)).toBe(false)
+  expect(isPhoneSend(at({ submitSentAt: 1000 - 20_000 }), 'w1:p2', 1000)).toBe(false)
+  expect(isPhoneSend(at({ submitSentAt: 990 }), 'w1:p3', 1000)).toBe(false)
+  expect(isPhoneSend(at({ submitSentAt: 990 }), '', 1000)).toBe(false)
+  expect(isPhoneSend('not json', 'w1:p2', 1000)).toBe(false)
 })
 
 test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', KO, async ($, on) => {

@@ -279,8 +279,9 @@ declare module 'claude-code' {
       ask: AskState | null
       // 지금 desk-look 카드로 묻고 있는 계획(ExitPlanMode), 없으면 null.
       planAsk: PlanAskState | null
-      // 마지막 사람 입력이 온 곳: 터미널(composer) 또는 Remote Control(bridge). 아직 없으면 null.
-      promptOrigin: 'composer' | 'bridge' | null
+      // 마지막 사람 입력이 온 곳: 터미널(composer), Remote Control(bridge), collie 가 폰에서 넣은 터미널 입력(phone). 아직 없으면 null.
+      // 저장된 옛 값은 composer·bridge 뿐이라 그대로 읽힌다.
+      promptOrigin: 'composer' | 'bridge' | 'phone' | null
       // 컨텍스트·사용 한도(턴이 끝날 때마다), 그리고 컨텍스트 패널을 열 때 계산한 항목별 내역.
       usage: UsageInfo | null
       usageBreakdown: UsageBreakdown | null
