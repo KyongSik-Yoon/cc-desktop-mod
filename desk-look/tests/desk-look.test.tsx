@@ -2769,6 +2769,45 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   await row.unmount()
 })
 
+test('백그라운드 작업 끝남 알림 줄: 기록에 있는 작업이면 눌러서 /desk-tasks 상세(에이전트의 답)를 연다', KO, async ($, on) => {
+  const opened: string[] = []
+  on('process.run', gitStub as never)
+  on('clock.now', () => ({ value: 0 }))
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('agent.list', () => ({ value: [{ id: 'cr', description: '/code-review low', type: 'code-review', status: 'completed' }] as never }))
+  on('session.messages', () => ({
+    value: [
+      { role: 'user', text: '리뷰해 줘', toolUses: [] },
+      { role: 'assistant', text: 'm.py 에서 문제 2개를 찾았어요.', toolUses: [] },
+    ] as never,
+  }))
+  await $.command.run({ command: 'desk-tasks', args: '' } as never)
+  opened.length = 0
+  const mount = (id: string) =>
+    $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'UserMessage',
+      viewport: VIEWPORT,
+      props: { text: 'Agent "/code-review low" finished', origin: { kind: 'task-notification' }, isExpanded: false, task: { id, status: 'completed', durationMs: 9000 } } as never,
+    })
+  const row = await mount('cr')
+  expect(JSON.stringify(await row.drawn())).toContain('Agent \\"/code-review low\\" finished')
+  await row.press({ key: 'task-open-cr' })
+  expect(opened).toEqual(['desk-tasks'])
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 70 } as never })
+  expect(JSON.stringify(await pane.drawn())).toContain('m.py 에서 문제 2개를 찾았어요.')
+  await pane.unmount()
+  await row.unmount()
+  // 기록에 없는 작업은 누를 것이 없다
+  const unknown = await mount('zz')
+  expect(await unknown.find({ type: 'Button', key: 'task-open-zz' })).toBeUndefined()
+  await unknown.unmount()
+})
+
 test('백그라운드 에이전트를 기다리는 턴 끝 줄: 에이전트마다 한 줄, 누르면 그 작업, 끝나면 상태', KO, async ($, on) => {
   const opened: string[] = []
   let status = 'running'
