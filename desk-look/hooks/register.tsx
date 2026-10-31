@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
 
-import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, PlanAskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
+import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
@@ -14,8 +14,6 @@ import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgent
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, askNotice, isBridgedRecord, isPhoneSend, numberProblem, parseQuestions, type PromptOrigin } from './ask'
 import type { AskReply } from './ask'
-import { CANCEL_REASON, DISMISS_REASON, planInput, planTitle, reviseReason } from './plan'
-import type { PlanReply } from './plan'
 import { gather, gatheredLines } from './gather'
 import { computeTasks } from './tasks'
 import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
@@ -89,8 +87,8 @@ const turnStartedAt = atom({ plugin: 'desk-look', key: 'turnStartedAt' } as cons
 const bandDoneAt = atom({ plugin: 'desk-look', key: 'bandDoneAt' } as const, null as number | null)
 // 질문 카드 상태. ask.tsx 의 것과 같은 키다(상태 원본은 파일마다 선언해야 한다).
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
-// 계획 카드 상태(plan.ts, ask.tsx 의 것과 같은 키).
-const planAsking = atom({ plugin: 'desk-look', key: 'planAsk' } as const, null as PlanAskState | null)
+// desk-plan 의 계획 카드. 떠 있으면 스피너 진행 띠·입력창 위 띠·질문 카드가 비킨다.
+const planAsking = atom({ plugin: 'desk-plan', key: 'planAsk' } as const, null as { id: string } | null)
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as PromptOrigin | null)
 
 // 터미널 입력이 collie 가 폰에서 보낸 것인지(ask.tsx PHONE): 최근 전송 기록 몇 개만 읽는다.
@@ -273,7 +271,7 @@ export function updateMessage(exitCode: number, stdout: string, stderr: string):
   return T.updateDone(result.oldVersion ?? '', result.newVersion ?? '')
 }
 
-// desk-asana·desk-slack 을 올렸을 때만 한 줄. 최신이거나 설치하지 않아 실패했으면 null.
+// desk-asana·desk-slack·desk-plan 을 올렸을 때만 한 줄. 최신이거나 설치하지 않아 실패했으면 null.
 export function siblingUpdate(name: string, exitCode: number, stdout: string): string | null {
   if (!isUpdated(exitCode, stdout)) return null
   const result = updateResult(stdout)
@@ -3208,7 +3206,13 @@ export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
   registerAsk(on, options.askNotify !== 'off')
-  registerPlanAsk(on, options.askNotify !== 'off')
+  // desk-plan 이 계획 카드를 띄우거나 "2 계획 보기"를 누르면 계획 파일을 미리보기 패널로 연다.
+  // 형제 플러그인의 상태 쓰기는 로드 순서와 무관하게 이 훅을 부른다($.tool.call 처럼 권한 검사도 거치지 않는다).
+  on('state.set', { plugin: 'desk-plan', key: 'preview' }, async ($, e, next) => {
+    const done = await next(e)
+    if (e.value && isMarkdown(e.value.path)) await openPreview($, e.value.path, e.value.focus).catch(() => undefined)
+    return done
+  }).catch(($, e, next) => next(e))
   const isGather = options.replyInBlocks !== 'off'
   const isPreviewAuto = options.previewAutoOpen !== 'off'
 
@@ -3445,12 +3449,16 @@ export const register: Register = (on, options) => {
     const market = await $.process.run(['claude', 'plugin', 'marketplace', 'update', 'cc-desktop-mod'], { timeoutMs: 150_000 })
     if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
     const ran = await $.process.run(['claude', 'plugin', 'update', 'desk-look@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
-    // 같은 마켓의 desk-asana·desk-slack 도 함께 올린다. 설치하지 않았으면 실패하는데, 그건 알리지 않는다.
-    const [asanaRan, slackRan] = await Promise.all([
-      $.process.run(['claude', 'plugin', 'update', 'desk-asana@cc-desktop-mod', '--json'], { timeoutMs: 150_000 }),
-      $.process.run(['claude', 'plugin', 'update', 'desk-slack@cc-desktop-mod', '--json'], { timeoutMs: 150_000 }),
-    ])
-    const siblings = [siblingUpdate('desk-asana', asanaRan.exitCode, asanaRan.stdout), siblingUpdate('desk-slack', slackRan.exitCode, slackRan.stdout)]
+    // 같은 마켓의 desk-asana·desk-slack·desk-plan 도 함께 올린다. 설치하지 않았으면 실패하는데, 그건 알리지 않는다.
+    // 차례로 돌린다: 저마다 설치 기록(installed_plugins.json)을 읽고 고쳐 쓰므로 동시에 돌면 서로의 기록을 덮을 수 있다.
+    const asanaRan = await $.process.run(['claude', 'plugin', 'update', 'desk-asana@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    const slackRan = await $.process.run(['claude', 'plugin', 'update', 'desk-slack@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    const planRan = await $.process.run(['claude', 'plugin', 'update', 'desk-plan@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    const siblings = [
+      siblingUpdate('desk-asana', asanaRan.exitCode, asanaRan.stdout),
+      siblingUpdate('desk-slack', slackRan.exitCode, slackRan.stdout),
+      siblingUpdate('desk-plan', planRan.exitCode, planRan.stdout),
+    ]
     if (isUpdated(ran.exitCode, ran.stdout) || siblings.some(note => note !== null)) {
       $.clock.after(RELOAD_AFTER_MS, () => void $.command.run({ command: 'reload-plugins' }).catch(() => $.ui.toast(T.reloadFailed)))
     }
@@ -3761,7 +3769,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
-    const [now, startedAt, , list, state, agentRecords, asked, effort] = await Promise.all([
+    const [now, startedAt, , list, state, agentRecords, asked, planCard, effort] = await Promise.all([
       $.clock.now(),
       read($, turnStartedAt),
       read($, tick),
@@ -3769,9 +3777,10 @@ export const register: Register = (on, options) => {
       read($, turnActivity),
       read($, agents),
       read($, asking),
+      read($, planAsking),
       read($, stepEffort),
     ])
-    const isCarded = asked !== null || (await read($, planAsking)) !== null
+    const isCarded = asked !== null || planCard !== null
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
     spinnerSeen = now
     if (ticker === null) {
@@ -3852,15 +3861,15 @@ export const register: Register = (on, options) => {
     return renderMarkdown(e.props.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, (e.viewport?.columns ?? 80) - 4)
   })
 
-  // 힌트 줄: 질문·계획 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다. 띠를 접어 카드가 안 보일 때 펴는 키를
+  // 힌트 줄: 질문 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다. 띠를 접어 카드가 안 보일 때 펴는 키를
   // 맨 앞에 둔다(tail 은 줄 끝에서 잘린다). 입력칸에 글이 있으면 숫자 키가 버튼을 누르지 않으니 펴는 키만.
+  // 계획 카드의 키는 desk-plan 이 자기 훅으로 붙인다.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const state = await read($, asking)
     const question = state?.questions[state.step]
-    const isPlan = !question && (await read($, planAsking)) !== null
-    if (!question && !isPlan) return next(e)
-    return next({ ...e, props: { ...e.props, tail: hintTail(question ? askHint(question) : T.planHint, e.props.isDraft) } })
+    if (!question) return next(e)
+    return next({ ...e, props: { ...e.props, tail: hintTail(askHint(question), e.props.isDraft) } })
   })
 
   // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 위에 그대로 둔다.
@@ -3869,7 +3878,17 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const below = await next(e)
-    const [info, list, state, agentRecords, startedAt, doneAt] = await Promise.all([read($, repo), read($, tasks), read($, turnActivity), read($, agents), read($, turnStartedAt), read($, bandDoneAt)])
+    const [info, list, state, agentRecords, startedAt, doneAt, planCard] = await Promise.all([
+      read($, repo),
+      read($, tasks),
+      read($, turnActivity),
+      read($, agents),
+      read($, turnStartedAt),
+      read($, bandDoneAt),
+      read($, planAsking),
+    ])
+    // desk-plan 의 계획 카드가 떠 있으면 그 카드가 띠를 차지한다: desk-plan 이 안쪽이면 below 가 그 카드다.
+    if (planCard !== null) return below
     const els = $.ui.resolve(e)
     // 턴 동안 진행 띠는 스피너가 그린다. 턴 밖에서는 끝난 띠를 남겨 둔 동안(bandAfterTurn) 그 단계 줄을, 아니면 남은 할 일이 있을 때만
     // 단계 줄을(시간 없이) 여기에.
@@ -3887,7 +3906,7 @@ export const register: Register = (on, options) => {
           })
         : null
     askBand = e.requestId
-    const asked = (await askCard($, els, e.props.bodyColumns, e.props.maxRows)) ?? (await planAskCard($, els, e.props.bodyColumns, e.props.maxRows))
+    const asked = await askCard($, els, e.props.bodyColumns, e.props.maxRows)
     const meter = contextMeter(els, $, await read($, usage), chipMode)
     const prState = showPr ? prChip(els, $, await read($, pr)) : null
     const agentState = agentsChip(els, $, await read($, agents))
@@ -5283,7 +5302,7 @@ async function askCard($: EngineInterface, els: Elements['terminal'], columns: n
   )
 }
 
-// 질문 카드 훅(어떻게·왜는 ask.tsx). 엔진을 부르는 부분은 계획 카드와 함께 이 파일에 둔다: $ 는 다른 파일 함수로 넘기지 못한다.
+// 질문 카드 훅(어떻게·왜는 ask.tsx). 엔진을 부르는 부분은 이 파일에 둔다: $ 는 다른 파일 함수로 넘기지 못한다.
 // 훅은 자기 코드 시간 10초 안에 끝나야 하지만, 엔진 호출($)을 기다리는 동안은 시계가 멈춘다($.clock.sleep 은 예외라 못 쓴다).
 // 그래서 임시 폴더에 이름 있는 파이프(answer)를 만들고 cat 으로 읽으며 기다린다. 카드 버튼이 tee 로 답을 써 넣으면 cat 이 끝난다.
 // process.run 은 한 번에 10분까지라, WAIT_ROUND_S 초(9분)마다 시간이 다 돼 끊기면 다시 기다린다.
@@ -5303,7 +5322,7 @@ async function isBridged($: EngineInterface, sessionId: string): Promise<boolean
   return false
 }
 
-// 카드로 물어도 되는 세션인지: 터미널 하나만 붙어 있고, 다른 카드(질문·계획)가 떠 있지 않고, 마지막 사람 입력이 폰에서 오지 않았어야 한다(PHONE).
+// 카드로 물어도 되는 세션인지: 터미널 하나만 붙어 있고, 다른 카드(질문·desk-plan 계획)가 떠 있지 않고, 마지막 사람 입력이 폰에서 오지 않았어야 한다(PHONE).
 async function cardSession($: EngineInterface): Promise<boolean> {
   const surfaces = await $.session.surfaces()
   if (surfaces.length !== 1 || surfaces[0] !== 'terminal') return false
@@ -5387,153 +5406,6 @@ function registerAsk(on: Parameters<Register>[0], notify: boolean) {
         return { deny: 'The question was cancelled before the user answered.' }
     }
   })
-}
-
-// 계획 카드 훅(어떻게·왜는 plan.ts). 계획 파일을 미리보기 패널로 여는 함수가 이 파일에 있어 여기서 등록한다.
-// 계획 파일이 없으면(계획을 인자로만 받는 세션) 펼쳐 볼 곳이 없어 엔진 창 그대로.
-function registerPlanAsk(on: Parameters<Register>[0], notify: boolean) {
-  on('classic.PreToolUse', { tool: 'ExitPlanMode' }, async ($, e, next) => {
-    const input = planInput(e as unknown as Record<string, unknown>)
-    const plan = typeof input.plan === 'string' ? input.plan : ''
-    const path = typeof input.planFilePath === 'string' && isMarkdown(input.planFilePath) ? input.planFilePath : ''
-    if (plan.trim() === '' || path === '') return next(e)
-    if (!(await cardSession($))) return next(e)
-    const dir = await openReplyPipe($)
-    if (dir === '') return next(e)
-    const shownAt = await $.clock.now()
-    await update($, planAsking, () => ({ id: e.tool_use_id ?? dir, dir, plan, path, text: '', shownAt }))
-    if (notify) void $.ui.notify(planTitle(plan) || T.planAskQuestion, { title: T.planAskTitle }).catch(() => undefined)
-    await openPreview($, path).catch(() => undefined)
-    const answered = await awaitReply($, next.signal, dir)
-    await update($, planAsking, () => null)
-    if (answered === null) return next(e)
-    let answer: PlanReply = { kind: 'cancel' }
-    try {
-      answer = JSON.parse(answered) as PlanReply
-    } catch {
-      answer = { kind: 'cancel' }
-    }
-    switch (answer.kind) {
-      case 'approve':
-        return { allow: true, updatedInput: input }
-      case 'revise':
-        return { deny: reviseReason(answer.text) }
-      case 'engine':
-        return next(e)
-      case 'dismiss':
-        return { deny: DISMISS_REASON }
-      case 'cancel':
-        return { deny: CANCEL_REASON }
-    }
-  })
-}
-
-async function replyPlan($: EngineInterface, dir: string, payload: PlanReply) {
-  await $.process.run(['tee', `${dir}/answer`], { stdin: JSON.stringify(payload), timeoutMs: 3000 })
-}
-
-// 띄운 직후(ASK_SETTLE)의 숫자 키는 카드가 뜨기 전에 누른 것이라 버린다.
-async function approvePlan($: EngineInterface, state: PlanAskState) {
-  if ((await $.clock.now()) - state.shownAt < ASK_SETTLE) return
-  await replyPlan($, state.dir, { kind: 'approve' })
-}
-
-async function revisePlan($: EngineInterface, state: PlanAskState, text: string) {
-  if (text.trim() === '') {
-    $.ui.toast(T.planReviseEmpty)
-    return
-  }
-  await replyPlan($, state.dir, { kind: 'revise', text })
-}
-
-async function viewPlan($: EngineInterface, state: PlanAskState) {
-  if (state.path) await openPreview($, state.path, true).catch(() => undefined)
-}
-
-// 계획 카드가 차지할 줄 수: 테두리 2, 제목·물음 2, 버튼 줄과 그 위 빈 줄 2, 고칠 점 칸과 그 위 빈 줄, 아래 버튼 줄 1.
-// 띠가 모자라면 고칠 점 칸 없는 테두리 카드(4줄), 그것도 안 되면 테두리 없는 두 줄.
-export function planAskMode(room: number, textRows: number): { mode: AskMode; rows: number } {
-  const full = 2 + 2 + 2 + 1 + textRows + 1
-  if (full <= room) return { mode: 'full', rows: full }
-  if (4 <= room) return { mode: 'compact', rows: 4 }
-  return { mode: 'inline', rows: 2 }
-}
-
-async function planAskCard($: EngineInterface, els: Elements['terminal'], columns: number, room: number) {
-  const { Box, Text, Button, Input } = els
-  const state = await read($, planAsking)
-  if (!state) return null
-  const k = state.id
-  const title = planTitle(state.plan)
-  const width = Math.max(30, Math.min(columns, 100))
-  const textRows = askTextRows({ kind: 'text' }, state.text)
-  const { mode, rows } = planAskMode(room, textRows)
-  const setText = (value: string) => {
-    return update($, planAsking, current => (current && current.id === state.id ? { ...current, text: value } : current))
-  }
-  const head = (
-    <Text wrap="truncate-end">
-      <Text color={COLORS.clay}>◇ </Text>
-      <Text color={COLORS.text} weight="semibold">
-        {title || 'Plan'}
-      </Text>
-    </Text>
-  )
-  const actions = (
-    <Box columnGap={2}>
-      <Button key={`plan-approve-${k}`} hotkey="1" label={T.planApprove} onPress={() => void approvePlan($, state)} />
-      <Button key={`plan-view-${k}`} plain hotkey="2" label={T.planView} onPress={() => void viewPlan($, state)} />
-      {mode !== 'full' && <Button key={`plan-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyPlan($, state.dir, { kind: 'engine' })} />}
-    </Box>
-  )
-  if (mode === 'inline') {
-    return {
-      rows,
-      card: (
-        <Box flexDirection="column" width={width} paddingX={1}>
-          {head}
-          {actions}
-        </Box>
-      ),
-    }
-  }
-  if (mode === 'compact') {
-    return {
-      rows,
-      card: (
-        <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
-          {head}
-          {actions}
-        </Box>
-      ),
-    }
-  }
-  return {
-    rows,
-    card: (
-      <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
-        {head}
-        <Text color={COLORS.muted}>{T.planAskQuestion}</Text>
-        <Box marginTop={1}>{actions}</Box>
-        <Box marginTop={1}>
-          <Input
-            key={`plan-text-${k}`}
-            label={T.planReviseLabel}
-            placeholder={T.otherPlaceholder}
-            rows={textRows}
-            value={state.text}
-            submitLabel={T.planRevise}
-            onInput={value => void setText(value)}
-            onSubmit={value => void revisePlan($, state, value)}
-          />
-        </Box>
-        <Box columnGap={2}>
-          <Button key={`plan-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyPlan($, state.dir, { kind: 'engine' })} />
-          <Button key={`plan-close-${k}`} plain dimColor label={T.close} onPress={() => void replyPlan($, state.dir, { kind: 'dismiss' })} />
-        </Box>
-      </Box>
-    ),
-  }
 }
 
 // 데스크톱 입력창의 회색 아래턱: 폭을 채운 알약 띠, 왼쪽에 저장소·브랜치, 오른쪽에 diff 칩.

@@ -9,13 +9,14 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 
 **At a glance**
 
-- **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a plan card, a question card, and a card of the files each turn edited
+- **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a card for each plan, a question card, and a card of the files each turn edited
 - **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage, running background tasks and, with desk-slack, unread Slack messages, and a progress band that shows the current step and what runs now
 - **Seven side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), what ran this turn (`/desk-activity`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
 - **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
 - **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
 - **Asana and Slack panes** as two more plugins from the same marketplace, [desk-asana](desk-asana/README.md) and [desk-slack](desk-slack/README.md): install only the ones you use, so desk-look itself makes no network request of its own and calls no MCP server
+- **Plan approval in a card** instead of the full-screen dialog, as one more plugin from the same marketplace, [desk-plan](desk-plan/README.md)
 - **English or Korean** labels, following Claude Code's own language setting by default
 
 ## Commands
@@ -29,7 +30,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - `/desk-sessions [number]`: Recent sessions by project, with search; switch to one
 - `/desk-fold`: Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position
 - `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it. If you were already writing, the quote goes above your draft (after any earlier quotes) and the caret stays where you were typing. In the prompt, `>` lines (typed, pasted or inserted) look like quotes: the mark dimmed, the text italic and muted
-- `/desk-update`: Update desk-look, and desk-asana and desk-slack if installed, to the latest version
+- `/desk-update`: Update desk-look, and desk-asana, desk-slack and desk-plan if installed, to the latest version
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
 
@@ -47,7 +48,7 @@ Each item reads terminal default → desk-look.
 - **Code blocks**: No way to copy → Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does
 - **Tool calls**: One row per call + a result block → Consecutive calls fold into one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click. Calls a permission rule or the permission mode blocked count as `· 2 not run`, not as failed (a call a PreToolUse hook blocked reads as failed). Expanded, edit diffs show right away (file line numbers, three lines of context), in the desktop diff style when the terminal theme is known. The ctrl+o transcript keeps the engine's full rows
 - **Subagents**: One `Ran an agent` line; notifications and messages only expand with ctrl+o → A card per agent (type and description; tool count, tokens, time and changed lines; click for the result). Background notifications read `✓ description completed · 5s`; click an agent message `◆ name first line ›` to expand it in place. When a turn ends waiting on background agents, a row per agent under `Waiting for N background agents to finish`, `··· type description ›` (its status once it ends); click it for that agent in `/desk-tasks`
-- **Plan (ExitPlanMode)**: Folded into one line with other tools → A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval: the engine's full-screen dialog → A plan card above the prompt, with the plan itself in the preview pane. With an empty prompt, `1` approves (Claude Code returns to the mode you were in before plan mode, as the dialog's first choice does), `2` opens the plan in the pane, type what to change and press Enter to send the plan back, or `9` for the engine dialog (for its other choices)
+- **Plan (ExitPlanMode)**: Folded into one line with other tools → A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval itself stays the engine's dialog; [desk-plan](desk-plan/README.md) asks it in a card above the prompt instead, with the plan in desk-look's preview pane
 - **Questions (AskUserQuestion)**: A list under the prompt → A question card right above the prompt. With an empty prompt, pick by number alone (`1`-`8` options, `0` submit, `9` the default dialog); multi-select with ☐/☑; `Other` takes two clicks to type (the first selects the row), in a field that grows to four lines; hover an option for its preview. A notification goes out when the card opens, as the engine dialog does (`preferredNotifChannel`). The transcript records `Asked question → answer`
 - **End of turn**: A duration line → A card of the files edited that turn, `Edited N files +N −M` (click a file row to open the `/desk-diff` pane at that file), and `⧉ copy` at the right edge to copy the answer, with `❝ quote` beside it to put that answer into the prompt as a quote (only the part you selected, if you selected text in it)
 - **Command output**: Plain text → Output with tables, headings, code or quotes renders as markdown, like an answer
@@ -65,7 +66,7 @@ Each item reads terminal default → desk-look.
 - **Progress band**: Nothing while you wait → Two lines above the prompt while a turn runs. The upper line is the current step: the task list from `TodoWrite` or `TaskCreate` (`✓ 2  ◉ Verifying 8m 2s  ○ Clean up +1   2/5`), or, where Claude Code leaves those tools out (Claude 5 models), the first sentence Claude wrote before its latest tool call (`✓ 2  ◉ Now running it on .12.   step 3`). The lower line is what runs now: the tool call and its time and, for a shell command, the program it started and its CPU (`▶ Verify cursor reads · 8m 2s · java 97%`; Linux), or `Responding` while Claude writes. When that program has used no CPU and no I/O for 3 minutes, `! no change 3m 10s` (network clients like `ssh` show it dim, since the remote may be working). Click the lower line for `/desk-activity`. The lower line appears after 10 seconds or as soon as the upper line has a step, and when the turn ends the lower line folds while the upper line stays 30 seconds with its last step marked done (`bandAfterTurn`; ✕ closes it); a longer turn leaves a dim `3 commands (1 failed) · 2 agents · tasks 5/5` under its end-of-turn line
 - **Progress**: `✻ Simmering… (12s · ↓ 300 tokens)` → `●·· Running…  2m 29s · high` (a word that matches the work, clay-colored dots, and the effort level in force: one you change mid-task shows from your next message, when the model applies it)
 - **Mode indicator**: Dim text at the bottom right of the prompt → A pill chip (with the omarchy theme)
-- **Hint line**: `? for shortcuts` → While a question or plan card is open, ends with the keys that answer it (`pick by number · 9 default dialog · Esc cancel`)
+- **Hint line**: `? for shortcuts` → While a question card is open, ends with the keys that answer it (`pick by number · 9 default dialog · Esc cancel`)
 
 ## Side panes
 
@@ -123,7 +124,7 @@ The current branch's PR (GitHub, through `gh`) or MR (GitLab, through `glab`):
 - `r` reads the PR again
 - Nothing else is changed: no approvals, comments or `Ready for review`
 
-### Asana and Slack: separate plugins
+### Asana, Slack and plan approval: separate plugins
 
 Since 0.55.0 the Asana and Slack panes are their own plugins in this marketplace. desk-look works with or without them; with them, `/desk-fold` folds their panes too, they follow desk-look's language, and desk-slack's unread count shows as the `✉ N` chip in desk-look's band.
 
@@ -131,6 +132,8 @@ Since 0.55.0 the Asana and Slack panes are their own plugins in this marketplace
 - [desk-slack](desk-slack/README.md): `/desk-slack`, the Slack DMs and group DMs sent to you as conversations, replying, and a notification when a new one arrives
 
 Coming from an earlier desk-look: install the one you use (below), and if you had set an Asana personal access token, set it again under `/plugin configure desk-asana@cc-desktop-mod`. desk-look shows this once when it finds an Asana or Slack MCP server without the plugin.
+
+Since 0.69.0 the plan card is its own plugin too, [desk-plan](desk-plan/README.md). It answers Claude Code's permission dialog for you, which a plugin in the Claude plugin directory may not do, so it moved out to keep desk-look listable there. desk-plan needs desk-look: it draws the card in desk-look's band and opens the plan in desk-look's preview pane. Without it, `ExitPlanMode` asks in the engine dialog. If you used the plan card, install desk-plan (below); its notification setting is `notify` under `/plugin configure desk-plan@cc-desktop-mod`.
 
 ### `/desk-preview [file]`: Markdown preview
 
@@ -185,11 +188,12 @@ At the prompt of a Claude Code terminal session:
 
 Answer `y` when asked to add the marketplace, and pick the user scope.
 
-For the Asana or Slack pane, add the plugin you use from the same marketplace:
+For the Asana or Slack pane, or the plan card, add the plugin you use from the same marketplace:
 
 ```
 /plugin install desk-asana@cc-desktop-mod
 /plugin install desk-slack@cc-desktop-mod
+/plugin install desk-plan@cc-desktop-mod
 ```
 
 ## Settings
@@ -198,7 +202,7 @@ Search for `desk-look` in `/config` to find these options.
 
 - `language`: `auto` (default), `en`, `ko`. Language of the mod's own labels, panes, toasts and the text it puts in the prompt. `auto` follows Claude Code's `language` in `/config` when the session starts: Korean when it names Korean, English otherwise
 - `bubbleSide`: `left` (default), `right`. Where your prompt bubble sits. The attachment lines the engine draws under the bubble (`└ 1 skill available` and so on) can't be moved by a plugin and always sit on the left, so `left` keeps them aligned. `right` is like the desktop app
-- `askNotify`: `on` (default), `off`. Notify when a question or plan card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself
+- `askNotify`: `on` (default), `off`. Notify when a question card opens. The engine dialog notifies when it opens, but the engine sends nothing while the card is showing, so the card sends it itself
 - `prBar`: `on` (default), `off`. The PR chip next to the band. It reads the current branch's PR with `gh` (GitHub) or `glab` (GitLab) at session start and after each turn, at most once every 30 seconds, and, while a check (GitLab: a pipeline job) of an open PR is still running, between turns too: every 15 seconds, doubling up to every 2 minutes while nothing changes (a check that never reports, such as one waiting for a runner, would otherwise keep asking); without either tool, or in a repository on neither host, it stays hidden and is not asked again for that branch; network errors are retried after the next turn. `/desk-pr` opens regardless of this setting
 - `previewAutoOpen`: `on` (default), `off`. Open a Markdown document Claude writes in the preview pane when the turn ends. `off` leaves it to the `◫` chips and `/desk-preview`
 - `replyInBlocks`: `on` (default), `off`. Show Claude's reply a block at a time instead of a few lines every tenth of a second: the text before a tool call comes out with the call, and the answer at the end of a turn comes out whole. While it waits, the spinner shows how many lines it holds. A block taller than the screen comes out whole too, so the view ends at its end: scroll up to read its start. Pressing Esc still shows what was held. Holding slows the reply stream itself, which Remote Control clients (the Claude app, claude.ai/code) receive too, so when your last prompt came from the app the reply streams as usual, to keep the app's smooth text
@@ -213,14 +217,14 @@ Run `/desk-update` at the prompt, or from a shell:
 claude plugin update desk-look
 ```
 
-`/desk-update` also updates desk-asana and desk-slack when they are installed, and runs `/reload-plugins` for you when a new version came in; after the shell command, run it in your session.
+`/desk-update` also updates desk-asana, desk-slack and desk-plan when they are installed, and runs `/reload-plugins` for you when a new version came in; after the shell command, run it in your session.
 
 ## Behavior by environment
 
 - **Colors**: uses engine theme keys (`text`, `inactive`, `claude` …), so both light and dark themes are followed.
 - **Gray bubble fill**: drawn only when the [omarchy](https://omarchy.org) theme (`~/.local/state/omarchy/current/theme/colors.toml`) can be read; a theme change is picked up within 3 seconds. Elsewhere the bubble is a rounded border. The rounded ends use Nerd Font half-circle glyphs and Symbols for Legacy Computing blocks; where the terminal draws images (see below), the corners of a multi-line bubble are small images instead, so they come out properly round. The chin band above the prompt works the same way: without the theme it draws only the chips, with no gray band. The `/desk-*` panes take the same gray as their background. Inside tmux, which draws 256 colors, the gray is the nearest gray of the 256-color palette, so a dark theme's bubble doesn't turn light.
 - **Image thumbnails and round bubble corners**: drawn in kitty and Ghostty, and in iTerm2 3.5 or later under fullscreen rendering (a pasted image over 2 MiB stays as `[Image #N]` there). Inside tmux 3.3 or later they are drawn when tmux is attached from one of those terminals (kitty 0.28 or later) with `tmux set -g allow-passthrough on` and `tmux set -g focus-events on`, as Claude Code itself requires (a pasted image over 2 MiB stays as `[Image #N]` there too); not inside zellij. Inside herdr they need both `kitty_graphics = true` under `[experimental]` in herdr's `config.toml` and `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` for Claude Code, which otherwise asks the terminal's name and gets herdr's.
-- **Question and plan cards**: used only in sessions with a single terminal attached. Which one opens follows where you typed your last message: from the terminal, the card, and it stays until you answer; from the Claude app (Remote Control) or from a phone through [collie](https://github.com/AltanS/collie) in a herdr pane, the engine's default dialog, so you can answer there. A question asked while you are away from the terminal therefore does not reach the app until you send a message from it. Esc stops the turn, so it also cancels the question. The plan card needs the plan file (`~/.claude/plans/`); without it the engine dialog opens.
+- **Question card** (and desk-plan's plan card): used only in sessions with a single terminal attached. Which one opens follows where you typed your last message: from the terminal, the card, and it stays until you answer; from the Claude app (Remote Control) or from a phone through [collie](https://github.com/AltanS/collie) in a herdr pane, the engine's default dialog, so you can answer there. A question asked while you are away from the terminal therefore does not reach the app until you send a message from it. Esc stops the turn, so it also cancels the question.
 - **Diff colors in 256-color terminals**: the blended row and word tints are used only when `COLORTERM` is `truecolor` or `24bit` outside tmux. Elsewhere (tmux turns the engine's colors down to 256) the diff uses colors from the xterm 256-color palette, so changed words still stand out from their row.
 - **Links**: URLs in backticks are links too. A link whose text is the URL itself and runs over 40 columns is drawn shorter (without `https://`, then with the middle cut to `…`) so it stays on one line and all of it is clickable; it still goes to the full address. Inside a multiplexer that doesn't pass OSC 8 hyperlinks through, the URL is appended dimly after the name.
 
@@ -240,7 +244,7 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` gathers the Claude Code release notes and the plugin API diff since the last check, to find what desk-look can use or drop. `CLAUDE.md` holds the repository's conventions (latest Claude Code only, a GitHub release for every version).
 
-The same commands work in `desk-asana` and `desk-slack`. desk-asana draws comments with desk-look's Markdown renderer, copied into `desk-asana/hooks/shared/` (a plugin is installed from its own folder only): after changing `desk-look/hooks/markdown.tsx` or `diagram.ts`, run `scripts/sync-shared.sh` and commit both. The release workflow fails while the copy differs (`scripts/sync-shared.sh --check`).
+The same commands work in `desk-asana`, `desk-slack` and `desk-plan`. desk-asana draws comments with desk-look's Markdown renderer, copied into `desk-asana/hooks/shared/` (a plugin is installed from its own folder only): after changing `desk-look/hooks/markdown.tsx` or `diagram.ts`, run `scripts/sync-shared.sh` and commit both. The release workflow fails while the copy differs (`scripts/sync-shared.sh --check`).
 
 `desk-look/.claude-plugin/types/` holds type definitions the engine lays down again every time it loads the mod, so it isn't committed.
 

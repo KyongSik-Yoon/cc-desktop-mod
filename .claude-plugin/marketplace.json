@@ -11,7 +11,7 @@
     {
       "name": "desk-look",
       "source": "./desk-look",
-      "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, plan card, GitHub/GitLab PR bar, diff and context panes",
+      "description": "Claude Code mod that redraws the terminal transcript to look like the Code tab of the Claude desktop app: prompt bubbles, markdown tables, mermaid diagrams, folded tool calls, agent cards, GitHub/GitLab PR bar, diff and context panes",
       "category": "productivity",
       "tags": [
         "mod",
@@ -50,6 +50,18 @@
         "mod",
         "slack",
         "dm",
+        "terminal",
+        "tui"
+      ]
+    },
+    {
+      "name": "desk-plan",
+      "source": "./desk-plan",
+      "description": "Plan approval (ExitPlanMode) in a card above the prompt instead of the full-screen engine dialog, with the plan in desk-look's preview pane: approve, view the plan, or send it back with what to change. Needs desk-look",
+      "category": "productivity",
+      "tags": [
+        "mod",
+        "plan-mode",
         "terminal",
         "tui"
       ]
