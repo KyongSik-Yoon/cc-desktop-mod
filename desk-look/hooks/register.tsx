@@ -3769,7 +3769,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
-    const [now, startedAt, , list, state, agentRecords, asked, planCard, effort] = await Promise.all([
+    const [now, startedAt, , list, state, agentRecords, asked, planUp, effort] = await Promise.all([
       $.clock.now(),
       read($, turnStartedAt),
       read($, tick),
@@ -3780,7 +3780,7 @@ export const register: Register = (on, options) => {
       read($, planAsking),
       read($, stepEffort),
     ])
-    const isCarded = asked !== null || planCard !== null
+    const isCarded = asked !== null || planUp !== null
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
     spinnerSeen = now
     if (ticker === null) {
@@ -3878,7 +3878,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const below = await next(e)
-    const [info, list, state, agentRecords, startedAt, doneAt, planCard] = await Promise.all([
+    const [info, list, state, agentRecords, startedAt, doneAt, planUp] = await Promise.all([
       read($, repo),
       read($, tasks),
       read($, turnActivity),
@@ -3888,7 +3888,7 @@ export const register: Register = (on, options) => {
       read($, planAsking),
     ])
     // desk-plan 의 계획 카드가 떠 있으면 그 카드가 띠를 차지한다: desk-plan 이 안쪽이면 below 가 그 카드다.
-    if (planCard !== null) return below
+    if (planUp !== null) return below
     const els = $.ui.resolve(e)
     // 턴 동안 진행 띠는 스피너가 그린다. 턴 밖에서는 끝난 띠를 남겨 둔 동안(bandAfterTurn) 그 단계 줄을, 아니면 남은 할 일이 있을 때만
     // 단계 줄을(시간 없이) 여기에.
