@@ -114,7 +114,7 @@ async function revisePlan($: EngineInterface, state: PlanAskState, text: string)
 }
 
 // 힌트 줄 끝에 붙이는 키. 입력칸에 글이 있으면 숫자 키가 버튼을 누르지 않으니 펴는 키만.
-export function hintTail(keys: string, isDraft: boolean): string {
+function hintTail(keys: string, isDraft: boolean): string {
   return `  ${T.bandToggle}${isDraft ? '' : ` · ${keys}`}`
 }
 
@@ -124,7 +124,7 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
   const title = planTitle(state.plan)
   const width = Math.max(30, Math.min(columns, 100))
   const textRows = planTextRows(state.text)
-  const { mode } = planAskMode(room, textRows)
+  const mode = planAskMode(room, textRows)
   const setText = (value: string) => {
     return update($, planAsking, current => (current && current.id === state.id ? { ...current, text: value } : current))
   }
@@ -143,17 +143,9 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
       {mode !== 'full' && <Button key={`plan-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyPlan($, state.dir, { kind: 'engine' })} />}
     </Box>
   )
-  if (mode === 'inline') {
+  if (mode !== 'full') {
     return (
-      <Box flexDirection="column" width={width} paddingX={1}>
-        {head}
-        {actions}
-      </Box>
-    )
-  }
-  if (mode === 'compact') {
-    return (
-      <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
+      <Box flexDirection="column" width={width} paddingX={1} {...(mode === 'compact' ? { borderStyle: 'round' as const, borderColor: COLORS.clay } : {})}>
         {head}
         {actions}
       </Box>
@@ -224,9 +216,7 @@ export const register: Register = (on, options) => {
     let answer: PlanReply = { kind: 'cancel' }
     try {
       answer = JSON.parse(answered) as PlanReply
-    } catch {
-      answer = { kind: 'cancel' }
-    }
+    } catch {}
     switch (answer.kind) {
       case 'approve':
         return { allow: true, updatedInput: input }

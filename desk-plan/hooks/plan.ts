@@ -44,12 +44,10 @@ export function planTextRows(text: string): number {
   return Math.min(4, Math.max(2, text.split('\n').length))
 }
 
-// 계획 카드가 차지할 줄 수: 테두리 2, 제목·물음 2, 버튼 줄과 그 위 빈 줄 2, 고칠 점 칸과 그 위 빈 줄, 아래 버튼 줄 1.
-// 띠가 모자라면 고칠 점 칸 없는 테두리 카드(4줄), 그것도 안 되면 테두리 없는 두 줄.
+// 띠 줄 수에 맞는 카드 모양. 다 들어가면 full: 테두리 2, 제목·물음 2, 버튼 줄과 그 위 빈 줄 2, 고칠 점 칸과 그 위 빈 줄,
+// 아래 버튼 줄 1. 모자라면 고칠 점 칸 없는 테두리 카드(compact, 4줄), 그것도 안 되면 테두리 없는 두 줄(inline).
 export type PlanMode = 'full' | 'compact' | 'inline'
-export function planAskMode(room: number, textRows: number): { mode: PlanMode; rows: number } {
-  const full = 2 + 2 + 2 + 1 + textRows + 1
-  if (full <= room) return { mode: 'full', rows: full }
-  if (4 <= room) return { mode: 'compact', rows: 4 }
-  return { mode: 'inline', rows: 2 }
+export function planAskMode(room: number, textRows: number): PlanMode {
+  if (2 + 2 + 2 + 1 + textRows + 1 <= room) return 'full'
+  return 4 <= room ? 'compact' : 'inline'
 }

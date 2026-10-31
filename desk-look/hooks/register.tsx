@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
 
-import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, PlanAskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
+import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
@@ -88,7 +88,7 @@ const bandDoneAt = atom({ plugin: 'desk-look', key: 'bandDoneAt' } as const, nul
 // 질문 카드 상태. ask.tsx 의 것과 같은 키다(상태 원본은 파일마다 선언해야 한다).
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskState | null)
 // desk-plan 의 계획 카드. 떠 있으면 스피너 진행 띠·입력창 위 띠·질문 카드가 비킨다.
-const planAsking = atom({ plugin: 'desk-plan', key: 'planAsk' } as const, null as PlanAskState | null)
+const planAsking = atom({ plugin: 'desk-plan', key: 'planAsk' } as const, null as { id: string } | null)
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as PromptOrigin | null)
 
 // 터미널 입력이 collie 가 폰에서 보낸 것인지(ask.tsx PHONE): 최근 전송 기록 몇 개만 읽는다.
@@ -3770,7 +3770,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
-    const [now, startedAt, , list, state, agentRecords, asked, effort] = await Promise.all([
+    const [now, startedAt, , list, state, agentRecords, asked, planCard, effort] = await Promise.all([
       $.clock.now(),
       read($, turnStartedAt),
       read($, tick),
@@ -3778,9 +3778,10 @@ export const register: Register = (on, options) => {
       read($, turnActivity),
       read($, agents),
       read($, asking),
+      read($, planAsking),
       read($, stepEffort),
     ])
-    const isCarded = asked !== null || (await read($, planAsking)) !== null
+    const isCarded = asked !== null || planCard !== null
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
     spinnerSeen = now
     if (ticker === null) {
@@ -3878,9 +3879,17 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const below = await next(e)
+    const [info, list, state, agentRecords, startedAt, doneAt, planCard] = await Promise.all([
+      read($, repo),
+      read($, tasks),
+      read($, turnActivity),
+      read($, agents),
+      read($, turnStartedAt),
+      read($, bandDoneAt),
+      read($, planAsking),
+    ])
     // desk-plan 의 계획 카드가 떠 있으면 그 카드가 띠를 차지한다: desk-plan 이 안쪽이면 below 가 그 카드다.
-    if ((await read($, planAsking)) !== null) return below
-    const [info, list, state, agentRecords, startedAt, doneAt] = await Promise.all([read($, repo), read($, tasks), read($, turnActivity), read($, agents), read($, turnStartedAt), read($, bandDoneAt)])
+    if (planCard !== null) return below
     const els = $.ui.resolve(e)
     // 턴 동안 진행 띠는 스피너가 그린다. 턴 밖에서는 끝난 띠를 남겨 둔 동안(bandAfterTurn) 그 단계 줄을, 아니면 남은 할 일이 있을 때만
     // 단계 줄을(시간 없이) 여기에.
