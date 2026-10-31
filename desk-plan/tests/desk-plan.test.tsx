@@ -112,3 +112,12 @@ test('계획 카드 훅: desk-look 질문 카드가 떠 있거나 폰·앱에서
   await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
   expect(seen.runs).toContain('mktemp')
 })
+
+test('언어: desk-look 이 아직 언어를 쓰지 않았으면 Claude Code /config 의 language 를 따른다', async ($, on) => {
+  const seen = world(on)
+  on('config.list', () => ({ value: [{ key: 'language', value: '한국어' }] }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  seen.reply = JSON.stringify({ kind: 'approve' })
+  await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(seen.notified).toEqual([JSON.stringify({ text: '빼기 추가', title: 'Claude 계획' })])
+})

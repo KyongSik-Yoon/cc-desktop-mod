@@ -1,4 +1,5 @@
-// 화면 문구 사전: 영어(기본)와 한국어. desk-look 이 고른 언어(desk-look.lang 상태)를 따른다.
+// 화면 문구 사전: 영어(기본)와 한국어. desk-look 이 고른 언어(desk-look.lang 상태)를 따르고, 아직 못 읽으면
+// Claude Code 의 /config 언어(language)를 따른다(desk-slack 의 i18n 과 같다).
 // T 는 한 객체를 계속 쓰고 setLang 이 내용만 바꾼다.
 
 export type Lang = 'en' | 'ko'
@@ -46,7 +47,12 @@ export function setLang(lang: Lang): boolean {
   return true
 }
 
-// 설정 language: en·ko 면 그것, 그 밖은 auto(desk-look 의 언어).
+// Claude Code /config 의 language 값(자유 글: "Korean", "한국어", "ko" …). 모르면 영어.
+export function langFromConfig(value: unknown): Lang {
+  return typeof value === 'string' && /korean|한국|^ko(\b|[-_])/i.test(value.trim()) ? 'ko' : 'en'
+}
+
+// 설정 language: en·ko 면 그것, 그 밖은 auto(desk-look 의 언어, 못 읽으면 Claude Code /config 의 language).
 export function langSetting(options: Record<string, unknown>): Lang | 'auto' {
   return options.language === 'en' || options.language === 'ko' ? options.language : 'auto'
 }

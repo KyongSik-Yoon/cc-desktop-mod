@@ -3450,11 +3450,10 @@ export const register: Register = (on, options) => {
     if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
     const ran = await $.process.run(['claude', 'plugin', 'update', 'desk-look@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
     // 같은 마켓의 desk-asana·desk-slack·desk-plan 도 함께 올린다. 설치하지 않았으면 실패하는데, 그건 알리지 않는다.
-    const [asanaRan, slackRan, planRan] = await Promise.all([
-      $.process.run(['claude', 'plugin', 'update', 'desk-asana@cc-desktop-mod', '--json'], { timeoutMs: 150_000 }),
-      $.process.run(['claude', 'plugin', 'update', 'desk-slack@cc-desktop-mod', '--json'], { timeoutMs: 150_000 }),
-      $.process.run(['claude', 'plugin', 'update', 'desk-plan@cc-desktop-mod', '--json'], { timeoutMs: 150_000 }),
-    ])
+    // 차례로 돌린다: 저마다 설치 기록(installed_plugins.json)을 읽고 고쳐 쓰므로 동시에 돌면 서로의 기록을 덮을 수 있다.
+    const asanaRan = await $.process.run(['claude', 'plugin', 'update', 'desk-asana@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    const slackRan = await $.process.run(['claude', 'plugin', 'update', 'desk-slack@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    const planRan = await $.process.run(['claude', 'plugin', 'update', 'desk-plan@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
     const siblings = [
       siblingUpdate('desk-asana', asanaRan.exitCode, asanaRan.stdout),
       siblingUpdate('desk-slack', slackRan.exitCode, slackRan.stdout),

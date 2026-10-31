@@ -4,7 +4,7 @@ import type { Elements, EngineInterface, Register } from 'claude-code'
 import type { PlanAskState, PlanPreview } from '../types'
 import { CANCEL_REASON, DISMISS_REASON, isBridgedRecord, isMarkdown, planAskMode, planInput, planTextRows, planTitle, reviseReason } from './plan'
 import type { PlanReply } from './plan'
-import { T, langSetting, setLang } from './i18n'
+import { T, langFromConfig, langSetting, setLang } from './i18n'
 
 // 엔진 테마 키(desk-look 의 COLORS 와 같은 역할). hex 를 박으면 터미널 테마와 어긋난다.
 const COLORS = {
@@ -176,17 +176,22 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
   )
 }
 
+// 설정 language 가 auto 일 때: desk-look 이 고른 언어, 아직 없으면 Claude Code /config 의 language.
+// 세션 시작 때는 desk-look 이 언어를 쓰기 전일 수 있다. 그 뒤 desk-look 이 쓰면 state.set 훅이 따라간다.
+async function pickLang($: EngineInterface) {
+  const { value } = await $.state.get({ plugin: 'desk-look', key: 'lang' })
+  if (value === 'en' || value === 'ko') return setLang(value)
+  const row = (await $.config.list().catch(() => [])).find(item => item.key === 'language')
+  return setLang(langFromConfig(row?.value))
+}
+
 export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
   const notify = options.notify !== 'off'
 
-  // 언어: auto 면 desk-look 이 고른 언어를 따른다.
   on('session.start', async ($, e, next) => {
-    if (language === 'auto') {
-      const { value } = await $.state.get({ plugin: 'desk-look', key: 'lang' }).catch(() => ({ value: null }))
-      if ((value === 'en' || value === 'ko') && setLang(value)) $.ui.invalidate('ui.render')
-    }
+    if (language === 'auto' && (await pickLang($).catch(() => false))) $.ui.invalidate('ui.render')
     return next(e)
   })
 
