@@ -8,7 +8,7 @@ Until 0.68.6 the card was part of desk-look. It answers Claude Code's permission
 
 ## Install
 
-At the prompt of a Claude Code terminal session, with desk-look installed:
+At the prompt of a Claude Code terminal session (desk-look comes along if it is not installed yet):
 
 ```
 /plugin install desk-plan@cc-desktop-mod

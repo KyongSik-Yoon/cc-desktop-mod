@@ -8,7 +8,7 @@ desk-plan 은 계획 승인(`ExitPlanMode`)을 화면을 덮는 엔진 창 대�
 
 ## 설치
 
-desk-look 을 설치한 Claude Code 터미널 세션의 입력창에서:
+Claude Code 터미널 세션의 입력창에서(desk-look 이 없으면 함께 설치됩니다):
 
 ```
 /plugin install desk-plan@cc-desktop-mod
