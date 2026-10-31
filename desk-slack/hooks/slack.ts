@@ -22,23 +22,17 @@ export const HISTORY_LIMIT = 30
 // 다른 세션이 이만큼 받은 편지를 읽지 않았으면 이 세션이 넘겨받는다
 export const LEASE_MS = 3 * 60 * 1000
 
-// 검색 도구가 있는 서버. 나머지 도구가 목록에 없으면(deny 규칙은 도구를 목록에서 뺀다) 서버 없음이 아니라 규칙 안내로 간다(slackTools).
+// 검색 도구가 있는 서버. 나머지 도구가 목록에 없으면(deny 규칙은 도구를 목록에서 뺀다) 서버 없음이 아니라 desk-grant 안내로 간다(slackTools).
 export function findSlackServer(names: readonly string[]): SlackServer | null {
   const suffix = `__${SLACK_TOOLS.search}`
   const found = names.find(name => name.startsWith('mcp__') && name.endsWith(suffix) && name.length > 'mcp__'.length + suffix.length)
   return found ? { name: found.slice('mcp__'.length, -suffix.length) } : null
 }
 
-// 패널과 받은 편지 확인이 부르는 도구의 전체 이름. allow 규칙이 다 있어야 부른다(Asana paneTools 와 같은 까닭).
-// 스레드 도구는 뒤에 더한 것이라 빼고 따로 본다(slackThreadTool): 규칙이 없어도 스레드만 못 열고 나머지는 돈다.
+// 패널과 받은 편지 확인이 부르는 도구의 전체 이름. 플러그인의 $.mcp.call 도 권한 검사를 받아, desk-grant 플러그인이
+// 이 호출들을 허용한다(desk-grant/hooks/register.ts 의 목록과 같아야 한다). 다 허용될 때만 부른다.
 export function slackTools(server: SlackServer): string[] {
-  return Object.values(SLACK_TOOLS)
-    .filter(tool => tool !== SLACK_TOOLS.thread)
-    .map(tool => `mcp__${server.name}__${tool}`)
-}
-
-export function slackThreadTool(server: SlackServer): string {
-  return `mcp__${server.name}__${SLACK_TOOLS.thread}`
+  return Object.values(SLACK_TOOLS).map(tool => `mcp__${server.name}__${tool}`)
 }
 
 export type SlackCall = { tool: string; args: Record<string, unknown> }

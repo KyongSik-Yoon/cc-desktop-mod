@@ -159,7 +159,7 @@ describe('Asana 패널', () => {
       return { isFilled: true } as never
     })
     on('tool.list', () => ({ value: [...V1, ...V2].map(name => ({ name, description: '', mcp: true })) }))
-    // 댓글 달기만 allow 규칙이 없다
+    // 댓글 달기만 허용되지 않는다(desk-grant 의 목록이 낡았을 때)
     on('tool.check', ($, e) => ({ decision: e.tool === 'mcp__asana-v2__add_comment' ? 'ask' : 'allow' }) as never)
     on('mcp.call', ($, e) => {
       calls.push({ server: e.server, tool: e.tool, args: e.args })
@@ -202,9 +202,8 @@ describe('Asana 패널', () => {
     expect(drawn).toContain('Support')
     expect(drawn).toContain('프로젝트 없음')
     expect(drawn).toContain('10/10')
-    expect(drawn).toContain('허용 규칙이 없어')
-    expect(drawn).toContain('\\"mcp__asana-v2__add_comment\\",')
-    expect(drawn).not.toContain('mcp__asana-v2__get_task')
+    expect(drawn).toContain('desk-grant 가 이 패널의')
+    expect(drawn).toContain('/desk-update 뒤 /reload-plugins')
 
     await pane.press({ key: 'asana-task-1' })
     await wait(50)
@@ -347,6 +346,8 @@ describe('Asana 패널', () => {
       tools.push(e.tool)
       if (e.tool === 'get_my_tasks') return text({ data: [{ gid: '1', name: 'API 25 문의', memberships: [] }] })
       if (e.tool === 'get_me') return text({ data: { gid: 'u1', name: 'Sam' } })
+      // stories 를 못 읽으면 get_task 의 평문 댓글을 쓴다
+      if (e.tool === 'get_task_stories') return { value: { content: [{ type: 'text', text: 'boom' }], isError: true } }
       return text({
         data: {
           gid: '1',
@@ -384,8 +385,7 @@ describe('Asana 패널', () => {
     const tools: string[] = []
     editMock(on, fetched, { tools })
     const pane = await openTask($)
-    // get_task_stories 에 allow 규칙이 없으면 부르지 않고 get_task 의 평문 댓글을 쓴다
-    expect(tools).not.toContain('get_task_stories')
+    expect(tools).toContain('get_task_stories')
     expect(await pane.find({ key: 'asana-edit-c1' })).toBeDefined()
     expect(await pane.find({ key: 'asana-edit-c2' })).toBeUndefined()
 

@@ -209,7 +209,7 @@ describe('Slack 패널', () => {
     expect(inboxCall(ME, 100).args).toMatchObject({ filters: 'to:<@U0ME>', channel_types: 'im,mpim', after: '100', sort: 'timestamp' })
   })
 
-  // 엔진 흉내: 도구 목록·규칙·MCP 응답. rules 가 false 인 도구는 allow 규칙이 없다.
+  // 엔진 흉내: 도구 목록·판정·MCP 응답. rules 가 false 인 도구는 허용되지 않는다(desk-grant 가 낡았을 때).
   // isClockMocked: 시계는 테스트가 mock.clock 으로 따로 돌린다.
   function slackEngine(on: On, inbox: () => string, options: { rules?: (tool: string) => boolean; surfaces?: () => RenderSurface[]; isClockMocked?: boolean; store?: Record<string, unknown> } = {}) {
     const { rules = () => true, surfaces = () => ['terminal'] } = options
@@ -253,36 +253,19 @@ describe('Slack 패널', () => {
     return { calls, notified }
   }
 
-  test('allow 규칙이 하나라도 없으면 Slack 을 부르지 않고 넣을 규칙을 보인다', KO, async ($, on) => {
-    const { calls } = slackEngine(on, () => search(), { rules: tool => !tool.endsWith('slack_send_message') })
-    await $.command.run({ command: 'desk-slack', args: '' } as never)
-    expect(calls).toEqual([])
-    const pane = await $.ui.mount({ plugin: 'desk-slack', surface: 'terminal', component: 'Pane', requestId: 'desk-slack', viewport: VIEWPORT, props: { title: 'Slack', isFocused: true, bodyColumns: 96 } as never })
-    const drawn = JSON.stringify(await pane.drawn())
-    expect(drawn).toContain('허용 규칙이 없어')
-    expect(drawn).toContain('\\"mcp__claude_ai_Slack__slack_send_message\\",')
-    expect(drawn).not.toContain('slack_read_channel\\"')
-    await pane.unmount()
-  })
-
-  test('스레드 도구만 규칙이 없으면 확인·방 상세는 돌고 스레드는 열지 않고 넣을 규칙을 보인다', KO, async ($, on) => {
-    const inbox = search({ ...KEVIN, ts: '1792131860.241069', text: 'a' })
-    const { calls } = slackEngine(on, () => inbox, { rules: tool => !tool.endsWith('slack_read_thread') })
-    await $.command.run({ command: 'desk-slack', args: '' } as never)
-    expect(calls.map(call => call.tool)).toEqual(['slack_read_user_profile', 'slack_search_public_and_private'])
-    const pane = await $.ui.mount({ plugin: 'desk-slack', surface: 'terminal', component: 'Pane', requestId: 'desk-slack', viewport: VIEWPORT, props: { title: 'Slack', isFocused: true, bodyColumns: 96 } as never })
-    expect(JSON.stringify(await pane.drawn())).not.toContain('허용 규칙이 없어')
-    await pane.press({ key: 'slack-room-D01' })
-    await wait(50)
-    expect(calls.at(-1)?.tool).toBe('slack_read_channel')
-    const drawn = JSON.stringify(await pane.drawn())
-    expect(drawn).toContain('답글 2개')
-    expect(drawn).toContain('스레드 답글은 열지 않아요')
-    expect(drawn).toContain('\\"mcp__claude_ai_Slack__slack_read_thread\\",')
-    await expect(pane.press({ key: 'slack-thread-1792131860.241069' })).rejects.toThrow()
-    expect(calls.some(call => call.tool === 'slack_read_thread')).toBe(false)
-    await pane.unmount()
-  })
+  // desk-grant 가 낡으면 허용되지 않는 도구가 생긴다(없으면 엔진이 플러그인을 끈다). 스레드 도구도 다른 도구와 같다.
+  for (const missing of ['slack_send_message', 'slack_read_thread']) {
+    test(`${missing} 가 허용되지 않으면 Slack 을 부르지 않고 desk-grant 를 올리라고 안내한다`, KO, async ($, on) => {
+      const { calls } = slackEngine(on, () => search(), { rules: tool => !tool.endsWith(missing) })
+      await $.command.run({ command: 'desk-slack', args: '' } as never)
+      expect(calls).toEqual([])
+      const pane = await $.ui.mount({ plugin: 'desk-slack', surface: 'terminal', component: 'Pane', requestId: 'desk-slack', viewport: VIEWPORT, props: { title: 'Slack', isFocused: true, bodyColumns: 96 } as never })
+      const drawn = JSON.stringify(await pane.drawn())
+      expect(drawn).toContain('desk-grant 가 이 패널의')
+      expect(drawn).toContain('/desk-update 뒤 /reload-plugins')
+      await pane.unmount()
+    })
+  }
 
   test('1분 확인: 맡은 세션이 3분 넘게 소식이 없으면 넘겨받되, 터미널이 없는 세션은 맡지 않는다', KO, async ($, on) => {
     let surfaces: RenderSurface[] = []

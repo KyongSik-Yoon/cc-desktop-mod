@@ -12,7 +12,7 @@ Claude Code 터미널 세션의 입력창에서:
 /plugin install desk-asana --marketplace KyongSik-Yoon/cc-desktop-mod
 ```
 
-desk-look 처럼 Claude Code 최신 버전에 맞춰 만듭니다. desk-look 의 `/desk-update` 가 이 플러그인도 올립니다. desk-look 없이는 `claude plugin update desk-asana` 을 실행합니다.
+[desk-grant](../desk-grant/README.ko.md) 가 함께 설치됩니다. desk-look 처럼 Claude Code 최신 버전에 맞춰 만듭니다. desk-look 의 `/desk-update` 가 이 플러그인도 올립니다. desk-look 없이는 `claude plugin update desk-asana` 을 실행합니다.
 
 ## `/desk-asana`: Asana 태스크
 
@@ -28,15 +28,7 @@ Claude Code 에 이미 연결된 Asana MCP 서버로 내 열린 태스크를 읽
 - 드롭다운 사용자 정의 필드 옆 `›` 로 선택지를 펼쳐 하나를 누르면 바뀐다
 - `Claude에게 맡기기` 는 태스크 제목·링크·상태·설명·최근 댓글을 입력창에 채운다
 - 작업 유형의 상태(Open, In Progress…) 옆 `바꾸기` 로 그 유형의 상태들을 펼쳐 골라 바꾼다. 두 Asana MCP 서버 모두 이 키를 버려서, `✎ 고치기` 처럼 개인 토큰을 넣었을 때만 Asana REST API 를 부른다. 토큰이 없으면 `바꾸기` 가 넣는 법을 알려 주기만 하고 아무것도 부르지 않는다
-- 이 Asana 호출은 패널을 열거나 무언가를 눌렀을 때만 하고, Claude 의 호출처럼 Claude Code 권한 검사를 거친다. allow 규칙이 없으면 auto mode 는 거절하고 기본 모드는 매번 묻는다. 패널이 쓰는 도구를 `~/.claude/settings.json` 의 `permissions.allow` 에 넣는다. 빠진 것이 있으면 패널이 그 목록을 보여 준다. V2 서버라면:
-
-  ```json
-  "mcp__asana-v2__get_my_tasks", "mcp__asana-v2__search_tasks", "mcp__asana-v2__get_task",
-  "mcp__asana-v2__get_task_stories", "mcp__asana-v2__add_comment", "mcp__asana-v2__update_tasks", "mcp__asana-v2__search_objects",
-  "mcp__asana-v2__get_me", "mcp__asana-v2__get_projects", "mcp__asana-v2__get_tasks"
-  ```
-
-  이 규칙은 Claude 가 부르는 같은 도구(댓글 달기·태스크 바꾸기 포함)도 허용한다
+- 이 Asana 호출은 패널을 열거나 무언가를 눌렀을 때만 한다. Claude Code 권한 검사를 거치는데, desk-asana 와 함께 설치되는 [desk-grant](../desk-grant/README.ko.md) 가 허용하므로 `permissions.allow` 규칙이 필요 없다. desk-grant 가 없으면 Claude Code 가 desk-asana 를 끄고 `/plugin` 의 Errors 에 띄운다. 0.70.0 전부터 쓰고 있었다면 `/plugin install desk-grant@cc-desktop-mod` 를 한 번 하고(업데이트로는 깔리지 않는다) `/reload-plugins` 한다. desk-grant 가 desk-asana 보다 낡아 호출 하나라도 허용하지 않으면 패널이 desk-grant 를 올리라고 알린다. 예전 `mcp__asana-v2__…` 규칙은 지워도 된다. 태스크를 열 때 댓글(`get_task_stories`)은 늘 읽는다
 
 ## 설정
 

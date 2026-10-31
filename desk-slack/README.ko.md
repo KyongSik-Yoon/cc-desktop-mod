@@ -12,7 +12,7 @@ Claude Code 터미널 세션의 입력창에서:
 /plugin install desk-slack --marketplace KyongSik-Yoon/cc-desktop-mod
 ```
 
-desk-look 처럼 Claude Code 최신 버전에 맞춰 만듭니다. desk-look 의 `/desk-update` 가 이 플러그인도 올립니다. desk-look 없이는 `claude plugin update desk-slack` 을 실행합니다.
+[desk-grant](../desk-grant/README.ko.md) 가 함께 설치됩니다. desk-look 처럼 Claude Code 최신 버전에 맞춰 만듭니다. desk-look 의 `/desk-update` 가 이 플러그인도 올립니다. desk-look 없이는 `claude plugin update desk-slack` 을 실행합니다.
 
 ## `/desk-slack`: Slack DM
 
@@ -27,16 +27,7 @@ desk-look 처럼 Claude Code 최신 버전에 맞춰 만듭니다. desk-look 의
 - Claude Code 세션이 하나라도 떠 있으면 1분마다 새 메시지를 확인하고, 대화방마다 알림을 하나씩 보낸다(알림 채널로, `slackNotify` 로 끔). desk-look 이 있으면 입력창 띠의 `✉ N` 칩이 안 읽은 수이고 누르면 패널이 열린다. 세션이 여럿이면 하나만 확인하고 나머지는 그 결과를 같이 본다
 - 안 읽음은 desk-slack 안에서만 센다: 여기서 열어도 Slack 에서 읽음이 되지 않고, Slack 에서 읽어도 여기서는 지워지지 않는다
 - Slack 커넥터는 이걸로 보낸 메시지 끝에 "Sent using Claude" 줄을 붙인다
-- 네 Slack 도구가 모두 `~/.claude/settings.json` 의 `permissions.allow` 에 있을 때만 Slack 을 부른다. 그 전에는 아무것도 부르지 않고(확인·알림도 없음) 패널이 빠진 규칙을 보여 준다. 확인은 권한 창에 답할 사람이 없는 백그라운드에서 돌기 때문이다:
-
-  ```json
-  "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_channel",
-  "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_read_user_profile"
-  ```
-
-  스레드를 열려면 `"mcp__claude_ai_Slack__slack_read_thread"` 도 넣는다. 이 규칙만 없으면 확인·알림·대화방은 그대로 돌고, 스레드만 열지 않고 대화방에 넣을 규칙을 보여 준다
-
-  이 규칙은 Claude 가 부르는 같은 도구도 허용한다: Claude 가 Slack 을 보낼 때도 묻지 않는다
+- Slack 호출은 desk-slack 과 함께 설치되는 [desk-grant](../desk-grant/README.ko.md) 가 허용하므로 `permissions.allow` 규칙이 필요 없다. desk-grant 가 없으면 Claude Code 가 desk-slack 을 끄고 `/plugin` 의 Errors 에 띄운다. 0.70.0 전부터 쓰고 있었다면 `/plugin install desk-grant@cc-desktop-mod` 를 한 번 하고(업데이트로는 깔리지 않는다) `/reload-plugins` 한다. desk-grant 가 낡아 도구 하나라도 허용하지 않으면 아무것도 부르지 않고(확인·알림도 없음) 패널이 desk-grant 를 올리라고 알린다. 예전 `mcp__claude_ai_Slack__…` 규칙은 지워도 된다
 
 ## 설정
 

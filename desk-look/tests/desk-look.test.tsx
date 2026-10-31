@@ -3167,7 +3167,7 @@ test('아래턱의 +/− 칩을 누르면 diff 패널이 열린다', KO, async (
   await band.unmount()
 })
 
-test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-asana·desk-slack·desk-plan 을 올린다', KO, async ($, on) => {
+test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-asana·desk-slack·desk-plan·desk-grant 를 올린다', KO, async ($, on) => {
   const ran: string[] = []
   const result = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', ($, e: { argv: readonly string[] }) => {
@@ -3177,6 +3177,7 @@ test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-
     if (e.argv[3] === 'desk-asana@cc-desktop-mod') return result(1, '{"command":"update","outcome":"error","message":"Plugin not found"}\n') as never
     if (e.argv[3] === 'desk-slack@cc-desktop-mod') return result(0, '{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.55.0","newVersion":"0.55.1"}\n') as never
     if (e.argv[3] === 'desk-plan@cc-desktop-mod') return result(0, '{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.69.0","newVersion":"0.69.1"}\n') as never
+    if (e.argv[3] === 'desk-grant@cc-desktop-mod') return result(0, '{"command":"update","outcome":"ok","updateOutcome":"up_to_date","oldVersion":"0.70.0","newVersion":"0.70.0"}\n') as never
     return result(0, '{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.15.4","newVersion":"0.15.5"}\n') as never
   })
   // 올라갔으면 답한 뒤 /reload-plugins 를 대신 실행한다
@@ -3191,6 +3192,7 @@ test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-
     'claude plugin update desk-asana@cc-desktop-mod --json',
     'claude plugin update desk-slack@cc-desktop-mod --json',
     'claude plugin update desk-plan@cc-desktop-mod --json',
+    'claude plugin update desk-grant@cc-desktop-mod --json',
   ])
   expect((done as { text: string }).text).toBe('desk-look 을 0.15.4 → 0.15.5 로 올렸어요. 플러그인을 다시 불러와 적용해요.\ndesk-slack 도 0.55.0 → 0.55.1 로 올렸어요.\ndesk-plan 도 0.69.0 → 0.69.1 로 올렸어요.')
   expect(commands).toEqual([])

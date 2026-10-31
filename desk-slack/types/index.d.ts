@@ -13,9 +13,8 @@ export type SlackRoom = { id: string; kind: 'dm' | 'group'; title: string; lastT
 export type SlackInbox = { watermark: string | null; notified: string | null; rooms: Record<string, SlackRoom> }
 // 받은 편지를 읽는 세션(임대). at 은 마지막으로 읽은 시각(ms).
 export type SlackPoller = { session: string; at: number }
-// status: none 은 Slack 서버가 없음. unruled: allow 규칙이 없는 도구(있으면 Slack 을 부르지 않는다).
-// threadUnruled: 스레드 도구에 allow 규칙이 없으면 그 이름(스레드만 열지 않는다).
-export type SlackState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: SlackServer | null; unruled: string[]; threadUnruled?: string; inbox: SlackInbox; error?: string }
+// status: none 은 Slack 서버가 없음. unruled: 허용되지 않는 도구(desk-grant 가 낡았을 때. 있으면 Slack 을 부르지 않는다).
+export type SlackState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: SlackServer | null; unruled: string[]; inbox: SlackInbox; error?: string }
 // thread 는 스레드를 보고 있으면 부모 ts(posts 는 부모와 답글), 아니면 null(채널 기록).
 export type SlackView = { channel: string; thread: string | null; status: 'loading' | 'ok' | 'failed'; posts: SlackPost[]; error?: string }
 

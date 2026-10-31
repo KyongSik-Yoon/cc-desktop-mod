@@ -75,7 +75,7 @@ export function findAsanaServer(names: readonly string[]): AsanaServer | null {
 }
 
 // 패널이 그 서버에서 부르는 도구의 전체 이름. 플러그인의 $.mcp.call 도 권한 검사를 받아(auto mode 분류기는 거절,
-// 기본 모드는 누를 때마다 창) 사람이 settings 의 permissions.allow 에 이 이름들을 넣어야 패널이 막힘없이 돈다.
+// 기본 모드는 누를 때마다 창) desk-grant 플러그인이 이 호출들을 허용한다(desk-grant/hooks/register.ts 의 목록과 같아야 한다).
 export function paneTools(server: AsanaServer): string[] {
   return [...new Set<string>(Object.values(ASANA_TOOLS[server.dialect]))].map(tool => `mcp__${server.name}__${tool}`)
 }

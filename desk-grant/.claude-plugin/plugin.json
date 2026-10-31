@@ -1,0 +1,23 @@
+{
+  "name": "desk-grant",
+  "version": "0.70.0",
+  "description": "Helper for desk-asana and desk-slack: lets the Asana and Slack calls their side panes make run without allow rules in your settings. Only those two plugins' own calls to their known tools are allowed; Claude's calls to the same tools still get Claude Code's usual permission check. Installed with desk-asana or desk-slack",
+  "keywords": [
+    "claude-code",
+    "claude-code-mod",
+    "claude-code-plugin",
+    "permissions",
+    "asana",
+    "slack"
+  ],
+  "author": {
+    "name": "KyongSik-Yoon",
+    "url": "https://github.com/KyongSik-Yoon"
+  },
+  "license": "MIT",
+  "icon": "./.claude-plugin/icon.svg",
+  "documentationUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-grant#readme",
+  "supportUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/issues",
+  "homepage": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
+  "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod"
+}
