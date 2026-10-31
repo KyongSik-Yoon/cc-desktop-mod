@@ -10,8 +10,9 @@ mod API 는 EARLY ACCESS 라 버전마다 바뀌고, 분기는 코드와 테스�
 desk-look 의 `desk-look/.claude-plugin/plugin.json` 버전을 올리는 커밋에 그 버전의 릴리즈 노트 `.github/release-notes/vX.Y.Z.md` 를 함께 넣는다. 커밋이 main 에 들어오면 `.github/workflows/release.yml` 이 그 버전 커밋에 태그 `vX.Y.Z` 를 달고 GitHub 릴리즈를 만든다. 버전 하나에 릴리즈 하나이고, 여러 버전을 쌓았다가 묶어 올리지 않는다.
 클라우드 세션은 태그·릴리즈를 직접 만들 수 없어서(403) 이렇게 Actions 에 맡긴다. 노트 파일이 없으면 워크플로가 빨갛게 실패하니, 노트를 더해 main 에 넣으면 다시 돈다. 이미 있는 태그는 건드리지 않는다.
 
-같은 마켓의 `desk-asana`·`desk-slack` 은 desk-look 과 같은 버전으로 함께 올린다(0.55.0 에서 desk-look 의 Asana·Slack 패널을 떼어 냄). 태그·릴리즈는 desk-look 버전 하나이고, 세 버전이 다르면 워크플로가 실패한다.
-따로 올리면 `/desk-update` 와 릴리즈 노트가 플러그인마다 갈라지고, 세 플러그인이 서로의 상태(`desk-look.lang`·`folded`, `desk-slack.unread` 등)를 읽어 함께 바뀌기 때문이다.
+같은 마켓의 `desk-asana`·`desk-slack`·`desk-plan` 은 desk-look 과 같은 버전으로 함께 올린다(0.55.0 에서 Asana·Slack 패널을, 0.69.0 에서 계획 카드를 desk-look 에서 떼어 냄). 태그·릴리즈는 desk-look 버전 하나이고, 버전이 하나라도 다르면 워크플로가 실패한다.
+따로 올리면 `/desk-update` 와 릴리즈 노트가 플러그인마다 갈라지고, 플러그인들이 서로의 상태(`desk-look.lang`·`folded`, `desk-slack.unread`, `desk-plan.planAsk` 등)를 읽어 함께 바뀌기 때문이다.
+Anthropic 플러그인 디렉터리에는 desk-look 만 제출한다. 권한 창에 대신 답하는 계획 카드(`classic.PreToolUse` allow)는 디렉터리가 막는 모양이라 desk-plan 으로 떼어 냈고, 디렉터리가 막거나 리뷰어에게 넘기는 코드는 desk-look 에 다시 넣지 않는다.
 desk-asana·desk-slack 은 desk-look 의 `markdown.tsx`·`diagram.ts`·`vendor/lovely-mermaid*` 를 각자의 `hooks/shared/` 에 복사해 쓴다(설치본은 플러그인 폴더만 받으므로 `../desk-look` 을 가져올 수 없다). 형제 공용 도우미 `desk-slack/hooks/util.tsx` 도 desk-asana 로 복사하고, 그 `cellWidth` 는 desk-look `markdown.tsx` 의 것과 같아야 한다. 원본을 고친 커밋에는 `scripts/sync-shared.sh` 로 복사본도 함께 넣는다. 어긋나면 워크플로의 `--check` 가 실패한다.
 
 손으로 만들어야 할 때(Actions 가 막혔을 때):

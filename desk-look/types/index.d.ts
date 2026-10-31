@@ -65,9 +65,10 @@ export type AskQuestion = {
 // shownAt: 지금 질문을 띄운 시각(ms). 질문이 바뀐 직후의 숫자 키는 무시한다.
 export type AskState = { id: string; dir: string; questions: AskQuestion[]; step: number; picks: string[][]; texts: string[]; shownAt: number }
 
-// 계획 카드: 엔진 승인 창 대신 입력창 위 카드로 묻는 ExitPlanMode 계획. path 는 계획 파일(미리보기 패널로 연다), 없으면 undefined.
-// text: 고칠 점 입력칸의 글. shownAt: 띄운 시각(ms), 띄운 직후의 숫자 키는 무시한다.
-export type PlanAskState = { id: string; dir: string; plan: string; path?: string; text: string; shownAt: number }
+// desk-plan 의 계획 카드(그쪽 types 와 같은 모양). path 는 계획 파일.
+export type PlanAskState = { id: string; dir: string; plan: string; path: string; text: string; shownAt: number }
+// desk-plan 이 미리보기 패널로 열어 달라는 계획 파일. n 은 쓸 때마다 오른다.
+export type PlanPreview = { path: string; focus: boolean; n: number }
 
 // stats: 진행 띠를 띄운 긴 턴의 요약(명령 수·실패·에이전트·할 일). 짧은 턴과 옛 카드는 없다.
 export type TurnStats = { commands: number; failed: number; agents: number; tasksDone: number; tasksTotal: number }
@@ -277,8 +278,6 @@ declare module 'claude-code' {
       activityAgentOpen: string | null
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
       ask: AskState | null
-      // 지금 desk-look 카드로 묻고 있는 계획(ExitPlanMode), 없으면 null.
-      planAsk: PlanAskState | null
       // 마지막 사람 입력이 온 곳: 터미널(composer), Remote Control(bridge), collie 가 폰에서 넣은 터미널 입력(phone). 아직 없으면 null.
       // 저장된 옛 값은 composer·bridge 뿐이라 그대로 읽힌다.
       promptOrigin: 'composer' | 'bridge' | 'phone' | null
@@ -326,6 +325,11 @@ declare module 'claude-code' {
       ready: boolean
       shown: boolean
       unread: number
+    }
+    // desk-plan(계획 카드)이 쓰는 값: 떠 있는 계획 카드, 미리보기 패널로 열어 달라는 계획 파일.
+    'desk-plan': {
+      planAsk: PlanAskState | null
+      preview: PlanPreview | null
     }
   }
 }

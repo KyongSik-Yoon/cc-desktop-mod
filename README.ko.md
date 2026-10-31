@@ -9,13 +9,14 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 
 **한눈에 보기**
 
-- **데스크톱 앱처럼 읽히는 대화 기록**: 프롬프트 말풍선, 폭을 채우는 표·mermaid 그림·알림 상자가 든 데스크톱 스타일 마크다운, 한 줄로 접혀 눌러서 펴는 도구 호출, 서브에이전트마다 카드, 계획 카드, 질문 카드, 턴마다 고친 파일 카드
+- **데스크톱 앱처럼 읽히는 대화 기록**: 프롬프트 말풍선, 폭을 채우는 표·mermaid 그림·알림 상자가 든 데스크톱 스타일 마크다운, 한 줄로 접혀 눌러서 펴는 도구 호출, 서브에이전트마다 카드, 계획마다 카드, 질문 카드, 턴마다 고친 파일 카드
 - **입력창 위 상태 띠**: 저장소·브랜치·`+N −M`, 그리고 PR 체크·컨텍스트 사용량·도는 백그라운드 작업 칩(desk-slack 이 있으면 안 읽은 Slack 메시지 칩도)과 지금 단계와 지금 도는 일을 보여 주는 진행 띠
 - **오른쪽 패널 일곱 개**, 명령이나 칩을 눌러 엶: diff(`/desk-diff`), 이번 턴에 돈 일(`/desk-activity`), 백그라운드 작업(`/desk-tasks`), PR(`/desk-pr`), 마크다운 미리보기(`/desk-preview`), 컨텍스트·사용 한도(`/desk-context`), 최근 세션(`/desk-sessions`)
 - **diff 줄 댓글**: `/desk-diff` 에서 줄 번호를 눌러 줄·범위에 댓글을 달면, 다음 프롬프트와 함께 Claude 에게 감
 - **마크다운 미리보기**: Claude 가 한 턴에 쓴 문서는 턴이 끝나면 미리보기 패널에 저절로 열림
 - **GitHub 와 GitLab**: PR 은 `gh`, MR 은 `glab` 으로 읽음
 - **Asana·Slack 패널**은 같은 마켓의 플러그인 두 개 [desk-asana](desk-asana/README.ko.md)·[desk-slack](desk-slack/README.ko.md) 로: 쓰는 것만 설치하면 되고, desk-look 자신은 스스로 네트워크 요청을 하지 않고 MCP 서버도 부르지 않음
+- **계획 승인을 카드로**: 화면을 덮는 엔진 창 대신, 같은 마켓의 플러그인 [desk-plan](desk-plan/README.ko.md) 으로
 - **영어·한국어** 표시, 기본은 Claude Code 언어 설정을 따름
 
 ## 명령
@@ -29,7 +30,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - `/desk-sessions [번호]`: 프로젝트별 최근 세션과 검색, 세션 이동
 - `/desk-fold`: 열린 패널을 접어 대화를 넓게, 다시 치면 같은 스크롤 위치로 편다
 - `/desk-quote`: 대화 기록에서 마우스로 고른 글을 `>` 인용으로 입력창에 넣어 묻기. 쓰던 글이 있으면 인용은 그 위(앞서 넣은 인용 다음)에 들어가고 커서는 쓰던 자리에 남음. 입력창의 `>` 줄(치거나 붙여넣거나 넣은 것)은 인용처럼 표시는 흐리게, 글은 기울여 흐린 색으로
-- `/desk-update`: desk-look 과 설치한 desk-asana·desk-slack 을 최신 버전으로
+- `/desk-update`: desk-look 과 설치한 desk-asana·desk-slack·desk-plan 을 최신 버전으로
 
 패널 명령은 Claude 가 일하는 중에도 바로 실행된다. 큐에 들어가거나 턴을 멈추지 않고 패널만 연다.
 
@@ -47,7 +48,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - **코드 블록**: 복사 수단 없음 → 마우스를 올리면 위 테두리 오른쪽에 `⧉ copy`, 누르면 `/copy` 와 같은 길로 복사
 - **도구 호출**: 호출마다 행 + 결과 블록 → 이어진 호출을 `Ran 2 commands, edited a file +3 −1 ›` 한 줄로 접고, 누르면 펼침. 권한 규칙이나 권한 모드에 막힌 호출은 실패가 아니라 `· 2 not run` 으로 셈(PreToolUse 훅이 막은 호출은 실패로 남음). 펼치면 편집 diff 가 바로 보임(파일 기준 줄 번호, 앞뒤 세 줄 문맥). 터미널 테마를 알면 데스크톱 diff 모양. ctrl+o 화면은 엔진의 전체 행 그대로
 - **서브에이전트**: `Ran an agent` 한 줄, 알림·메시지는 ctrl+o 로만 펼침 → 에이전트마다 카드(종류·설명, 도구 수·토큰·시간·바꾼 줄, 눌러서 결과). 백그라운드 알림은 `✓ 설명 completed · 5s`, 에이전트 메시지는 `◆ 이름 첫 줄 ›` 을 눌러 그 자리에서 펼침. 턴이 백그라운드 에이전트를 기다리며 끝나면 `Waiting for N background agents to finish` 아래에 에이전트마다 `··· 종류 설명 ›`(끝나면 상태), 누르면 `/desk-tasks` 의 그 에이전트
-- **계획 (ExitPlanMode)**: 다른 도구와 한 줄로 접힘 → 따로 카드 `◇ Plan 승인됨`(대기·거절·중단도 표시), 계획을 마크다운으로. 길면 앞부분만 보이고 `Show all` 로 펼침. 승인: 화면을 덮는 엔진 창 → 입력창 바로 위 계획 카드, 계획 본문은 미리보기 패널에. 입력창이 비어 있으면 `1` 승인(엔진 창의 첫 선택지처럼 계획 전 모드로 돌아감), `2` 패널에서 계획 보기, 고칠 점을 적고 Enter 면 다시 계획하게, `9` 엔진 창(나머지 선택지)
+- **계획 (ExitPlanMode)**: 다른 도구와 한 줄로 접힘 → 따로 카드 `◇ Plan 승인됨`(대기·거절·중단도 표시), 계획을 마크다운으로. 길면 앞부분만 보이고 `Show all` 로 펼침. 승인 자체는 엔진 창 그대로이고, [desk-plan](desk-plan/README.ko.md) 을 설치하면 입력창 바로 위 카드로 묻고 계획 본문은 desk-look 의 미리보기 패널에 엽니다
 - **질문 (AskUserQuestion)**: 입력창 아래 목록 → 입력창 바로 위 질문 카드. 입력창이 비어 있으면 숫자만 눌러 고르기(`1`-`8` 선택지, `0` 제출, `9` 기본 창), 여러 개 고르기 ☐/☑, `Other` 는 두 번 클릭해서 입력(첫 클릭은 띠 선택, 입력칸은 네 줄까지 자람), 선택지 미리보기는 마우스를 올리면. 카드가 뜨면 엔진 창처럼 알림(`preferredNotifChannel`). 기록에는 `Asked 질문 → 답`
 - **턴 끝**: 소요 시간 줄 → 그 턴에 고친 파일 카드 `Edited N files +N −M`(파일 줄을 누르면 `/desk-diff` 패널이 그 파일에서 열림), 오른쪽 끝에 답변 복사 `⧉ copy`, 그 옆 `❝ quote` 는 그 답을(답 안에서 고른 글이 있으면 그 부분만) 인용으로 입력창에
 - **명령 출력**: 평문 → 표·제목·코드·인용이 든 출력은 답변처럼 마크다운으로
@@ -65,7 +66,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - **진행 띠**: 기다리는 동안 보이는 것 없음 → 턴이 도는 동안 입력창 위 두 줄. 윗줄은 지금 단계: `TodoWrite`·`TaskCreate` 의 할 일 목록(`✓ 2  ◉ 검증 중 8m 2s  ○ 정리 +1   2/5`), 그 도구가 없는 세션(Claude 5 모델은 Claude Code 가 뺌)이면 Claude 가 마지막 도구 호출 앞에 쓴 글의 첫 문장(`✓ 2  ◉ 이제 .12 에서 돌릴게요.   단계 3`). 아랫줄은 지금 도는 일: 도구 호출과 그 시간, 셸 명령이면 띄운 프로그램과 CPU(`▶ 커서 재조회 검증 · 8m 2s · java 97%`, 리눅스), Claude 가 글을 쓰는 동안은 `응답 중`. 그 프로그램이 3분 동안 CPU 도 입출력도 쓰지 않으면 `! 변화 없음 3m 10s`(`ssh` 같은 네트워크 명령은 원격이 일하는 중일 수 있어 흐리게). 아랫줄을 누르면 `/desk-activity`. 아랫줄은 10초가 지나거나 윗줄에 단계가 생기면 바로 생기고, 턴이 끝나면 아랫줄은 접히고 윗줄은 마지막 단계를 끝난 것으로 30초 남김(`bandAfterTurn`, ✕ 로 닫기). 긴 턴은 턴 끝 줄 아래에 흐린 `명령 3 (실패 1) · 에이전트 2 · 할 일 5/5` 를 남김
 - **진행 표시**: `✻ Simmering… (12s · ↓ 300 tokens)` → `●·· Running…  2m 29s · high` (하는 일에 맞춘 낱말, 클레이색 점, 지금 서 있는 effort. 작업 중에 바꾼 수준은 모델이 받는 다음 메시지부터)
 - **모드 표시**: 입력창 오른쪽 아래 흐린 글자 → 알약 모양 칩 (omarchy 테마일 때)
-- **힌트 줄**: `? for shortcuts` → 질문·계획 카드가 떠 있으면 끝에 답하는 키(`숫자로 고르기 · 9 기본 창 · Esc 취소`)
+- **힌트 줄**: `? for shortcuts` → 질문 카드가 떠 있으면 끝에 답하는 키(`숫자로 고르기 · 9 기본 창 · Esc 취소`)
 
 ## 오른쪽 패널
 
@@ -123,7 +124,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - `r` 은 PR 다시 읽기
 - 그 밖에는 바꾸지 않음: 승인·댓글·`Ready for review` 없음
 
-### Asana·Slack: 별도 플러그인
+### Asana·Slack·계획 승인: 별도 플러그인
 
 0.55.0 부터 Asana·Slack 패널은 이 마켓의 별도 플러그인입니다. desk-look 은 그 플러그인이 있든 없든 동작하고, 있으면 `/desk-fold` 가 그 패널도 함께 접고, 그 플러그인은 desk-look 의 언어를 따르며, desk-slack 의 안 읽은 수는 desk-look 띠의 `✉ N` 칩으로 나옵니다.
 
@@ -131,6 +132,8 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - [desk-slack](desk-slack/README.ko.md): `/desk-slack`, 나에게 온 Slack DM·그룹 DM 을 대화방으로, 답장, 새 메시지 알림
 
 예전 desk-look 에서 올라왔다면: 쓰는 플러그인을 설치하고(아래), Asana 개인 토큰을 넣어 두었다면 `/plugin configure desk-asana@cc-desktop-mod` 에 다시 넣으세요. desk-look 은 플러그인 없이 Asana·Slack MCP 서버가 보이면 이를 한 번 알립니다.
+
+0.69.0 부터 계획 카드도 별도 플러그인 [desk-plan](desk-plan/README.ko.md) 입니다. 이 카드는 Claude Code 의 권한 창에 대신 답하는데, Claude 플러그인 디렉터리에 올리는 플러그인은 그렇게 할 수 없어서 desk-look 을 디렉터리에 올릴 수 있게 떼어 냈습니다. desk-plan 은 desk-look 이 있어야 합니다(카드를 desk-look 의 띠에 그리고 계획을 desk-look 의 미리보기 패널에 엽니다). 없으면 `ExitPlanMode` 는 엔진 창으로 묻습니다. 계획 카드를 쓰셨다면 desk-plan 을 설치하세요(아래). 알림 설정은 `/plugin configure desk-plan@cc-desktop-mod` 의 `notify` 입니다.
 
 ### `/desk-preview [파일]`: 마크다운 미리보기
 
@@ -185,11 +188,12 @@ Claude Code 터미널 세션의 프롬프트에서:
 
 마켓플레이스 추가를 물으면 `y`, 범위는 user 를 고르면 됩니다.
 
-Asana·Slack 패널은 같은 마켓에서 쓰는 플러그인을 더 설치합니다:
+Asana·Slack 패널이나 계획 카드는 같은 마켓에서 쓰는 플러그인을 더 설치합니다:
 
 ```
 /plugin install desk-asana@cc-desktop-mod
 /plugin install desk-slack@cc-desktop-mod
+/plugin install desk-plan@cc-desktop-mod
 ```
 
 ## 설정
@@ -198,7 +202,7 @@ Asana·Slack 패널은 같은 마켓에서 쓰는 플러그인을 더 설치합�
 
 - `language`: `auto` (기본), `en`, `ko`. desk-look 이 그리는 글(패널·버튼·알림·입력창에 채우는 글)의 언어. `auto` 는 세션이 시작될 때 Claude Code `/config` 의 `language` 를 따름: 한국어(Korean)면 한국어, 그 밖에는 영어. 언어 설정 없이 한국어로 쓰려면 `ko`
 - `bubbleSide`: `left` (기본), `right`. 내 프롬프트 말풍선 위치. 엔진이 말풍선 아래에 그리는 첨부 줄(`└ 1 skill available` 등)은 플러그인이 옮기지 못해 늘 왼쪽이라, 왼쪽이면 나란해집니다. `right` 는 데스크톱 앱처럼
-- `askNotify`: `on` (기본), `off`. 질문·계획 카드가 뜰 때 알림. 엔진 창은 뜰 때 알림을 보내지만 카드가 뜬 동안엔 엔진이 보내지 않아서 카드가 직접 보냅니다
+- `askNotify`: `on` (기본), `off`. 질문 카드가 뜰 때 알림. 엔진 창은 뜰 때 알림을 보내지만 카드가 뜬 동안엔 엔진이 보내지 않아서 카드가 직접 보냅니다
 - `prBar`: `on` (기본), `off`. 입력창 띠 옆 PR 칩. 세션을 시작할 때와 턴이 끝날 때 지금 브랜치의 PR 을 `gh`(GitHub)·`glab`(GitLab)으로 읽음(30초에 한 번까지). 열린 PR 의 체크(GitLab 은 파이프라인 job)가 도는 동안은 턴과 상관없이 15초마다 다시 읽고, 체크 상태가 그대로면 간격을 두 배씩 늘려 2분마다까지(runner 를 기다리는 job 처럼 끝나지 않는 체크가 계속 묻지 않게). 둘 다 없거나 어느 쪽 저장소도 아니면 숨기고 그 브랜치에서는 다시 묻지 않음(네트워크 오류는 다음 턴에 다시 읽음). `/desk-pr` 패널은 설정과 상관없이 열 수 있음
 - `previewAutoOpen`: `on` (기본), `off`. Claude 가 쓴 마크다운 문서를 턴이 끝날 때 미리보기 패널에 엶. `off` 면 `◫` 칩과 `/desk-preview` 로만
 - `replyInBlocks`: `on` (기본), `off`. Claude 의 답을 0.1초마다 몇 줄씩 흘리지 않고 블록째 보여 줌: 도구 호출 앞 글은 그 호출과 함께, 턴 끝 답은 통째로 나옴. 기다리는 동안 스피너에 모은 줄 수. 화면보다 긴 블록도 통째로 나와서 화면이 그 끝에 가 있으니 앞부분은 올려서 읽음. Esc 로 끊어도 모은 글은 보임. 모으기는 답 스트림 자체를 늦춰 Remote Control(Claude 앱, claude.ai/code)도 덩어리로 받으므로, 마지막 프롬프트를 앱에서 보냈으면 앱의 부드러운 흐름을 지키려고 평소처럼 흘림
@@ -213,14 +217,14 @@ Asana·Slack 패널은 같은 마켓에서 쓰는 플러그인을 더 설치합�
 claude plugin update desk-look
 ```
 
-`/desk-update` 는 설치한 desk-asana·desk-slack 도 함께 올리고, 새 버전을 받았으면 `/reload-plugins` 까지 대신 실행합니다. 셸 명령으로 올렸으면 세션에서 `/reload-plugins` 를 실행합니다.
+`/desk-update` 는 설치한 desk-asana·desk-slack·desk-plan 도 함께 올리고, 새 버전을 받았으면 `/reload-plugins` 까지 대신 실행합니다. 셸 명령으로 올렸으면 세션에서 `/reload-plugins` 를 실행합니다.
 
 ## 환경별 동작
 
 - **색**: 엔진 테마 키(`text`, `inactive`, `claude` …)를 써서 밝은·어두운 테마를 모두 따라갑니다.
 - **말풍선 회색 면**: [omarchy](https://omarchy.org) 테마(`~/.local/state/omarchy/current/theme/colors.toml`)를 읽을 수 있을 때만 그립니다. 테마를 바꾸면 3초 안에 따라갑니다. 그 밖의 환경에서는 둥근 테두리 말풍선입니다. 둥근 끝은 Nerd Font 반원 글리프와 Symbols for Legacy Computing 블록을 씁니다. 그림을 그릴 수 있는 터미널(아래)에서는 여러 줄 말풍선의 모서리를 작은 그림으로 그려 제대로 둥글게 나옵니다. 입력창 아래턱 띠도 같아서, 테마를 못 읽으면 회색 띠 없이 칩만 그립니다. `/desk-*` 패널도 같은 회색을 바탕으로 깝니다. 256색으로 그리는 tmux 안에서는 256색 팔레트의 가장 가까운 회색을 써서, 어두운 테마의 말풍선이 밝아지지 않습니다.
 - **이미지 썸네일과 둥근 말풍선 모서리**: kitty·Ghostty 와 전체 화면 그리기의 iTerm2 3.5 이상에서 그리고(iTerm2 에서는 2 MiB 가 넘는 붙여 넣은 그림은 `[Image #N]` 글자로 둡니다). tmux 3.3 이상 안에서는 Claude Code 처럼 그 터미널(kitty 는 0.28 이상)에서 tmux 를 붙이고 `tmux set -g allow-passthrough on` 과 `tmux set -g focus-events on` 을 켰을 때 그립니다(여기서도 2 MiB 가 넘는 붙여 넣은 그림은 글자로 둡니다). zellij 안에서는 그리지 않습니다. herdr 안에서는 herdr `config.toml` 의 `[experimental]` 에 `kitty_graphics = true` 와 Claude Code 의 `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1` 이 모두 있어야 합니다. 없으면 Claude Code 가 터미널 이름을 물었을 때 herdr 가 대답해 그림을 그리지 않습니다.
-- **질문·계획 카드**: 터미널 하나만 붙은 세션에서만 씁니다. 무엇을 띄울지는 마지막으로 입력한 곳을 따릅니다. 터미널이면 카드를 띄우고 답할 때까지 그대로 둡니다. Claude 앱(Remote Control)이나 herdr 패널에서 [collie](https://github.com/AltanS/collie) 로 폰에서 입력했으면 엔진의 기본 창을 띄워 거기서 답할 수 있게 합니다. 그래서 터미널에서 입력하고 자리를 뜨면, 앱에서 메시지를 보내기 전까지 질문이 앱으로 가지 않습니다. Esc 는 턴을 멈추므로 질문도 취소됩니다. 계획 카드는 계획 파일(`~/.claude/plans/`)이 있어야 띄우고, 없으면 엔진 창이 뜹니다.
+- **질문 카드**(와 desk-plan 의 계획 카드): 터미널 하나만 붙은 세션에서만 씁니다. 무엇을 띄울지는 마지막으로 입력한 곳을 따릅니다. 터미널이면 카드를 띄우고 답할 때까지 그대로 둡니다. Claude 앱(Remote Control)이나 herdr 패널에서 [collie](https://github.com/AltanS/collie) 로 폰에서 입력했으면 엔진의 기본 창을 띄워 거기서 답할 수 있게 합니다. 그래서 터미널에서 입력하고 자리를 뜨면, 앱에서 메시지를 보내기 전까지 질문이 앱으로 가지 않습니다. Esc 는 턴을 멈추므로 질문도 취소됩니다.
 - **256색 터미널의 diff 색**: 섞어 만든 줄·단어 틴트는 `COLORTERM` 이 `truecolor`·`24bit` 이고 tmux 밖일 때만 씁니다. 그 밖에서는(tmux 안에서는 엔진이 색을 256색으로 줄입니다) xterm 256색 팔레트에 있는 색을 써서, 바뀐 단어가 줄 바탕과 구분되게 합니다.
 - **링크**: 백틱 안의 URL 도 링크가 됩니다. 글자가 주소 그대로인 링크가 40칸을 넘으면 `https://` 를 떼고, 그래도 길면 가운데를 `…` 로 줄여 한 줄에 그립니다. 그래야 링크 전체가 눌리고, 누르면 전체 주소로 갑니다. OSC 8 하이퍼링크를 통과시키지 않는 멀티플렉서 안에서는 이름 뒤에 URL 이 흐리게 붙습니다.
 
@@ -240,7 +244,7 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` 는 지난 점검 이후의 Claude Code 릴리즈 노트와 플러그인 API diff 를 모아, desk-look 이 쓰거나 걷어낼 거리를 찾습니다. 저장소 관례(최신 Claude Code 만 지원, 버전마다 GitHub 릴리즈)는 `CLAUDE.md` 에 있습니다.
 
-`desk-asana`·`desk-slack` 에서도 같은 명령을 씁니다. desk-asana 는 댓글을 desk-look 의 마크다운 렌더러로 그리는데, 플러그인은 자기 폴더만 설치되므로 `desk-asana/hooks/shared/` 에 복사해 둡니다. `desk-look/hooks/markdown.tsx`·`diagram.ts` 를 고쳤으면 `scripts/sync-shared.sh` 를 돌려 함께 커밋합니다. 복사본이 어긋나면 릴리즈 워크플로가 실패합니다(`scripts/sync-shared.sh --check`).
+`desk-asana`·`desk-slack`·`desk-plan` 에서도 같은 명령을 씁니다. desk-asana 는 댓글을 desk-look 의 마크다운 렌더러로 그리는데, 플러그인은 자기 폴더만 설치되므로 `desk-asana/hooks/shared/` 에 복사해 둡니다. `desk-look/hooks/markdown.tsx`·`diagram.ts` 를 고쳤으면 `scripts/sync-shared.sh` 를 돌려 함께 커밋합니다. 복사본이 어긋나면 릴리즈 워크플로가 실패합니다(`scripts/sync-shared.sh --check`).
 
 `desk-look/.claude-plugin/types/` 는 엔진이 mod 를 로드할 때마다 다시 까는 타입 정의라 커밋하지 않습니다.
 
