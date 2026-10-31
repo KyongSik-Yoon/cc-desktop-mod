@@ -12,7 +12,7 @@ At the prompt of a Claude Code terminal session:
 /plugin install desk-slack --marketplace KyongSik-Yoon/cc-desktop-mod
 ```
 
-It follows the latest Claude Code release, like desk-look. `/desk-update` from desk-look updates it too; without desk-look, run `claude plugin update desk-slack`.
+It installs [desk-grant](../desk-grant/README.md) with it. It follows the latest Claude Code release, like desk-look. `/desk-update` from desk-look updates it too; without desk-look, run `claude plugin update desk-slack`.
 
 ## `/desk-slack`: Slack DMs
 
@@ -27,16 +27,7 @@ The DMs and group DMs other people sent you, kept as conversations like the Slac
 - While any Claude Code session is running, desk-slack checks for new messages once a minute and sends a notification per conversation through your notification channel (`slackNotify` turns that off). With desk-look, the `✉ N` chip in its band shows the unread count and opens the pane. With several sessions open, one of them checks and the others share what it finds
 - "Unread" is desk-slack's own: opening a conversation here does not mark it read in Slack, and reading it in Slack does not clear it here
 - The Slack connector adds a "Sent using Claude" line to messages sent through it
-- desk-slack calls Slack only while all four of its Slack tools have an allow rule in `permissions.allow` in `~/.claude/settings.json`; until then it calls nothing (no checking, no notifications) and the pane lists the missing rules. The check runs in the background, where nobody could answer a permission prompt:
-
-  ```json
-  "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_channel",
-  "mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_read_user_profile"
-  ```
-
-  To open threads, add `"mcp__claude_ai_Slack__slack_read_thread"` too. Without just that rule, checking, notifications and conversations keep working; threads do not open, and the conversation shows the rule to add
-
-  The rule allows the same tools for Claude too: Claude can then send Slack messages without asking
+- The Slack calls are allowed by [desk-grant](../desk-grant/README.md), installed with desk-slack, so no `permissions.allow` rules are needed. Without desk-grant, Claude Code turns desk-slack off and lists it under Errors in `/plugin`; if you had desk-slack before 0.70.0, run `/plugin install desk-grant@cc-desktop-mod` once (updating does not add it), then `/reload-plugins`. If desk-grant is older than desk-slack and does not allow one of its tools yet, desk-slack calls nothing (no checking, no notifications) and the pane says to update desk-grant. Old `mcp__claude_ai_Slack__…` rules can be removed
 
 ## What it runs, reads and sends
 
@@ -44,7 +35,7 @@ desk-slack collects no data and runs no programs. Everything it reads stays on y
 
 **Reads**: Claude Code's `language` setting, and desk-look's language and `/desk-fold` state when desk-look is installed.
 
-**Sends**: only to the Slack MCP server Claude Code already has connected (with Claude Code's own connection and login), but only while all four of its Slack tools (`slack_search_public_and_private`, `slack_read_channel`, `slack_send_message`, `slack_read_user_profile`) have an allow rule (`slack_read_thread`, which opens threads, is called only when it has one too): once a minute, from one running session, it searches for DMs and group DMs sent to you since the last check; when you open a conversation or one of its threads it reads its latest 30 messages; when you submit a reply it sends it there; and it reads your Slack user ID once. It keeps the conversation list, your user ID and which session checks in its own plugin store (`$.store`), and raises a notification for new messages through your notification channel unless `slackNotify` is `off`. Without the rules it calls nothing and the pane lists the missing ones (found with `$.tool.check`). It publishes the unread count for desk-look's `✉` chip.
+**Sends**: only to the Slack MCP server Claude Code already has connected (with Claude Code's own connection and login), through its five tools (`slack_search_public_and_private`, `slack_read_channel`, `slack_read_thread`, `slack_send_message`, `slack_read_user_profile`), which desk-grant allows for desk-slack only: once a minute, from one running session, it searches for DMs and group DMs sent to you since the last check; when you open a conversation or one of its threads it reads its latest 30 messages; when you submit a reply it sends it there; and it reads your Slack user ID once. It keeps the conversation list, your user ID and which session checks in its own plugin store (`$.store`), and raises a notification for new messages through your notification channel unless `slackNotify` is `off`. If desk-grant does not allow one of these tools (an older desk-grant), it calls nothing and the pane says to update desk-grant (found with `$.tool.check`). It publishes the unread count for desk-look's `✉` chip.
 
 `hooks/shared/` is a copy of desk-look's Markdown renderer, used to draw messages; `hooks/shared/vendor/lovely-mermaid.js` is [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 0.3.3 (Apache-2.0, `hooks/shared/vendor/LICENSE.lovely-mermaid`), bundled without minification. It runs no programs and makes no requests.
 

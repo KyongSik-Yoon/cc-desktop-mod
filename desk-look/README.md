@@ -22,7 +22,7 @@ desk-look collects no data and makes no network request of its own. Everything i
 - `claude agents --json`: list the sessions open right now, for the status chips in `/desk-sessions`; `claude stop <id>`: only when you pick a running background session there, to take it into this window (its conversation is kept)
 - `herdr pane list`, `herdr workspace focus` and `herdr tab focus`: only inside [herdr](https://herdr.dev), when you pick a session in `/desk-sessions` that is open in another terminal, to switch to the tab where it is open
 - `wl-copy`: copy `cd <folder> && claude --resume <id>` to the clipboard from `/desk-sessions`, when switching this window to a session in another folder is blocked
-- `claude plugin marketplace update` and `claude plugin update`: only when you run `/desk-update`, for desk-look and for desk-asana, desk-slack and desk-plan (a plugin that is not installed just fails and is not mentioned)
+- `claude plugin marketplace update` and `claude plugin update`: only when you run `/desk-update`, for desk-look and for desk-asana, desk-slack, desk-plan and desk-grant (a plugin that is not installed just fails and is not mentioned)
 - `id -u` and `od -N 24`: find this session's temporary folder (`/tmp/claude-<uid>`) for pasted images and the preview's browser page, and read the first 24 bytes of each PNG for its size
 - `head -c` and `tail -c`: read the start (working folder) and end (title) of a session file over 320 KB for `/desk-sessions`
 - `mktemp -d`, `mkfifo`, `cat`, `tee` and `rm -rf`: the question card waits for your answer on a named pipe in a temporary folder (`cat` reads it, the card's buttons write the answer with `tee`) and removes the folder afterwards

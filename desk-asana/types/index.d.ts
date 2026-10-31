@@ -37,7 +37,7 @@ export type AsanaDetail = {
   comments: AsanaComment[]
 }
 // status: none 은 Asana 서버가 연결돼 있지 않음, failed 는 읽지 못함(error).
-// unruled: 패널이 부르는 도구 중 allow 규칙이 없어 엔진이 물어보거나 막을 것(paneTools).
+// unruled: 패널이 부르는 도구 중 허용되지 않아 엔진이 물어보거나 막을 것(paneTools). desk-grant 가 낡았을 때 생긴다.
 export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; unruled: string[]; error?: string }
 export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task: AsanaDetail | null; error?: string }
 export type AsanaUser = { gid: string; name: string; email: string | null }

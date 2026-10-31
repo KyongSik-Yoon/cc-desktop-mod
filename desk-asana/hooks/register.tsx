@@ -138,7 +138,7 @@ async function findAsana($: EngineInterface): Promise<AsanaServer | null> {
   return findAsanaServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
 }
 
-// 패널 도구 중 allow 규칙이 없는 것. $.tool.check 는 규칙만 묻는다(창도 분류기도 없다).
+// 패널 도구 중 허용되지 않는 것(desk-grant 가 낡아 목록에 없다. desk-grant 가 아예 없으면 엔진이 이 플러그인을 끈다). $.tool.check 는 판정만 묻는다(창도 분류기도 없다).
 async function findUnruled($: EngineInterface, server: AsanaServer) {
   const tools = paneTools(server)
   const verdicts = await Promise.all(tools.map(tool => $.tool.check({ tool, input: {} }).catch(() => null)))
@@ -242,13 +242,10 @@ async function closeAsanaProject($: EngineInterface) {
 // 태스크 하나를 펼친다(같은 태스크를 다시 읽는 동안은 전 내용을 그대로 보인다).
 async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
   await update($, asanaView, (view): AsanaView => ({ gid, status: 'loading', task: view?.gid === gid ? view.task : null }))
-  // 댓글 서식은 stories 에만 있다. v2 는 allow 규칙이 없으면 부르지 않고(기본 모드는 열 때마다 창) get_task 의 평문 댓글을 쓴다.
-  // v1 은 댓글이 stories 에만 있어 늘 부른다.
-  const storyCall = storiesCall(server, gid)
-  const canStory = server.dialect === 'v1' || !(await read($, asana))?.unruled.includes(`mcp__${server.name}__${storyCall.tool}`)
+  // 댓글 서식은 stories 에만 있다. 못 읽으면 v2 는 get_task 의 평문 댓글을 쓴다(v1 은 댓글이 stories 에만 있다).
   const [got, stories, me] = await Promise.all([
     callAsana($, server, taskCall(server, gid)),
-    canStory ? callAsana($, server, storyCall) : null,
+    callAsana($, server, storiesCall(server, gid)),
     asanaMe === null ? callAsana($, server, meCall(server)) : null,
   ])
   if (me?.ok) asanaMe = myGid(me.data)
@@ -832,12 +829,7 @@ export const register: Register = (on, options) => {
         ))}
       </Box>
     )
-    const unruled = (state?.unruled.length ?? 0) > 0 && (
-      <Box flexDirection="column">
-        <Text color={COLORS.warning}>{T.asanaUnruled}</Text>
-        <Text color={COLORS.muted}>{state?.unruled.map(tool => `"${tool}",`).join('\n')}</Text>
-      </Box>
-    )
+    const unruled = (state?.unruled.length ?? 0) > 0 && <Text color={COLORS.warning}>{T.asanaUnruled}</Text>
     const isUnready = state === null || state.status === 'none' || (state.status === 'loading' && state.server === null)
 
     // 프로젝트 탭: 펼친 프로젝트가 있으면 그 열린 태스크를 섹션별로(담당자 누구든), 아니면 내가 멤버인 프로젝트.

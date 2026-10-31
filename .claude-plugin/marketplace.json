@@ -65,6 +65,18 @@
         "terminal",
         "tui"
       ]
+    },
+    {
+      "name": "desk-grant",
+      "source": "./desk-grant",
+      "description": "Helper installed with desk-asana and desk-slack: allows the Asana and Slack calls their side panes make, so they need no allow rules in your settings. Claude's own calls to those tools still get the usual permission check",
+      "category": "productivity",
+      "tags": [
+        "mod",
+        "permissions",
+        "asana",
+        "slack"
+      ]
     }
   ]
 }

@@ -27,7 +27,6 @@ import {
   slackPrompt,
   threadCall,
   slackText,
-  slackThreadTool,
   slackTools,
   tsCompare,
   unreadCount,
@@ -102,14 +101,12 @@ async function findSlack($: EngineInterface): Promise<SlackServer | null> {
   return findSlackServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
 }
 
-// allow 규칙이 없는 Slack 도구. unruled 에 하나라도 있으면 Slack 을 부르지 않는다(받은 편지 확인은 타이머라 물어볼 사람이 없다).
-// 스레드 도구는 따로: 없으면 threadUnruled 에 이름이 들고 스레드만 열지 않는다.
-async function slackUnruled($: EngineInterface, server: SlackServer): Promise<{ unruled: string[]; threadUnruled?: string }> {
-  const tools = [...slackTools(server), slackThreadTool(server)]
+// 허용되지 않는 Slack 도구(desk-grant 가 낡아 목록에 없다. desk-grant 가 아예 없으면 엔진이 이 플러그인을 끈다). 하나라도 있으면 Slack 을 부르지 않는다:
+// 받은 편지 확인은 타이머라 물어볼 사람이 없고, auto mode 분류기는 거절한다. $.tool.check 는 판정만 묻는다(창·분류기 없음).
+async function slackUnruled($: EngineInterface, server: SlackServer): Promise<string[]> {
+  const tools = slackTools(server)
   const verdicts = await Promise.all(tools.map(tool => $.tool.check({ tool, input: {} }).catch(() => null)))
-  const missing = tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
-  const thread = slackThreadTool(server)
-  return { unruled: missing.filter(tool => tool !== thread), ...(missing.includes(thread) ? { threadUnruled: thread } : {}) }
+  return tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
 }
 
 // $.store 는 떠 있는 세션끼리 같이 본다(2.1.302 실측). 모양이 다르면 빈 받은 편지.
@@ -120,7 +117,7 @@ async function readInbox($: EngineInterface): Promise<SlackInbox> {
 
 async function saveInbox($: EngineInterface, inbox: SlackInbox) {
   await $.store.set('slackInbox', inbox)
-  await setSlack($, (state): SlackState => ({ status: state?.status ?? 'ok', server: state?.server ?? null, unruled: state?.unruled ?? [], threadUnruled: state?.threadUnruled, inbox, error: state?.error }))
+  await setSlack($, (state): SlackState => ({ status: state?.status ?? 'ok', server: state?.server ?? null, unruled: state?.unruled ?? [], inbox, error: state?.error }))
 }
 
 // 내 Slack UID. 서버마다 한 번 읽어 둔다.
@@ -145,28 +142,28 @@ async function pollSlack($: EngineInterface, force: boolean) {
     const kept = await readInbox($)
     const put = (state: Omit<SlackState, 'inbox'>, inbox = kept) => setSlack($, (): SlackState => ({ ...state, inbox }))
     if (server === null) return void (await put({ status: 'none', server: null, unruled: [] }))
-    const rules = await slackUnruled($, server)
-    if (rules.unruled.length > 0) return void (await put({ status: 'ok', server, ...rules }))
+    const unruled = await slackUnruled($, server)
+    if (unruled.length > 0) return void (await put({ status: 'ok', server, unruled }))
     const [session, now, surfaces] = await Promise.all([$.session.id().catch(() => ''), $.clock.now(), $.session.surfaces().catch((): readonly RenderSurface[] => [])])
     const poller = (await $.store.get('slackPoller').catch(() => undefined)) as SlackPoller | undefined
     // 터미널이 없는 세션(SDK 등)은 알림을 띄울 곳이 없어 맡지 않는다: 맡으면 아무도 알리지 않게 된다
     const canWatch = surfaces.includes('terminal')
-    if (!force && (!canWatch || !holdsLease(poller ?? null, session, now))) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, ...rules }))
+    if (!force && (!canWatch || !holdsLease(poller ?? null, session, now))) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, unruled }))
     await $.store.set('slackPoller', { session, at: now })
-    if (force) await put({ status: 'loading', server, ...rules })
+    if (force) await put({ status: 'loading', server, unruled })
     const me = await slackMe($, server)
-    if (me === null) return void (await put({ status: 'failed', server, ...rules, error: T.slackNoUser }))
+    if (me === null) return void (await put({ status: 'failed', server, unruled, error: T.slackNoUser }))
     const nowS = Math.floor(now / 1000)
     const afterS = kept.watermark === null ? nowS - FIRST_FILL_S : Number(kept.watermark.split('.')[0])
     const got = await callSlack($, server, inboxCall(me, afterS), 'results')
-    if (!got.ok) return void (await put({ status: 'failed', server, ...rules, error: got.error }))
+    if (!got.ok) return void (await put({ status: 'failed', server, unruled, error: got.error }))
     // 그사이 다른 세션·패널이 방을 닫았을 수 있어 넣기 바로 앞에서 다시 읽는다
     const latest = await readInbox($)
     const merged = mergeInbox(latest, parseSearch(got.text), me, nowS)
     const fresh = merged.fresh.filter(message => latest.notified === null || tsCompare(message.ts, latest.notified) > 0)
     const inbox: SlackInbox = { ...merged.inbox, notified: fresh.length > 0 ? fresh[fresh.length - 1]!.ts : (latest.notified ?? merged.inbox.watermark) }
     await $.store.set('slackInbox', inbox)
-    await put({ status: 'ok', server, ...rules }, inbox)
+    await put({ status: 'ok', server, unruled }, inbox)
     if (!slackNotify) return
     for (const notice of notices(fresh, inbox, T.slackMore)) {
       void $.ui.notify(notice.text, { title: notice.title }).catch(() => undefined)
@@ -351,7 +348,6 @@ export const register: Register = (on, options) => {
     const myId = (me as { id?: string } | undefined)?.id ?? ''
     const when = (ts: string) => ago(Number(ts.split('.')[0]) * 1000, now)
     // 스레드 도구에 규칙이 없으면 "답글 N개" 는 글자만, 방 위에 넣을 규칙
-    const canThread = state?.threadUnruled === undefined
     const closer = (room: SlackRoom) => {
       const isArmed = armed[`slack:close:${room.id}`] ?? false
       return <Button key={`slack-close-${room.id}`} plain dimColor={!isArmed} label={isArmed ? T.slackCloseConfirm : '✕'} onPress={() => void armSlackClose($, room.id, isArmed)} />
@@ -390,12 +386,6 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
           {view.status === 'failed' && <Text color={COLORS.danger}>{T.slackFailed(view.error ?? '')}</Text>}
-          {!canThread && view.posts.some(post => post.replies > 0) && (
-            <Box flexDirection="column">
-              <Text color={COLORS.warning}>{T.slackThreadUnruled}</Text>
-              <Text color={COLORS.muted}>{`"${state?.threadUnruled}",`}</Text>
-            </Box>
-          )}
           {view.posts.length === 0 && view.status === 'loading' && <Text color={COLORS.muted}>{T.slackLoading}</Text>}
           {view.posts.length > 0 && (
             <Box flexDirection="column">
@@ -427,11 +417,7 @@ export const register: Register = (on, options) => {
                     ))}
                     {view.thread === null && post.replies > 0 && (
                       <Box>
-                        {canThread ? (
-                          <Button key={`slack-thread-${post.ts}`} plain label={T.slackReplies(post.replies)} onPress={() => void openSlackRoom($, server, view.channel, post.ts)} />
-                        ) : (
-                          <Text color={COLORS.muted}>{T.slackReplies(post.replies)}</Text>
-                        )}
+                        <Button key={`slack-thread-${post.ts}`} plain label={T.slackReplies(post.replies)} onPress={() => void openSlackRoom($, server, view.channel, post.ts)} />
                       </Box>
                     )}
                   </Box>
@@ -477,12 +463,7 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     )
-    const unruled = (state?.unruled.length ?? 0) > 0 && (
-      <Box flexDirection="column">
-        <Text color={COLORS.warning}>{T.slackUnruled}</Text>
-        <Text color={COLORS.muted}>{state?.unruled.map(tool => `"${tool}",`).join('\n')}</Text>
-      </Box>
-    )
+    const unruled = (state?.unruled.length ?? 0) > 0 && <Text color={COLORS.warning}>{T.slackUnruled}</Text>
     const message =
       state?.status === 'none'
         ? T.slackNoServer
@@ -503,7 +484,7 @@ export const register: Register = (on, options) => {
         <Box key={`slack-row-${item.id}`} columnGap={1}>
           {rowButton(
             els,
-            { key: `slack-room-${item.id}`, dimColor: item.unread === 0, onPress: () => void (server && openSlackRoom($, server, item.id, canThread ? (item.lastThread ?? null) : null)) },
+            { key: `slack-room-${item.id}`, dimColor: item.unread === 0, onPress: () => void (server && openSlackRoom($, server, item.id, item.lastThread ?? null)) },
             `${item.unread > 0 ? '●' : ' '} ${clip(item.title, nameRoom)}`,
             <Text color={COLORS.muted}>{`  ${clip(`${lead}${item.preview}`, room)}`}</Text>,
             <Text color={COLORS.muted}>{` ${age}`}</Text>,

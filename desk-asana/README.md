@@ -12,7 +12,7 @@ At the prompt of a Claude Code terminal session:
 /plugin install desk-asana --marketplace KyongSik-Yoon/cc-desktop-mod
 ```
 
-It follows the latest Claude Code release, like desk-look. `/desk-update` from desk-look updates it too; without desk-look, run `claude plugin update desk-asana`.
+It installs [desk-grant](../desk-grant/README.md) with it. It follows the latest Claude Code release, like desk-look. `/desk-update` from desk-look updates it too; without desk-look, run `claude plugin update desk-asana`.
 
 ## `/desk-asana`: Asana tasks
 
@@ -28,15 +28,7 @@ Your open Asana tasks, read through the Asana MCP server Claude Code already has
 - `›` next to a dropdown custom field lists its options; press one to set it
 - `Hand to Claude` fills the prompt with the task's title, link, status, description and recent comments
 - `Change` next to the task type's status (Open, In Progress…) lists the type's statuses; picking one changes it. The Asana MCP servers drop this key, so like `✎ Edit` it goes to Asana's REST API only when you have put in a personal access token; without one, `Change` explains how and calls nothing
-- These Asana calls are made only when you open the pane or press something in it, and they go through Claude Code's permission check like Claude's own calls: auto mode refuses them and the default mode asks each time, unless an allow rule covers them. Add the pane's tools to `permissions.allow` in `~/.claude/settings.json`; while some are missing, the pane lists them. For the V2 server:
-
-  ```json
-  "mcp__asana-v2__get_my_tasks", "mcp__asana-v2__search_tasks", "mcp__asana-v2__get_task",
-  "mcp__asana-v2__get_task_stories", "mcp__asana-v2__add_comment", "mcp__asana-v2__update_tasks", "mcp__asana-v2__search_objects",
-  "mcp__asana-v2__get_me", "mcp__asana-v2__get_projects", "mcp__asana-v2__get_tasks"
-  ```
-
-  The rule allows the same tools for Claude too, including adding comments and changing tasks
+- These Asana calls are made only when you open the pane or press something in it. They go through Claude Code's permission check, and [desk-grant](../desk-grant/README.md), installed with desk-asana, allows them, so no `permissions.allow` rules are needed. Without desk-grant, Claude Code turns desk-asana off and lists it under Errors in `/plugin`; if you had desk-asana before 0.70.0, run `/plugin install desk-grant@cc-desktop-mod` once (updating does not add it), then `/reload-plugins`. If desk-grant is older than desk-asana and does not allow one of its calls yet, the pane says to update desk-grant. Old `mcp__asana-v2__…` rules can be removed
 
 ## What it runs, reads and sends
 
@@ -44,7 +36,7 @@ desk-asana collects no data and runs no programs. Everything it reads stays on y
 
 **Reads**: the Asana personal access token you put in its settings (`asanaToken`, used only as described under "Sends"), Claude Code's `language` setting, and desk-look's language and `/desk-fold` state when desk-look is installed.
 
-**Sends**: only through the Asana MCP server Claude Code already has connected (with Claude Code's own connection and login), only when you open `/desk-asana` or press something in it: it reads your tasks, open tasks matching text you search for, the workspace's projects and the open tasks of a project you open, a task's details and comments, and people matching a name you search for, and adds a comment, changes the assignee or sets a dropdown field when you submit or press those. With an Asana personal access token in the plugin settings, two actions call Asana's REST API (`https://app.asana.com/api/1.0`) directly through `$.http.fetch`, the token only in the `Authorization` header: `✎ Edit` on one of your comments reads that comment's rich text and your Asana user ID, and saving writes the edited text back; picking a task type's status sets it on the task. Without a token these actions call nothing. The MCP calls go through Claude Code's permission check like any other; desk-asana only asks, with `$.tool.check`, which of the pane's Asana tools have no allow rule, to list them in the pane.
+**Sends**: only through the Asana MCP server Claude Code already has connected (with Claude Code's own connection and login), only when you open `/desk-asana` or press something in it: it reads your tasks, open tasks matching text you search for, the workspace's projects and the open tasks of a project you open, a task's details and comments, and people matching a name you search for, and adds a comment, changes the assignee or sets a dropdown field when you submit or press those. With an Asana personal access token in the plugin settings, two actions call Asana's REST API (`https://app.asana.com/api/1.0`) directly through `$.http.fetch`, the token only in the `Authorization` header: `✎ Edit` on one of your comments reads that comment's rich text and your Asana user ID, and saving writes the edited text back; picking a task type's status sets it on the task. Without a token these actions call nothing. The MCP calls go through Claude Code's permission check like any other, and desk-grant allows them for desk-asana only; desk-asana just asks, with `$.tool.check`, whether any of the pane's Asana tools is not allowed, to say in the pane that desk-grant needs updating. It always reads a task's comments (`get_task_stories`) when you open the task.
 
 ## Hooks and what they do
 
