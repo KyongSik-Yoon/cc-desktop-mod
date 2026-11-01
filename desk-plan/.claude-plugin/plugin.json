@@ -1,6 +1,6 @@
 {
   "name": "desk-plan",
-  "version": "0.70.0",
+  "version": "0.71.0",
   "description": "Claude Code mod that asks for plan approval (ExitPlanMode) in a card above the prompt instead of the full-screen engine dialog, with the plan open in desk-look's preview pane: 1 approves, 2 views the plan, type what to change to send it back, 9 for the engine dialog. Needs desk-look",
   "keywords": [
     "claude-code",

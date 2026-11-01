@@ -272,6 +272,8 @@ declare module 'claude-code' {
       activityTop: number
       // /desk-activity 패널에서 호출을 펼친 에이전트 id, 없으면 null.
       activityAgentOpen: string | null
+      // /desk-monitor 패널을 다시 그리게 하는 시계(ms): 표본을 읽을 때마다 바뀐다.
+      monitorClock: number
       // 지금 desk-look 패널로 묻고 있는 질문, 없으면 null.
       ask: AskState | null
       // 마지막 사람 입력이 온 곳: 터미널(composer), Remote Control(bridge), collie 가 폰에서 넣은 터미널 입력(phone). 아직 없으면 null.

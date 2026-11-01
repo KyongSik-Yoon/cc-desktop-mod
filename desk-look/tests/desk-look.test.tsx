@@ -10,6 +10,7 @@ import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
+import { advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, orderSessions, procStatOf, sessionFileOf } from '../hooks/monitor'
 import { bandStayMs, currentHead, headAt, quoteDecorations, quoteInto, selectionIn } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
@@ -5531,4 +5532,167 @@ test('256색 패널 바탕: 섞은 색을 밝기가 가장 가까운 팔레트 �
   expect(gray256('#ececec')).toBe('#eeeeee')
   expect(gray256('#000000')).toBe('#000000')
   expect(gray256('#5f5f5f')).toBe('#5f5f5f')
+})
+
+describe('/desk-monitor 패널', () => {
+  // /proc/<pid>/stat 한 줄: utime·stime·cutime·cstime(14~17), 시작 틱(22), rss 페이지(24).
+  const stat = (pid: number, comm: string, ticks: [number, number, number, number], start: number, rssPages: number) =>
+    `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 4194560 0 0 0 0 ${ticks.join(' ')} 20 0 12 0 ${start} 999999 ${rssPages} 18446744073709551615`
+
+  test('stat 에서 CPU 틱(거둔 자식 포함)·시작 시각·rss 를 읽는다(이름에 괄호·공백이 있어도)', () => {
+    expect(procStatOf(stat(42, 'node (x) y', [10, 5, 3, 2], 777, 256))).toEqual({ startTicks: 777, ticks: 20, rss: 256 * 4096 })
+    expect(procStatOf('')).toBeNull()
+    expect(procStatOf('42 (x) S 1')).toBeNull()
+  })
+
+  test('세션 파일: 이름이 없으면 폴더 이름, 모르는 상태는 쉬는 중, pid·procStart 가 없으면 버린다', () => {
+    expect(sessionFileOf('{"pid":7,"sessionId":"abc","cwd":"/w/repo","status":"busy","procStart":"99","name":"작업"}')).toEqual({
+      pid: 7,
+      sessionId: 'abc',
+      cwd: '/w/repo',
+      name: '작업',
+      status: 'busy',
+      startTicks: 99,
+    })
+    expect(sessionFileOf('{"pid":7,"sessionId":"abc","cwd":"/w/repo","status":"starting","procStart":"99"}')).toMatchObject({ name: 'repo', status: 'idle' })
+    expect(sessionFileOf('{"sessionId":"abc","procStart":"99"}')).toBeNull()
+    expect(sessionFileOf('{"pid":7,"sessionId":"abc"}')).toBeNull()
+    expect(sessionFileOf('not json')).toBeNull()
+  })
+
+  test('기록: 앞 표본과의 틱 차로 CPU%, 첫 표본·pid 재사용이면 새로 시작, 최대 개수만 남긴다', () => {
+    const tree = (ticks: number, rss = 100) => ({ ticks, rss, selfRss: rss, procs: 1 })
+    const first = advanceSeries(undefined, 5, 1000, tree(100))
+    expect(first.points).toEqual([{ at: 1000, cpu: null, rss: 100 }])
+    // 2초에 50틱(0.5초) = 25%
+    const second = advanceSeries(first, 5, 3000, tree(150))
+    expect(second.points.at(-1)?.cpu).toBe(25)
+    // 자식이 끝나 트리 합이 줄어도 음수가 아니다
+    expect(advanceSeries(second, 5, 5000, tree(140)).points.at(-1)?.cpu).toBe(0)
+    // 시작 시각이 다르면(다른 프로세스가 pid 를 물려받음) 새로
+    expect(advanceSeries(second, 6, 5000, tree(10)).points).toEqual([{ at: 5000, cpu: null, rss: 100 }])
+    let series = first
+    for (let at = 3000; at < 3000 + 200 * 2000; at += 2000) series = advanceSeries(series, 5, at, tree(at), 120)
+    expect(series.points.length).toBe(120)
+  })
+
+  test('점자 선 그래프: 최근이 오른쪽, 모자라면 왼쪽이 빈 점자, 이웃 점은 세로로 잇는다', () => {
+    const rows = brailleLine([0, 100], 100, 3, 2)
+    expect(rows.map(row => [...row].length)).toEqual([3, 3])
+    // 앞 두 칸은 비고(⠀), 마지막 칸 왼쪽 열 맨 아래 점과 오른쪽 열 맨 위까지 이어진다
+    expect(rows[0]?.slice(0, 2)).toBe('⠀⠀')
+    expect(rows[1]?.slice(0, 2)).toBe('⠀⠀')
+    expect(rows[0]?.codePointAt(2)! - 0x2800).toBe(0x08 | 0x10 | 0x20 | 0x80)
+    expect(rows[1]?.codePointAt(2)! - 0x2800).toBe(0x40 | 0x08 | 0x10 | 0x20 | 0x80)
+    // 모르는 값은 건너뛰고 잇지 않는다
+    // 칸 둘 = 점 넷에 표본 셋: 오른쪽 열(0x80)에 점, 가운데 null 은 건너뛰고 잇지 않는다
+    expect(brailleLine([0, null, 0], 100, 2, 1)[0]).toBe(String.fromCharCode(0x2800 + 0x80, 0x2800 + 0x80))
+  })
+
+  test('칸 나누기: 시각에 묶은 칸마다 가장 큰 값, 표본이 더 와도 앞 칸은 그대로, 빈 칸은 null', () => {
+    const at = (ms: number, value: number | null) => ({ at: ms, value })
+    // 4초 칸: 0~3999 → 칸 0, 4000~7999 → 칸 1, 8000~ → 칸 2
+    expect(bucketMax([at(0, 1), at(2000, 5), at(4000, 2), at(6000, null), at(8000, 3)], 4000, 3)).toEqual([5, 2, 3])
+    expect(bucketMax([at(0, 1), at(2000, 5), at(4000, 2), at(6000, null), at(8000, 3), at(10_000, 9)], 4000, 3)).toEqual([5, 2, 9])
+    // 칸보다 오래된 표본은 버리고, 표본이 없는 칸은 null
+    expect(bucketMax([at(0, 7), at(12_000, 1)], 4000, 3)).toEqual([null, null, 1])
+    expect(bucketMax([], 4000, 3)).toEqual([])
+  })
+
+  test('면 그래프·눈금·크기', () => {
+    expect(areaRow([50, 100], 100, 3)).toBe(' ▄█')
+    expect(areaRow([null, 100], 100, 2)).toBe(' █')
+    expect(areaRow([], 100, 2)).toBe('  ')
+    expect(cpuTop([null, 3])).toBe(10)
+    expect(cpuTop([30])).toBe(50)
+    expect(cpuTop([130])).toBe(200)
+    expect(formatBytes(762 * 1024 * 1024)).toBe('762MB')
+    expect(formatBytes(1.1 * 1024 * 1024 * 1024)).toBe('1.1GB')
+    const row = (pid: number, startTicks: number) => ({ session: { pid, startTicks } as never })
+    expect(orderSessions([row(3, 1), row(2, 9), row(1, 5)], 2).map(item => (item.session as { pid: number }).pid)).toEqual([2, 3, 1])
+  })
+
+  test('세션 파일과 /proc 트리로 세션마다 CPU·메모리를 그리고, .key 는 읽지 않고, 닫히면 시계를 멈춘다', KO, async ($, on) => {
+    let now = 1_000_000
+    // 시계의 한 주기는 디스패치 하나: 테스트가 풀어 줄 때 콜백이 돈다.
+    const periods: Array<() => void> = []
+    const tick = async () => {
+      periods.shift()?.()
+      await wait(30)
+    }
+    const reads: string[] = []
+    const ticks: Record<number, number> = { 100: 1000, 101: 50, 102: 10, 200: 500 }
+    on('env.get', ($, e) => ({ value: (e as { name?: string }).name === 'HOME' ? '/home/u' : undefined }) as never)
+    on('fs.list', ($, e) => {
+      if ((e as { path?: string }).path !== '/home/u/.claude/sessions') throw new Error('ENOENT')
+      return {
+        value: ['100.json', '100.abc.key', '200.json', '300.json'].map(name => ({ name, kind: 'file', size: 1, mtimeMs: 1 })),
+      } as never
+    })
+    on('fs.read', ($, e) => {
+      const path = String((e as { path?: string }).path ?? e)
+      reads.push(path)
+      if (path === '/home/u/.claude/sessions/100.json') return { value: '{"pid":100,"sessionId":"s-self","cwd":"/home/u/repo","status":"busy","procStart":"11","name":"이 세션"}' } as never
+      if (path === '/home/u/.claude/sessions/200.json') return { value: '{"pid":200,"sessionId":"s-other","cwd":"/w/other","status":"idle","procStart":"22","name":"다른 세션"}' } as never
+      // 300 은 끝나고 pid 를 다른 프로세스가 물려받았다(시작 시각이 다름)
+      if (path === '/home/u/.claude/sessions/300.json') return { value: '{"pid":300,"sessionId":"s-gone","cwd":"/w","status":"idle","procStart":"33","name":"끝난 세션"}' } as never
+      if (path === '/proc/self/stat') return { value: stat(100, 'claude', [0, 0, 0, 0], 11, 1) } as never
+      if (path === '/proc/100/stat') return { value: stat(100, 'claude', [ticks[100] ?? 0, 0, 0, 0], 11, 1000 * 256) } as never
+      if (path === '/proc/101/stat') return { value: stat(101, 'node', [ticks[101] ?? 0, 0, 0, 0], 12, 100 * 256) } as never
+      if (path === '/proc/102/stat') return { value: stat(102, 'bash', [ticks[102] ?? 0, 0, 0, 0], 13, 10 * 256) } as never
+      if (path === '/proc/200/stat') return { value: stat(200, 'claude', [ticks[200] ?? 0, 0, 0, 0], 22, 500 * 256) } as never
+      if (path === '/proc/300/stat') return { value: stat(300, 'vim', [0, 0, 0, 0], 99, 1) } as never
+      if (path === '/proc/100/task/100/children') return { value: '101 ' } as never
+      if (path === '/proc/101/task/101/children') return { value: '102' } as never
+      if (path.endsWith('/children')) return { value: '' } as never
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: now }))
+    on('clock.every', async () => {
+      await new Promise<void>(resolve => periods.push(resolve))
+      return { value: undefined } as never
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    on('ui.panes', () => ({ value: [] }) as never)
+
+    await $.command.run({ command: 'desk-monitor', args: '' } as never)
+    const paneProps = { title: '모니터', isFocused: true, bodyColumns: 70 } as never
+    let pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-monitor', viewport: VIEWPORT, props: paneProps })
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('세션 2개')
+    expect(drawn).toContain('이 세션')
+    expect(drawn).toContain('다른 세션')
+    expect(drawn).not.toContain('끝난 세션')
+    // 트리 합: 본체 1000·자식 100·손자 10 페이지(×4096 = 1110 × 1MB), 첫 표본이라 CPU 는 모른다
+    expect(drawn).toContain('1.1GB')
+    expect(drawn).toContain('claude 1000MB · 프로세스 3개')
+    expect(drawn).toContain('—')
+    expect(reads.some(path => path.endsWith('.key'))).toBe(false)
+    expect(periods.length).toBe(1)
+
+    // 2초 뒤: 이 세션 트리 +100틱(1초) = 50%, 다른 세션 +20틱 = 10%
+    now += 2000
+    ticks[100] = (ticks[100] ?? 0) + 60
+    ticks[102] = (ticks[102] ?? 0) + 40
+    ticks[200] = (ticks[200] ?? 0) + 20
+    await tick()
+    await pane.unmount()
+    pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-monitor', viewport: VIEWPORT, props: paneProps })
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('50%')
+    expect(drawn).toContain('10%')
+    expect(drawn).toContain('세션 2개 · CPU 60%')
+    // 이 세션이 맨 위
+    expect(drawn.indexOf('이 세션')).toBeLessThan(drawn.indexOf('다른 세션'))
+    expect(/[⠁-⣿]/.test(drawn)).toBe(true)
+    await pane.unmount()
+
+    // 패널이 그려지지 않은 채 두 틱 넘게 지나면 시계를 멈추고 기록을 버린다
+    const before = reads.length
+    now += 6000
+    await tick()
+    await tick()
+    expect(reads.length).toBe(before)
+    expect(periods.length).toBe(0)
+  })
 })

@@ -1,6 +1,6 @@
 {
   "name": "desk-slack",
-  "version": "0.70.0",
+  "version": "0.71.0",
   "description": "Claude Code mod that opens the Slack DMs and group DMs sent to you as conversations in a side pane (/desk-slack): recent messages, replying, closing, and a notification when a new one arrives. Reads Slack through the Slack MCP server Claude Code already has connected. Pairs with desk-look, whose status band shows the unread count",
   "keywords": [
     "claude-code",
