@@ -11,7 +11,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 
 - **A transcript that reads like the desktop app**: prompt bubbles, desktop-style markdown with full-width tables, mermaid diagrams and alert boxes, tool calls folded into one clickable line, a card per subagent, a card for each plan, a question card, and a card of the files each turn edited
 - **A status band above the prompt**: repo, branch and `+N −M`, plus chips for the pull request's checks, context usage, running background tasks and, with desk-slack, unread Slack messages, and a progress band that shows the current step and what runs now
-- **Seven side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), what ran this turn (`/desk-activity`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`) and recent sessions (`/desk-sessions`)
+- **Eight side panes**, each opened by a command or by clicking a chip: diffs (`/desk-diff`), what ran this turn (`/desk-activity`), background tasks (`/desk-tasks`), the pull request (`/desk-pr`), Markdown preview (`/desk-preview`), context and usage limits (`/desk-context`), recent sessions (`/desk-sessions`) and CPU and memory per running session (`/desk-monitor`)
 - **Diff line comments**: click a line number in `/desk-diff` to comment on a line or a range; the comments go to Claude with your next prompt
 - **Markdown preview**: a document Claude writes in a turn opens in the preview pane when the turn ends
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
@@ -28,6 +28,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - `/desk-preview [file]`: Markdown preview pane: a document drawn like the transcript
 - `/desk-context`: Context breakdown, what is loaded into it, how it filled this session, cache, cost and usage limits
 - `/desk-sessions [number]`: Recent sessions by project, with search; switch to one
+- `/desk-monitor`: CPU and memory graphs for each Claude session running on this machine (Linux)
 - `/desk-fold`: Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position
 - `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it. If you were already writing, the quote goes above your draft (after any earlier quotes) and the caret stays where you were typing. In the prompt, `>` lines (typed, pasted or inserted) look like quotes: the mark dimmed, the text italic and muted
 - `/desk-update`: Update desk-look, and desk-asana, desk-slack, desk-plan and desk-grant if installed, to the latest version
@@ -173,6 +174,16 @@ Click a row or give its number:
 - **A session in another folder**: the current window moves to that folder (`/cd`) and switches to it. If running the commands is blocked, `cd <folder> && claude --resume <id>` is copied to the clipboard (`wl-copy`).
 - **A running background session**: stops it with `claude stop <id>` (its conversation is kept), then switches to it as above. If it is working, the first press asks you to press again, because stopping cuts its turn short.
 - **A session open in another terminal**: inside [herdr](https://herdr.dev), switches herdr to the tab where it is open; elsewhere only a notice, continue it in that window.
+
+### `/desk-monitor`: CPU and memory per session
+
+Every Claude session running on this machine, this one first (`●`) and the others in the order they started, each with its state (`working`, `needs input`, `idle`):
+
+- CPU: the session's process and everything under it (MCP servers, the shells and commands its tools started, including ones that already ended), as a two-row line graph and the latest value. Above 100% means more than one core
+- Memory: the same processes' resident memory as a one-row graph, and below it the `claude` process alone and how many processes there are
+- All sessions share one scale so their heights compare; the header gives the totals and the top of each graph. The graphs cover the last 4 minutes
+
+It measures every 2 seconds, and only while the pane is drawn: closed, folded or behind another tab it stops and drops what it measured, so it starts over each time you open it. Click a session's name to go to the herdr tab where it is open (it never stops a background session). Linux only, since it reads `/proc`.
 
 ---
 

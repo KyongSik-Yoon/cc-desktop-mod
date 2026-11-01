@@ -20,6 +20,8 @@ import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, NOW_AFTER_MS, PROC_DEP
 import type { AdvisorCall, FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, gray256, parseSurface } from './theme'
+import { CHART_CELLS, DOT_MS, MONITOR_DEPTH, MONITOR_POINTS, MONITOR_TICK, advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, formatCpu, memTop, orderSessions, procStatOf, sessionFileOf } from './monitor'
+import type { MonitorSeries, MonitorSession, TreeSample } from './monitor'
 import { limitName, contextChipMode, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage, barRuns, cacheShares, chartColumns, chartRows, chartTop, columnOf, compactionPoints, hhmm, sparkline, splitOf, sumSplits, turnCosts } from './usage'
 import type { BarPart, BarRun, ContextChipMode } from './usage'
 import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
@@ -52,7 +54,8 @@ const CONTEXT_PANE = 'desk-context'
 const PR_PANE = 'desk-pr'
 const AGENTS_PANE = 'desk-tasks'
 const ACTIVITY_PANE = 'desk-activity'
-const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE, ACTIVITY_PANE])
+const MONITOR_PANE = 'desk-monitor'
+const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_PANE, PREVIEW_PANE, ACTIVITY_PANE, MONITOR_PANE])
 // /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
 const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
@@ -115,6 +118,8 @@ const turnActivity = atom({ plugin: 'desk-look', key: 'activity' } as const, IDL
 const activityLog = atom({ plugin: 'desk-look', key: 'activityLog' } as const, null as ActivityLog | null)
 // /desk-activity 패널을 다시 그리게 하는 시계(ms). 패널이 그려지고 무언가 돌 때만 ACTIVITY_TICK 마다 간다.
 const activityClock = atom({ plugin: 'desk-look', key: 'activityClock' } as const, 0)
+// /desk-monitor 패널을 다시 그리게 하는 시계(ms): 표본을 하나 읽을 때마다 바뀐다. 표본 자체는 모듈 변수에.
+const monitorClock = atom({ plugin: 'desk-look', key: 'monitorClock' } as const, 0)
 // /desk-activity 패널 몸통(머리 아래 줄)의 첫 줄. 끝(ACTIVITY_END)이면 늘어나는 줄을 따라간다.
 // 머리(제목·막대·범례)를 늘 보이게 하려고 패널이 스스로 스크롤한다: ui.scroll 을 next 없이 받아 이 값을 옮긴다.
 const activityTop = atom({ plugin: 'desk-look', key: 'activityTop' } as const, 0)
@@ -218,6 +223,15 @@ let quietTurn: { startedAt: number; endedAt: number } | null = null
 const ACTIVITY_TICK = 2000
 let activityTimer: Timer | null = null
 let activitySeen = 0
+// /desk-monitor: 패널이 그려지는 동안만 도는 시계와 세션별 기록. 두 번 넘게 그려지지 않으면(닫힘·접힘) 멈추고 기록을 버린다.
+let monitorTimer: Timer | null = null
+let monitorSeen = 0
+let monitorSeries = new Map<string, MonitorSeries>()
+let monitorRows: Array<{ session: MonitorSession; tree: TreeSample }> = []
+let monitorRun: Promise<void> | null = null
+let monitorSelf: number | null = null
+// 이번에 연 뒤 표본을 한 번이라도 읽었는지: 읽기 전에는 "재는 중", 읽었는데 세션이 없으면 "없음".
+let monitorSampled = false
 // /desk-activity 에 넣는 advisor 호출. advisorOn: 설정 advisorModel 이 있을 때(/advisor 로 켬)만 읽는다.
 // advisorFile: 이 세션의 대화 기록 파일(못 찾았으면 path 가 null, missedAt 뒤 ADVISOR_RETRY 동안 다시 찾지 않는다).
 // advisorOffset: 그 파일에서 읽은 데까지(바이트, 늘 줄 경계). advisorSeen: 이 세션에서 읽은 호출.
@@ -1888,6 +1902,13 @@ async function listSessions($: EngineInterface, count: number) {
 // 떠 있는 세션은 엔진이 /resume 을 거부한다: 다른 창의 세션은 herdr 안이면 그 탭으로 옮기고 아니면 안내만,
 // 백그라운드 세션은 claude stop 으로 멈춘 뒤 가져온다(대화는 남는다). 작업 중이면 하던 턴이 끊기므로
 // 5초 안에 한 번 더 눌러야 한다.
+// 모니터 패널에서 세션 이름을 누르면: 이 세션이면 그대로, 아니면 그 세션이 열린 herdr 탭으로. 세션 패널의 열기와 달리
+// 백그라운드 세션을 멈추고 가져오지 않는다(지켜보는 패널이라 누르기만으로 남의 일을 끊지 않게).
+async function focusMonitored($: EngineInterface, session: MonitorSession) {
+  if (session.pid === monitorSelf) return
+  $.ui.toast((await focusHerdrSession($, session.sessionId)) ? T.movedToPane(session.name) : T.openElsewhere(session.name))
+}
+
 async function openSession($: EngineInterface, entry: SessionEntry) {
   const cwd = await $.session.cwd()
   if (entry.id === (await $.session.id())) return
@@ -2291,6 +2312,74 @@ function startActivityClock($: EngineInterface) {
       await update($, activityClock, () => at)
     })()
   })
+}
+
+// /desk-monitor 표본 하나: ~/.claude/sessions 의 *.json(같은 폴더의 *.key 는 읽지 않는다)으로 떠 있는 세션을 찾고
+// 세션마다 프로세스 트리를 읽어 기록에 더한다. 겹쳐 부르면 도는 것 하나를 같이 기다린다.
+async function sampleMonitor($: EngineInterface) {
+  if (monitorRun) return monitorRun
+  monitorRun = (async () => {
+    const home = await $.env.get('HOME')
+    if (!home) return
+    const dir = `${home}/.claude/sessions`
+    if (monitorSelf === null) monitorSelf = statPid(await $.fs.read('/proc/self/stat').catch(() => ''))
+    const files = (await $.fs.list(dir).catch(() => [])).filter(entry => entry.kind === 'file' && /^\d+\.json$/.test(entry.name))
+    const found = await Promise.all(files.map(async file => sessionFileOf(await $.fs.read(`${dir}/${file.name}`).catch(() => ''))))
+    const at = await $.clock.now()
+    const rows = (await Promise.all(found.map(async session => (session ? { session, tree: await sampleTree($, session) } : null)))).filter(
+      (row): row is { session: MonitorSession; tree: TreeSample } => row !== null && row.tree !== null,
+    )
+    monitorSeries = new Map(rows.map(row => [row.session.sessionId, advanceSeries(monitorSeries.get(row.session.sessionId), row.session.startTicks, at, row.tree)]))
+    monitorRows = rows
+    monitorSampled = true
+    await update($, monitorClock, () => at)
+  })().finally(() => {
+    monitorRun = null
+  })
+  return monitorRun
+}
+
+// 한 세션의 프로세스 트리: claude 와 그 자손(MCP 서버, 도구가 띄운 셸·명령)의 CPU 틱·rss 합.
+// 세션 파일의 시작 시각과 다르면 pid 를 다른 프로세스가 물려받은 것이라(세션은 끝났다) null.
+async function sampleTree($: EngineInterface, session: MonitorSession): Promise<TreeSample | null> {
+  const root = procStatOf(await $.fs.read(`/proc/${session.pid}/stat`).catch(() => ''))
+  if (!root || root.startTicks !== session.startTicks) return null
+  const sample: TreeSample = { ticks: root.ticks, rss: root.rss, selfRss: root.rss, procs: 1 }
+  let queue = childPids(await $.fs.read(`/proc/${session.pid}/task/${session.pid}/children`).catch(() => ''))
+  for (let depth = 0; depth < MONITOR_DEPTH && queue.length > 0; depth++) {
+    const level = await Promise.all(queue.map(async pid => ({ pid, stat: procStatOf(await $.fs.read(`/proc/${pid}/stat`).catch(() => '')) })))
+    const alive = level.filter(item => item.stat !== null)
+    for (const item of alive) {
+      sample.ticks += item.stat?.ticks ?? 0
+      sample.rss += item.stat?.rss ?? 0
+      sample.procs += 1
+    }
+    queue = (await Promise.all(alive.map(async item => childPids(await $.fs.read(`/proc/${item.pid}/task/${item.pid}/children`).catch(() => ''))))).flat()
+  }
+  return sample
+}
+
+// 패널이 그려지는 동안 2초마다 표본을 읽는다. 두 번 넘게 그려지지 않았으면(닫힘·접힘·다른 탭) 멈추고 기록을 버린다.
+function startMonitorClock($: EngineInterface) {
+  monitorTimer = $.clock.every(MONITOR_TICK, () => {
+    void (async () => {
+      const at = await $.clock.now()
+      if (at - monitorSeen > 2 * MONITOR_TICK + 1000) {
+        monitorTimer?.cancel()
+        monitorTimer = null
+        monitorSeries = new Map()
+        monitorRows = []
+        monitorSampled = false
+        return
+      }
+      await sampleMonitor($).catch(() => undefined)
+    })()
+  })
+}
+
+async function openMonitor($: EngineInterface) {
+  await sampleMonitor($).catch(() => undefined)
+  await openInFront($, { ...(await paneLook($)), id: MONITOR_PANE, title: T.paneMonitor, focus: true })
 }
 
 // 패널을 열 때 advisor 설정도 다시 본다: /config 나 설정 파일로 켜고 끈 것은 /advisor 훅을 거치지 않는다.
@@ -3253,6 +3342,11 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     await $.command.register({
+      name: 'desk-monitor',
+      description: T.cmdMonitor,
+      immediate: true,
+    })
+    await $.command.register({
       name: 'desk-tasks',
       description: T.cmdAgents,
       argumentHint: T.cmdAgentsHint,
@@ -3513,6 +3607,11 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'desk-activity' }, async $ => {
     await openActivity($)
     return { text: T.activityOpened }
+  })
+
+  on('command.run', { command: 'desk-monitor' }, async $ => {
+    await openMonitor($)
+    return { text: T.monitorOpened }
   })
 
   on('command.run', { command: 'desk-tasks' }, async ($, e) => {
@@ -4100,6 +4199,81 @@ export const register: Register = (on, options) => {
     const drawn = activityPane(els, input)
     activityWindow = drawn.window
     return drawn.tree
+  })
+
+  // 모니터 패널: 떠 있는 Claude 세션마다 CPU 점자 선 그래프(두 줄)와 메모리 면 그래프(한 줄). 이 세션은 클레이색 ●.
+  // 눈금은 모든 세션이 같이 써서 세션끼리 높이를 견줄 수 있다. 이름을 누르면 그 세션이 열린 herdr 탭으로 간다.
+  on('ui.render', { component: 'Pane', requestId: MONITOR_PANE }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text } = els
+    const [now, home] = await Promise.all([$.clock.now(), $.env.get('HOME'), read($, monitorClock)])
+    monitorSeen = now
+    if (monitorTimer === null) startMonitorClock($)
+    if (monitorRows.length === 0) return <Text color={COLORS.muted}>{monitorSampled ? T.monitorNone : T.monitorWaiting}</Text>
+    const rows = orderSessions(monitorRows, monitorSelf)
+    const series = rows.map(row => monitorSeries.get(row.session.sessionId)?.points ?? [])
+    const lastCpu = (points: ReadonlyArray<{ cpu: number | null }>) => points.at(-1)?.cpu ?? null
+    const cpuScale = cpuTop(series.flatMap(points => points.map(point => point.cpu)))
+    const memScale = memTop(series.flatMap(points => points.map(point => point.rss)))
+    const totalCpu = series.map(lastCpu).reduce<number | null>((sum, cpu) => (cpu === null ? sum : (sum ?? 0) + cpu), null)
+    const totalRss = rows.reduce((sum, row) => sum + row.tree.rss, 0)
+    const labelWidth = Math.max(cellWidth(T.monitorCpu), cellWidth(T.monitorMem))
+    const valueWidth = 6
+    const chartWidth = Math.max(8, Math.min(CHART_CELLS, e.props.bodyColumns - labelWidth - valueWidth - 4))
+    const label = (path: string) => (home && path.startsWith(home) ? `~${path.slice(home.length)}` : path)
+    const status = (session: MonitorSession) =>
+      session.status === 'busy' ? ([T.liveBusy, COLORS.clay] as const) : session.status === 'waiting' ? ([T.liveWaiting, COLORS.warning] as const) : ([T.monitorIdle, COLORS.muted] as const)
+    const minutes = Math.round((MONITOR_POINTS * MONITOR_TICK) / 60_000)
+
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        <Box flexDirection="column">
+          <Text color={COLORS.text} weight="semibold">
+            {T.monitorHead(rows.length, formatCpu(totalCpu), formatBytes(totalRss))}
+          </Text>
+          <Text color={COLORS.muted}>{T.monitorScale(`${cpuScale}%`, formatBytes(memScale), minutes)}</Text>
+        </Box>
+        {rows.map((row, index) => {
+          const { session, tree } = row
+          const points = series[index] ?? []
+          const isSelf = session.pid === monitorSelf
+          const [stateLabel, stateColor] = status(session)
+          const cpuDots = bucketMax(
+            points.map(point => ({ at: point.at, value: point.cpu })),
+            DOT_MS,
+            chartWidth * 2,
+          )
+          const memCells = bucketMax(
+            points.map(point => ({ at: point.at, value: point.rss })),
+            DOT_MS * 2,
+            chartWidth,
+          )
+          // 세 줄(CPU 두 줄·메모리 한 줄)을 이름·값·그래프 세 칸의 여러 줄 Text 로: 세션마다 요소가 줄면 2초마다 다시 그리는 비용이 준다.
+          const charts = [...brailleLine(cpuDots, cpuScale, chartWidth, 2), areaRow(memCells, memScale, chartWidth)]
+          return (
+            <Box key={`monitor-${session.sessionId}`} flexDirection="column">
+              {rowButton(
+                els,
+                {
+                  key: `monitor-open-${session.sessionId}`,
+                  dimColor: !isSelf,
+                  onPress: () => void focusMonitored($, session),
+                },
+                `${isSelf ? '● ' : '○ '}${clip(session.name, Math.max(8, e.props.bodyColumns - 16))}`,
+                <Text color={stateColor}>{` · ${stateLabel}`}</Text>,
+              )}
+              <Box columnGap={1}>
+                <Text color={COLORS.muted}>{[`  ${padCells(T.monitorCpu, labelWidth)}`, '', `  ${padCells(T.monitorMem, labelWidth)}`].join('\n')}</Text>
+                <Text color={COLORS.text}>{[formatCpu(lastCpu(points)).padStart(valueWidth), '', formatBytes(tree.rss).padStart(valueWidth)].join('\n')}</Text>
+                <Text color={COLORS.link}>{charts.join('\n')}</Text>
+              </Box>
+              <Text color={COLORS.muted}>{`  ${clip(`${T.monitorDetail(formatBytes(tree.selfRss), tree.procs)} · ${label(session.cwd)}`, Math.max(16, e.props.bodyColumns - 2))}`}</Text>
+            </Box>
+          )
+        })}
+      </Box>
+    )
   })
 
   // 세션 패널: 프로젝트별로 묶은 최근 세션. 현재 세션은 클레이색 ●.
