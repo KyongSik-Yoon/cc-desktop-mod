@@ -161,7 +161,7 @@ Replaces the `/context` grid:
 - This session: how full the context was at the end of each turn, the axis scaled to the highest point, `┈` at the auto-compact height and `▲` where the conversation was compacted. The graph keeps what the turns already read for the context chip and asks nothing more; it starts over when plugins are reloaded or the window moves to another session, and its title says since when
 - Cache: how the last turn's input split between read from cache, written to cache and new, and the share read from cache over the turns in the graph
 - Cost: the session cost, a bar per turn and the last turn's cost
-- 5-hour and 7-day usage limits with time until reset
+- The usage limits the account reports (7-day, and 5-hour on plans that still have one) with time until reset
 - The breakdown and what is loaded are calculated when the pane opens and on `↻` (`r`). The session graph, cache, cost and limits update after each turn from what the turn end already reads, so an open pane adds no calculation per turn and a closed one does nothing
 
 ### `/desk-sessions [number]`: recent sessions
