@@ -3738,6 +3738,21 @@ test('PR·MR 읽기: GitHub 이면 gh, 아니면 glab, 없으면 none', KO, asyn
   expect([gitlab.pr?.added, gitlab.pr?.removed]).toEqual([9, 1])
   expect(gitlab.pr?.checks[0]?.name).toBe('test / unit')
 
+  // 로컬 브랜치를 다른 이름으로 올렸으면 MR 은 upstream 이름으로 찾는다
+  const renamed = await fetchReview(
+    run([
+      [argv => argv[0] === 'gh', { exitCode: 1, stderr: 'none of the git remotes configured for this repository point to a known GitHub host' }],
+      [argv => argv.join(' ') === 'git config --get branch.worktree-fix-sheet.merge', { exitCode: 0, stdout: 'refs/heads/fix/sheet\n' }],
+      [argv => argv.join(' ') === 'glab mr list --source-branch fix/sheet --output json', { exitCode: 0, stdout: JSON.stringify([{ iid: 7, state: 'opened' }]) }],
+      [argv => argv.join(' ') === 'glab mr view 7 --output json', { exitCode: 0, stdout: JSON.stringify(MR) }],
+      [argv => argv[0] === 'glab', { exitCode: 0, stdout: '[]' }],
+    ]),
+    'worktree-fix-sheet',
+    1,
+  )
+  expect(renamed.status).toBe('ok')
+  expect(renamed.pr?.number).toBe(MR.iid)
+
   const none = await fetchReview(
     run([
       [argv => argv[0] === 'gh', { exitCode: 1, stderr: 'none of the git remotes configured for this repository point to a known GitHub host' }],

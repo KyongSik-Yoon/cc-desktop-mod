@@ -234,6 +234,12 @@ export function gitlabReview(status: string | null): string | null {
   return status === 'requested_changes' ? 'CHANGES_REQUESTED' : status === 'not_approved' ? 'REVIEW_REQUIRED' : null
 }
 
+// git config branch.<b>.merge 의 값(refs/heads/<이름>)에서 원격 브랜치 이름. 없거나 다른 모양이면 null.
+export function upstreamBranch(text: string): string | null {
+  const name = /^refs\/heads\/(\S+)\s*$/.exec(text.trim())?.[1]
+  return name ?? null
+}
+
 export function shortStat(text: string): { added: number; removed: number } | null {
   if (!/changed/.test(text)) return null
   return { added: Number(/(\d+) insertion/.exec(text)?.[1] ?? 0), removed: Number(/(\d+) deletion/.exec(text)?.[1] ?? 0) }

@@ -24,7 +24,7 @@ import { CHART_CELLS, DOT_MS, MONITOR_DEPTH, MONITOR_POINTS, MONITOR_TICK, advan
 import type { MonitorSeries, MonitorSession, TreeSample } from './monitor'
 import { limitName, contextChipMode, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage, barRuns, cacheShares, chartColumns, chartRows, chartTop, columnOf, compactionPoints, hhmm, sparkline, splitOf, sumSplits, turnCosts } from './usage'
 import type { BarPart, BarRun, ContextChipMode } from './usage'
-import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads } from './pr'
+import { PR_FIELDS, THREADS_QUERY, checkPrompt, checkSummary, isLocalFailure, jobState, mergeAction, mergeLevel, mergeName, prChipParts, prNumber, prRef, prRepo, reviewName, shortStat, threadPrompt, toDiscussions, toJobs, toMr, toPr, toThreads, upstreamBranch } from './pr'
 import type { MergeAction, MergeResult, Ran } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matchesPath, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, currentLang, langFromConfig, langSetting, setLang, type Lang } from './i18n'
@@ -6264,12 +6264,15 @@ async function fetchPr($: EngineInterface, branch: string | null, at: number): P
 }
 
 // glab mr view 를 인자 없이 쓰면 같은 브랜치에 병합된 MR 이 여럿일 때 고르라며 실패한다. 그래서 열린 MR 을
-// 브랜치로 먼저 찾고 번호로 읽는다.
+// 브랜치로 먼저 찾고 번호로 읽는다. 로컬 브랜치를 다른 이름으로 올렸으면(워크트리 브랜치 → fix/…) MR 의
+// 소스 브랜치는 upstream 이름이므로 그 이름으로 찾는다.
 async function fetchMr($: EngineInterface, branch: string | null, at: number): Promise<PrState> {
   const failed = (error: unknown) => ({ exitCode: 127, stdout: '', stderr: String(error) })
   const reasonOf = (stderr: string) => stderr.split('\n').map(line => line.trim()).find(line => line !== '' && line !== 'ERROR') ?? ''
   if (branch === null) return { status: 'none', branch, pr: null, at }
-  const list = await $.process.run(['glab', 'mr', 'list', '--source-branch', branch, '--output', 'json'], { timeoutMs: READ_MS }).catch(failed)
+  const merge = await $.process.run(['git', 'config', '--get', `branch.${branch}.merge`], { timeoutMs: READ_MS }).catch(failed)
+  const source = upstreamBranch(merge.exitCode === 0 ? merge.stdout : '') ?? branch
+  const list = await $.process.run(['glab', 'mr', 'list', '--source-branch', source, '--output', 'json'], { timeoutMs: READ_MS }).catch(failed)
   if (list.exitCode !== 0) return { status: 'off', branch, pr: null, at, error: reasonOf(list.stderr), isSticky: isLocalFailure(list) }
   let iid: number | undefined
   try {
