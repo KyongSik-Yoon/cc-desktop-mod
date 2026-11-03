@@ -3974,7 +3974,7 @@ export const register: Register = (on, options) => {
     return next({ ...e, props: { ...e.props, tail: hintTail(askHint(question), e.props.isDraft) } })
   })
 
-  // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 위에 그대로 둔다.
+  // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 그 아래, 입력창 바로 위에 둔다.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) {
       return next(e)
@@ -4035,11 +4035,13 @@ export const register: Register = (on, options) => {
       )
     }
     if (plan === null && chin === null) return below
+    // 다른 플러그인의 줄은 입력창 바로 위에 둔다. 엔진 Heads up 알림(you-should-know)의 키는 입력칸 숫자로 눌리는데,
+    // collie 는 키 줄과 입력창 사이에 빈 줄·정해진 줄만 있어야 카드로 읽고 아니면 보내기를 막는다(1.25.6, notice.ts).
     return (
       <els.Box flexDirection="column">
-        {below}
         {plan}
         {chin}
+        {below}
       </els.Box>
     )
   })

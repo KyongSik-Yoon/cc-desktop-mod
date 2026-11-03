@@ -2406,7 +2406,7 @@ test('collie 전송 기록: 이 패널로 20초 안에 Enter 까지 넣은 보�
   expect(isPhoneSend('not json', 'w1:p2', 1000)).toBe(false)
 })
 
-test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', KO, async ($, on) => {
+test('아래턱: 저장소·브랜치·diff 칩은 다른 밴드 위에(Heads up 알림이 입력창 바로 위에 남게)', KO, async ($, on) => {
   const PATCH = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1,2 @@\n-a\n+b\n+c\n'
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('process.run', ($, e) => {
@@ -2420,7 +2420,8 @@ test('아래턱: 저장소·브랜치·diff 칩을 다른 밴드 아래에', KO,
   await $.command.run({ command: 'desk-diff', args: '' } as never)
   const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'AbovePrompt', viewport: VIEWPORT, props: { hasSurvey: false, isWorking: false, maxRows: 30, bodyColumns: 96 } as never })
   const drawn = JSON.stringify(await band.drawn())
-  expect(drawn.indexOf('engine-band')).toBeLessThan(drawn.indexOf('myrepo'))
+  // Heads up 알림 키 줄과 입력창 사이에 아래턱이 끼면 collie 가 카드를 못 읽고 보내기를 막는다
+  expect(drawn.indexOf('engine-band')).toBeGreaterThan(drawn.indexOf('myrepo'))
   expect(drawn).toContain('feature/x')
   expect(drawn).toContain(' +2 ')
   expect(drawn).toContain(' −1 ')
