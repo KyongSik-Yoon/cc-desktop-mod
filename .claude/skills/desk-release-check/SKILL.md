@@ -22,7 +22,7 @@ python3 .claude/skills/desk-release-check/scripts/release_check.py gather --sinc
 - 그 구간의 릴리즈 노트(VSCode·Slack·클라우드·Windows 처럼 터미널 mod 와 무관한 표면은 걸러져 있다)
 - 플러그인 API diff 요약: 새로 생기거나 없어진 export 타입, 이벤트/op 키, `$` 멤버. 전체 diff 파일 경로도 함께 나온다
 
-스냅숏은 `~/.cache/desk-release-check/types/` 에 버전별로 모인다. 엔진이 mod 를 불러올 때 써 두는 타입 파일을 모으는 방식이라, 설치 버전으로 한 번도 mod 를 불러오지 않았으면 그 버전 스냅숏이 없다. 출력에 그렇다고 나오면 세션을 한 번 띄운 뒤 다시 돌린다.
+스냅숏은 `~/.cache/desk-release-check/types/` 에 버전별로 모인다. 엔진이 mod 옆에 써 둔 타입 파일을 모으고, 설치 버전 것이 없으면 엔진 바이너리에 zstd 로 묶인 원본을 푼다(Python 3.14 의 `compression.zstd`). 2.1.317 은 mod 를 불러와도 타입 파일을 새로 쓰지 않았다.
 
 ## 2. 후보 고르기
 
