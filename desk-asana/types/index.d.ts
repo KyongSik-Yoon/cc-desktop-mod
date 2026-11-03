@@ -35,11 +35,17 @@ export type AsanaDetail = {
   url: string | null
   fields: AsanaField[]
   comments: AsanaComment[]
+  // 상위 태스크와 하위 태스크(get_task 의 parent·subtasks, Asana 의 차례). v2 는 하위 태스크의 이름만 줘서 completed 가 null.
+  // 0.72.0 전에 연 상세에는 없다.
+  parent?: { gid: string; name: string } | null
+  subtasks?: AsanaSubtask[]
 }
+export type AsanaSubtask = { gid: string; name: string; completed: boolean | null }
 // status: none 은 Asana 서버가 연결돼 있지 않음, failed 는 읽지 못함(error).
 // unruled: 패널이 부르는 도구 중 허용되지 않아 엔진이 물어보거나 막을 것(paneTools). desk-grant 가 낡았을 때 생긴다.
 export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; unruled: string[]; error?: string }
-export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task: AsanaDetail | null; error?: string }
+// trail: 하위·상위 태스크로 들어오기 전에 보던 태스크들(앞이 먼저). 뒤로는 끝의 것으로, 비었으면 목록으로. 0.72.0 전에 연 상세에는 없다.
+export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task: AsanaDetail | null; error?: string; trail?: string[] }
 export type AsanaUser = { gid: string; name: string; email: string | null }
 // 패널 검색창: 이 글자로 찾은 워크스페이스 태스크. null 이면 내 태스크 목록.
 export type AsanaSearch = { query: string; status: 'loading' | 'ok' | 'failed'; tasks: AsanaTask[]; error?: string }
