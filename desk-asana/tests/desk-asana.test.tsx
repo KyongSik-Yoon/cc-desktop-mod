@@ -256,6 +256,137 @@ describe('Asana 패널', () => {
     await pane.unmount()
   })
 
+  test('하위 태스크: v1 은 완료 여부까지, v2 는 이름만, 상위 태스크도', () => {
+    const v1 = toDetail({ data: { gid: 'p', name: '부모', parent: { gid: 'g', name: '할아버지' }, subtasks: [{ gid: 's1', name: '하나', completed: true }, { gid: 's2', name: '둘', completed: false }, { name: 'gid 없음' }] } })
+    expect(v1?.parent).toEqual({ gid: 'g', name: '할아버지' })
+    expect(v1?.subtasks).toEqual([{ gid: 's1', name: '하나', completed: true }, { gid: 's2', name: '둘', completed: false }])
+    const v2 = toDetail({ data: { gid: 'p', name: '부모', parent: null, subtasks: [{ gid: 's1', name: '하나', resource_type: 'task' }] } })
+    expect(v2?.parent).toBeNull()
+    expect(v2?.subtasks).toEqual([{ gid: 's1', name: '하나', completed: null }])
+    expect(toDetail({ data: { gid: 'p', name: '부모' } })?.subtasks).toEqual([])
+  })
+
+  test('하위 태스크로 들어가고 뒤로 나오면 상위 태스크, 다시 뒤로는 목록. 설명·하위 태스크·댓글은 줄로 나눈다', KO, async ($, on) => {
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    const tasks: Record<string, unknown> = {
+      p: { gid: 'p', name: '부모 태스크', notes: '부모 본문', parent: null, subtasks: [{ gid: 'c', name: '자식 태스크' }] },
+      c: { gid: 'c', name: '자식 태스크', notes: '', parent: { gid: 'p', name: '부모 태스크' }, subtasks: [{ gid: 'g', name: '손자 태스크' }] },
+      g: { gid: 'g', name: '손자 태스크', notes: '', parent: { gid: 'c', name: '자식 태스크' }, subtasks: [] },
+    }
+    on('clock.now', () => ({ value: Date.parse('2026-10-16T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    on('tool.check', () => ({ decision: 'allow' }) as never)
+    on('mcp.call', ($, e) => {
+      switch (e.tool) {
+        case 'get_my_tasks':
+          return text({ data: [{ gid: 'p', name: '부모 태스크', memberships: [] }] })
+        case 'get_task':
+          expect(e.args.include_subtasks).toBe(true)
+          return text({ data: tasks[e.args.task_id as string] })
+        case 'get_task_stories':
+          return text({ data: e.args.task_id === 'p' ? [{ gid: 'm1', text: '부모 댓글', html_text: '<body>부모 댓글</body>', created_by: { name: 'Alex' }, resource_subtype: 'comment_added' }] : [] })
+        default:
+          return text({ data: { gid: 'me' } })
+      }
+    })
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-asana', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 60 } as never })
+    await pane.press({ key: 'asana-task-p' })
+    await wait(50)
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('"설명"')
+    expect(drawn).toContain('"하위 태스크 1"')
+    expect(drawn).toContain('"댓글 1"')
+    expect(drawn).toContain('● Alex')
+    expect(drawn).toContain('› 자식 태스크')
+    expect(drawn).toContain('← 목록')
+    expect(drawn).not.toContain('asana-parent')
+
+    await pane.press({ key: 'asana-sub-c' })
+    await wait(50)
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('↑ 부모 태스크')
+    expect(drawn).toContain('← 이전 태스크')
+    expect(drawn).toContain('› 손자 태스크')
+    expect(drawn).not.toContain('"설명"')
+
+    await pane.press({ key: 'asana-sub-g' })
+    await wait(50)
+    // ↑ 로 바로 앞 태스크(자식)에 가면 뒤로 가기와 같아 경로가 쌓이지 않는다
+    await pane.press({ key: 'asana-parent' })
+    await wait(50)
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('› 손자 태스크')
+
+    await pane.press({ key: 'asana-back' })
+    await wait(50)
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('부모 본문')
+    expect(drawn).toContain('← 목록')
+
+    await pane.press({ key: 'asana-back' })
+    await wait(50)
+    expect(JSON.stringify(await pane.drawn())).toContain('내 태스크 1')
+    await pane.unmount()
+  })
+
+  test('하위 태스크: 늦게 온 다시 읽기는 옮겨 간 태스크를 끌어오지 않고, 펼친 드롭다운은 따라가지 않으며, 50줄까지만', KO, async ($, on) => {
+    const text = (value: unknown) => ({ value: { content: [{ type: 'text', text: JSON.stringify(value) }], isError: false } })
+    const field = { gid: 'f1', name: '우선순위', type: 'enum', display_value: '높음', enum_options: [{ gid: 'o1', name: '높음' }, { gid: 'o2', name: '낮음' }] }
+    const many = Array.from({ length: 53 }, (_, index) => ({ gid: `m${index}`, name: `많은 ${index}` }))
+    const tasks: Record<string, unknown> = {
+      p: { gid: 'p', name: '부모 태스크', notes: '', parent: null, custom_fields: [field], subtasks: [{ gid: 'c', name: '자식 태스크' }, ...many] },
+      c: { gid: 'c', name: '자식 태스크', notes: '', parent: { gid: 'p', name: '부모 태스크' }, custom_fields: [field], subtasks: [] },
+    }
+    let release: () => void = () => undefined
+    const gate = new Promise<void>(resolve => (release = resolve))
+    on('clock.now', () => ({ value: Date.parse('2026-10-16T03:00:00Z') }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('ui.toast', () => ({ value: undefined as never }))
+    on('tool.list', () => ({ value: V2.map(name => ({ name, description: '', mcp: true })) }))
+    on('tool.check', () => ({ decision: 'allow' }) as never)
+    on('mcp.call', async ($, e) => {
+      switch (e.tool) {
+        case 'get_my_tasks':
+          return text({ data: [{ gid: 'p', name: '부모 태스크', memberships: [] }] })
+        case 'get_task':
+          return text({ data: tasks[e.args.task_id as string] })
+        case 'add_comment':
+          await gate
+          return text({ data: { gid: 'new' } })
+        default:
+          return text({ data: [] })
+      }
+    })
+    await $.command.run({ command: 'desk-asana', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-asana', surface: 'terminal', component: 'Pane', requestId: 'desk-asana', viewport: VIEWPORT, props: { title: 'Asana', isFocused: true, bodyColumns: 60 } as never })
+    await pane.press({ key: 'asana-task-p' })
+    await wait(50)
+    let drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('"하위 태스크 54"')
+    expect(drawn).toContain('asana-sub-m48')
+    expect(drawn).not.toContain('asana-sub-m49')
+    expect(drawn).toContain('외 4개는 Asana 에서')
+
+    await pane.press({ key: 'asana-field-f1' })
+    expect(JSON.stringify(await pane.drawn())).toContain('asana-option-f1-o2')
+    // 부모에 댓글을 보내 놓고, 답이 오기 전에 자식으로 들어간다
+    void pane.input({ key: 'asana-write-p-0', text: '보낸다' })
+    await wait(20)
+    await pane.press({ key: 'asana-sub-c' })
+    await wait(50)
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('↑ 부모 태스크')
+    expect(drawn).not.toContain('asana-option-f1-o2')
+    release()
+    await wait(80)
+    drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('↑ 부모 태스크')
+    expect(drawn).toContain('← 이전 태스크')
+    await pane.unmount()
+  })
+
   test('멘션 html: 긴 이름부터, 지운 멘션은 그냥 글, 특수 문자는 이스케이프', () => {
     const kim = { gid: '1', name: 'Kim', email: null }
     const kimLee = { gid: '2', name: 'Kim Lee', email: null }

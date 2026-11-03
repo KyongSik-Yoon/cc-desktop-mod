@@ -39,11 +39,13 @@ import {
 import type { AsanaCall } from './asana'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { renderMarkdown } from './shared/markdown'
-import { COLORS, ago, clip, fillPrompt, rowButton } from './util'
+import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton } from './util'
 
 const ASANA_PANE = 'desk-asana'
 // 댓글 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
 const COMMENT_ROWS = 3
+// 상세에 그리는 하위 태스크 줄 수. 나머지는 수만 알리고 Asana 에서 본다.
+const SUBTASK_ROWS = 50
 
 // 내 태스크 목록, 펼친 태스크 하나(null 이면 목록), 담당자 바꾸기에서 찾은 사람들.
 // 쓰던 댓글·찾는 이름은 변수에 둔다(atom 이면 글자마다 패널 전체를 다시 그린다).
@@ -239,9 +241,22 @@ async function closeAsanaProject($: EngineInterface) {
   await update($, asanaProject, () => null)
 }
 
-// 태스크 하나를 펼친다(같은 태스크를 다시 읽는 동안은 전 내용을 그대로 보인다).
+// 태스크 하나를 펼친다(같은 태스크를 다시 읽는 동안은 전 내용을 그대로 보인다). 목록에서 열 때와 다시 읽을 때 쓴다.
+// 다시 읽기(댓글 단 뒤·바꾼 뒤)가 오는 사이 사람이 다른 태스크로 옮겼으면 그 태스크를 두고 아무것도 하지 않는다.
 async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
-  await update($, asanaView, (view): AsanaView => ({ gid, status: 'loading', task: view?.gid === gid ? view.task : null }))
+  let isShown = true
+  await update($, asanaView, (view): AsanaView | null => {
+    if (view !== null && view.gid !== gid) {
+      isShown = false
+      return view
+    }
+    return { gid, status: 'loading', task: view?.task ?? null, trail: view?.trail ?? [] }
+  })
+  if (isShown) await loadAsanaTask($, server, gid)
+}
+
+// 보이는 태스크(gid)의 내용을 읽어 채운다. 그 사이 다른 태스크로 옮겼으면 버린다.
+async function loadAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
   // 댓글 서식은 stories 에만 있다. 못 읽으면 v2 는 get_task 의 평문 댓글을 쓴다(v1 은 댓글이 stories 에만 있다).
   const [got, stories, me] = await Promise.all([
     callAsana($, server, taskCall(server, gid)),
@@ -251,17 +266,70 @@ async function openAsanaTask($: EngineInterface, server: AsanaServer, gid: strin
   if (me?.ok) asanaMe = myGid(me.data)
   const task = got.ok ? toDetail(got.data, stories?.ok ? stories.data : undefined, asanaKeyFields) : null
   const error = got.ok ? (task ? undefined : 'unexpected result') : got.error
-  await update($, asanaView, (view): AsanaView | null => (view?.gid !== gid ? view : task ? { gid, status: 'ok', task } : { gid, status: 'failed', task: null, error }))
+  await update($, asanaView, (view): AsanaView | null =>
+    view?.gid !== gid ? view : task ? { gid, status: 'ok', task, trail: view.trail ?? [] } : { gid, status: 'failed', task: null, error, trail: view.trail ?? [] },
+  )
 }
 
-async function closeAsanaTask($: EngineInterface) {
+// 다른 태스크로 옮기기 전에 쓰던 댓글·사람 찾기·고치기와 펼친 상태·드롭다운·담당자 확인을 비운다
+// (같은 프로젝트의 하위 태스크는 필드 gid 가 같아 펼친 드롭다운이 따라간다).
+async function leaveAsanaTask($: EngineInterface) {
   asanaDraft = ''
   asanaQuery = ''
   asanaMentions = []
   await update($, asanaUsers, () => null)
   await update($, asanaEdit, () => null)
-  await update($, open, state => ({ ...state, 'asana:assign': false, 'asana:mention': false, 'asana:status': false }))
+  await update($, open, state => ({
+    ...Object.fromEntries(Object.entries(state).filter(([key]) => !key.startsWith('asana:field:') && !key.startsWith('asana:arm:'))),
+    'asana:assign': false,
+    'asana:mention': false,
+    'asana:status': false,
+  }))
+}
+
+// 상세 안 이동의 차례. 누름이 겹치면(들어가는 중에 b) 나중 것만 끝까지 간다.
+let asanaNavRound = 0
+
+async function closeAsanaTask($: EngineInterface) {
+  asanaNavRound++
+  await leaveAsanaTask($)
   await update($, asanaView, () => null)
+}
+
+// 상세 안에서 하위·상위 태스크로 들어간다: 지금 태스크를 경로 끝에 쌓는다.
+// 바로 앞에 보던 태스크(들어온 상위 태스크)로 가는 것이면 뒤로 가기와 같다.
+async function enterAsanaTask($: EngineInterface, server: AsanaServer, gid: string) {
+  const view = await read($, asanaView)
+  if (view === null) return
+  const trail = view.trail ?? []
+  if (trail.at(-1) === gid) return backAsanaTask($, server)
+  await goToAsanaTask($, server, gid, [...trail, view.gid], null)
+}
+
+// 뒤로: 경로가 있으면 앞 태스크로(나온 하위 태스크 줄을 보이게), 없으면 목록으로.
+async function backAsanaTask($: EngineInterface, server: AsanaServer) {
+  const view = await read($, asanaView)
+  const trail = view?.trail ?? []
+  const prev = trail.at(-1)
+  if (view === null || prev === undefined) return closeAsanaTask($)
+  await goToAsanaTask($, server, prev, trail.slice(0, -1), view.gid)
+}
+
+// 다른 태스크를 패널 맨 위에서 보인다. from 은 돌아올 때 나온 하위 태스크: 다 읽은 뒤 그 줄로 옮긴다.
+// 줄은 새 내용이 그려진 뒤에야 찾을 수 있어 몇 번 다시 해 본다(desk-look 의 scrollToFile 과 같다).
+async function goToAsanaTask($: EngineInterface, server: AsanaServer, gid: string, trail: string[], from: string | null) {
+  const round = ++asanaNavRound
+  await leaveAsanaTask($)
+  if (round !== asanaNavRound) return
+  await update($, asanaView, (): AsanaView => ({ gid, status: 'loading', task: null, trail }))
+  await $.ui.scroll({ in: ASANA_PANE, to: 'start' }).catch(() => undefined)
+  await loadAsanaTask($, server, gid)
+  if (from === null) return
+  for (let tries = 0; tries < 8 && round === asanaNavRound; tries++) {
+    const moved = await $.ui.scroll({ in: ASANA_PANE, to: { key: `asana-sub-${from}` }, block: 'center' }).catch(() => ({ deny: 'failed' }))
+    if (!moved.deny) return
+    await $.clock.sleep(100).catch(() => undefined)
+  }
 }
 
 // 빈 글자로 찾으면 검색을 끝내고 내 태스크로 돌아간다. 늦게 온 옛 검색 결과는 버린다.
@@ -588,9 +656,20 @@ export const register: Register = (on, options) => {
 
     if (view !== null && server !== null) {
       const task = view.task
+      const backLabel = (view.trail ?? []).length > 0 ? T.asanaBackTask : T.asanaBack
+      // 설명·하위 태스크·댓글을 가르는 줄: "── 댓글 3 ─────" 을 패널 폭까지.
+      const rule = (label: string) => (
+        <Box>
+          <Text color={COLORS.muted}>{'── '}</Text>
+          <Text color={COLORS.text} weight="semibold">
+            {label}
+          </Text>
+          <Text color={COLORS.muted} wrap="truncate-end">{` ${'─'.repeat(Math.max(2, columns - cellWidth(label) - 4))}`}</Text>
+        </Box>
+      )
       const head = (
         <Box columnGap={1}>
-          <Button key="asana-back" plain dimColor hotkey="b" label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
+          <Button key="asana-back" plain dimColor hotkey="b" label={backLabel} onPress={() => void backAsanaTask($, server)} />
           <Button key="asana-reload" plain dimColor hotkey="r" label={view.status === 'loading' ? '…' : '↻'} onPress={() => void openAsanaTask($, server, view.gid)} />
         </Box>
       )
@@ -640,12 +719,17 @@ export const register: Register = (on, options) => {
         )
       }
       const fields = task.fields.filter(field => field.value !== null || field.options !== null)
+      // 0.72.0 전에 연 상세(asanaView atom)에는 둘 다 없다.
+      const parent = task.parent ?? null
+      const subtasks = task.subtasks ?? []
       const canPickStatus = task.status !== null && task.statuses.length > 0
       const isStatusPicking = armed['asana:status'] ?? false
       return (
         <Box flexDirection="column" rowGap={1}>
           {head}
           <Box flexDirection="column">
+            {parent &&
+              rowButton(els, { key: 'asana-parent', dimColor: true, onPress: () => void enterAsanaTask($, server, parent.gid) }, `↑ ${clip(parent.name, Math.max(8, columns - 2))}`)}
             <Text color={COLORS.text} weight="semibold">
               {task.name}
             </Text>
@@ -732,17 +816,32 @@ export const register: Register = (on, options) => {
             })}
           </Box>
           {/* 0.48 이 열어 둔 상세(asanaView atom)는 /reload-plugins 뒤에도 남고 richNotes 가 없다. */}
-          {typeof task.richNotes === 'string'
-            ? task.richNotes !== '' && renderMarkdown(task.richNotes, els, COLORS, columns, { document: true })
-            : task.notes.trim() !== '' && <Text color={COLORS.text}>{task.notes.trim()}</Text>}
+          {(typeof task.richNotes === 'string' ? task.richNotes !== '' : task.notes.trim() !== '') && (
+            <Box flexDirection="column">
+              {rule(T.asanaNotes)}
+              {typeof task.richNotes === 'string' ? renderMarkdown(task.richNotes, els, COLORS, columns, { document: true }) : <Text color={COLORS.text}>{task.notes.trim()}</Text>}
+            </Box>
+          )}
+          {subtasks.length > 0 && (
+            <Box flexDirection="column">
+              {rule(T.asanaSubtasks(subtasks.length))}
+              {/* v2 는 완료 여부를 주지 않아(null) 모두 같은 모양. v1 은 완료한 것을 흐리게 ✓ 로. 줄마다 버튼이라 SUBTASK_ROWS 까지만. */}
+              {subtasks.slice(0, SUBTASK_ROWS).map(sub =>
+                rowButton(
+                  els,
+                  { key: `asana-sub-${sub.gid}`, dimColor: sub.completed === true, onPress: () => void enterAsanaTask($, server, sub.gid) },
+                  `${sub.completed === true ? '✓' : '›'} ${clip(sub.name, Math.max(8, columns - 2))}`,
+                ),
+              )}
+              {subtasks.length > SUBTASK_ROWS && <Text color={COLORS.muted}>{T.asanaSubtasksMore(subtasks.length - SUBTASK_ROWS)}</Text>}
+            </Box>
+          )}
           <Box flexDirection="column" rowGap={1}>
-            <Text color={COLORS.text} weight="semibold">
-              {T.asanaComments(task.comments.length)}
-            </Text>
+            {rule(T.asanaComments(task.comments.length))}
             {task.comments.map(comment => (
               <Box key={`asana-comment-${comment.gid}`} flexDirection="column">
                 <Box columnGap={1}>
-                  <Text color={COLORS.accent}>{comment.author}</Text>
+                  <Text color={COLORS.accent} weight="semibold">{`● ${comment.author}`}</Text>
                   <Text color={COLORS.muted}>{Number.isNaN(Date.parse(comment.at)) ? '' : ago(Date.parse(comment.at), now)}</Text>
                   {asanaMe !== null && comment.authorGid === asanaMe && (
                     <Button
@@ -754,28 +853,31 @@ export const register: Register = (on, options) => {
                     />
                   )}
                 </Box>
-                {editing?.comment === comment.gid && editing.story !== null ? (
-                  <Box flexDirection="column">
-                    <Input
-                      key={`asana-editing-${comment.gid}-${asanaEditRound}`}
-                      label={T.asanaEditLabel}
-                      rows={Math.min(12, Math.max(COMMENT_ROWS, editing.story.text.split('\n').length + 1))}
-                      value={asanaEditDraft}
-                      submitLabel={editing.status === 'saving' ? '…' : T.asanaEditSave}
-                      onInput={value => (asanaEditDraft = value)}
-                      onSubmit={value => void saveAsanaEdit($, server, task.gid, value)}
-                    />
-                    <Box>
-                      <Button key={`asana-edit-clear-${comment.gid}`} plain dimColor label={T.inputClear} onPress={() => void keepAsanaEdit($, comment.gid, '', true)} />
+                {/* 본문과 헷갈리지 않게 댓글 글은 작성자 줄 아래로 두 칸 들인다. */}
+                <Box flexDirection="column" paddingLeft={2}>
+                  {editing?.comment === comment.gid && editing.story !== null ? (
+                    <Box flexDirection="column">
+                      <Input
+                        key={`asana-editing-${comment.gid}-${asanaEditRound}`}
+                        label={T.asanaEditLabel}
+                        rows={Math.min(12, Math.max(COMMENT_ROWS, editing.story.text.split('\n').length + 1))}
+                        value={asanaEditDraft}
+                        submitLabel={editing.status === 'saving' ? '…' : T.asanaEditSave}
+                        onInput={value => (asanaEditDraft = value)}
+                        onSubmit={value => void saveAsanaEdit($, server, task.gid, value)}
+                      />
+                      <Box>
+                        <Button key={`asana-edit-clear-${comment.gid}`} plain dimColor label={T.inputClear} onPress={() => void keepAsanaEdit($, comment.gid, '', true)} />
+                      </Box>
                     </Box>
-                  </Box>
-                ) : typeof comment.richText === 'string' ? (
-                  // 0.49 가 열어 둔 상세(asanaView atom)의 댓글에는 richText 가 없다.
-                  comment.richText !== '' && renderMarkdown(comment.richText, els, COLORS, columns, { document: true })
-                ) : (
-                  <Text color={COLORS.text}>{comment.text.trim()}</Text>
-                )}
-                {editing?.comment === comment.gid && editing.status === 'notoken' && <Text color={COLORS.warning}>{T.asanaNeedToken(T.asanaEditWhat)}</Text>}
+                  ) : typeof comment.richText === 'string' ? (
+                    // 0.49 가 열어 둔 상세(asanaView atom)의 댓글에는 richText 가 없다.
+                    comment.richText !== '' && renderMarkdown(comment.richText, els, COLORS, columns - 2, { document: true })
+                  ) : (
+                    <Text color={COLORS.text}>{comment.text.trim()}</Text>
+                  )}
+                  {editing?.comment === comment.gid && editing.status === 'notoken' && <Text color={COLORS.warning}>{T.asanaNeedToken(T.asanaEditWhat)}</Text>}
+                </Box>
               </Box>
             ))}
             <Input
@@ -795,7 +897,7 @@ export const register: Register = (on, options) => {
             {isMentioning && finder('asana-mention-search', found?.status === 'ok' ? found.users.map(mentionRow) : [])}
           </Box>
           <Box>
-            <Button key="asana-back-end" plain dimColor label={T.asanaBack} onPress={() => void closeAsanaTask($)} />
+            <Button key="asana-back-end" plain dimColor label={backLabel} onPress={() => void backAsanaTask($, server)} />
           </Box>
         </Box>
       )

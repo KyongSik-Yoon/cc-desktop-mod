@@ -1,4 +1,4 @@
-import type { AsanaComment, AsanaDetail, AsanaField, AsanaProject, AsanaServer, AsanaTask, AsanaUser } from '../types'
+import type { AsanaComment, AsanaDetail, AsanaField, AsanaProject, AsanaServer, AsanaSubtask, AsanaTask, AsanaUser } from '../types'
 import { T } from './i18n'
 
 // /desk-asana: 내게 할당된 Asana 태스크. 엔진에 이미 붙은 Asana MCP 서버를 그대로 쓴다($.mcp.call, 엔진의 연결·인증).
@@ -57,6 +57,8 @@ const TASK_FIELDS = [
   'custom_type_status_option.name,custom_type.status_options.gid,custom_type.status_options.name,custom_type.status_options.enabled',
   'custom_fields.name,custom_fields.type,custom_fields.display_value,custom_fields.is_formula_field',
   'custom_fields.enum_options.name,custom_fields.enum_options.enabled',
+  // v1 은 하위 태스크의 필드를 opt_fields 로 고를 수 있다. v2 는 include_subtasks 로 이름만 주고 이 필드를 무시한다.
+  'parent.name,subtasks.name,subtasks.completed',
 ].join(',')
 
 // 도구 이름(mcp__<서버>__<도구>) 목록에서 Asana 서버를 찾는다. 패널이 쓰는 도구가 그 서버에 다 있어야 한다.
@@ -116,7 +118,7 @@ export function keySearchCalls(server: AsanaServer, text: string, keyFields: rea
 
 export function taskCall(server: AsanaServer, gid: string): AsanaCall {
   return server.dialect === 'v2'
-    ? { tool: ASANA_TOOLS.v2.task, args: { task_id: gid, comment_limit: COMMENT_LIMIT, include_subtasks: false, opt_fields: TASK_FIELDS } }
+    ? { tool: ASANA_TOOLS.v2.task, args: { task_id: gid, comment_limit: COMMENT_LIMIT, include_subtasks: true, opt_fields: TASK_FIELDS } }
     : { tool: ASANA_TOOLS.v1.task, args: { task_id: gid, opt_fields: TASK_FIELDS } }
 }
 
@@ -635,6 +637,8 @@ type RawTask = {
     enum_options?: Array<{ gid?: string; name?: string; enabled?: boolean }>
   }>
   comments?: RawStory[]
+  parent?: Named
+  subtasks?: Array<{ gid?: string; name?: string; completed?: boolean } | null>
 }
 type RawStory = { gid?: string; text?: string; html_text?: string; created_at?: string; created_by?: Named; resource_subtype?: string }
 
@@ -769,6 +773,10 @@ export function toDetail(json: unknown, stories?: unknown, keyFields: readonly s
     url: str(raw.permalink_url),
     fields,
     comments: comments.slice(-COMMENT_LIMIT),
+    parent: typeof raw.parent?.gid === 'string' ? { gid: raw.parent.gid, name: str(raw.parent.name) ?? '' } : null,
+    subtasks: (raw.subtasks ?? [])
+      .filter(sub => typeof sub?.gid === 'string')
+      .map((sub): AsanaSubtask => ({ gid: sub?.gid as string, name: str(sub?.name) ?? '', completed: typeof sub?.completed === 'boolean' ? sub.completed : null })),
   }
 }
 
