@@ -5,13 +5,15 @@
   release_check.py mark VERSION              VERSION 까지 봤다고 적는다
 
 타입 스냅숏과 마지막으로 본 버전은 ~/.cache/desk-release-check/ 에 둔다(저장소에 커밋하지 않는다).
-엔진은 mod 를 불러올 때마다 그 버전의 타입을 mod 옆에 써 두므로, 이 기계에 남은 것을 모아 버전별로 보관한다.
+엔진이 mod 옆에 써 둔 타입 파일을 모으고, 설치 버전 것이 없으면 엔진 바이너리에 zstd 로 묶인 원본을 푼다
+(2.1.317 은 mod 를 불러와도 타입 파일을 새로 쓰지 않았다).
 """
 import difflib
 import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -59,7 +61,37 @@ def collect():
             target = os.path.join(TYPES, f'{match.group(1)}.d.ts')
             if not os.path.exists(target):
                 open(target, 'w', encoding='utf-8').write(block)
+    version = installed()
+    target = os.path.join(TYPES, f'{version}.d.ts') if version else None
+    if target and not os.path.exists(target):
+        block = from_binary()
+        if block is not None:
+            open(target, 'w', encoding='utf-8').write(block)
     return sorted((name[:-5] for name in os.listdir(TYPES) if name.endswith('.d.ts')), key=vkey)
+
+
+# 바이너리의 $bunfs 안 claude-code.d.ts-*.txt.zst. 프레임마다 머리만 풀어 보고 맞는 것만 끝까지 푼다(0.4초).
+BUNDLED_HEAD = b'// Claude Code function hooks'
+
+
+def from_binary():
+    try:
+        from compression import zstd  # Python 3.14+
+    except ImportError:
+        return None
+    path = shutil.which('claude')
+    if path is None:
+        return None
+    data = open(os.path.realpath(path), 'rb').read()
+    at = 0
+    while (at := data.find(b'\x28\xb5\x2f\xfd', at)) != -1:
+        try:
+            if zstd.ZstdDecompressor().decompress(data[at:at + 65536], max_length=len(BUNDLED_HEAD)) == BUNDLED_HEAD:
+                return api_block(zstd.ZstdDecompressor().decompress(data[at:]).decode('utf-8'))
+        except zstd.ZstdError:
+            pass
+        at += 1
+    return None
 
 
 def installed():
@@ -184,7 +216,7 @@ def gather(since):
         print('(need two snapshots: only the current one is on this machine; next run will diff against it)')
         return
     if current and newest != current:
-        print(f'(note: newest snapshot is {newest}, installed is {current}; load a mod once on {current} to snapshot it)')
+        print(f'(note: newest snapshot is {newest}, installed is {current}; the engine binary had no bundled types to unpack)')
     summary, path, lines = diff_types(base, newest)
     print(f'{base} -> {newest}: {lines} diff lines, full diff at {path}')
     for kind, change in summary.items():
