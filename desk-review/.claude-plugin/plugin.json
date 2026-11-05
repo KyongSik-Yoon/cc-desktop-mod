@@ -1,0 +1,42 @@
+{
+  "name": "desk-review",
+  "version": "0.72.3",
+  "description": "Claude Code mod with a /desk-review:simplify-review skill (/simplify, then /code-review medium) whose report opens in a side pane: each fixed, skipped, found or dismissed item with its reason, its current source a press away, and the file opened in desk-look's diff pane. Needs desk-look",
+  "keywords": [
+    "claude-code",
+    "claude-code-mod",
+    "claude-code-plugin",
+    "code-review",
+    "simplify",
+    "terminal-ui",
+    "tui"
+  ],
+  "author": {
+    "name": "KyongSik-Yoon",
+    "url": "https://github.com/KyongSik-Yoon"
+  },
+  "license": "MIT",
+  "icon": "./.claude-plugin/icon.svg",
+  "documentationUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-review#readme",
+  "supportUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/issues",
+  "homepage": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
+  "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
+  "dependencies": [
+    "desk-look"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the review pane. auto follows desk-look's language",
+      "options": [
+        "auto",
+        "en",
+        "ko"
+      ],
+      "default": "auto",
+      "required": false
+    }
+  }
+}
