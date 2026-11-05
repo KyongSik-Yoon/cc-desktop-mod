@@ -3308,6 +3308,12 @@ export const register: Register = (on, options) => {
     if (e.value && isMarkdown(e.value.path)) await openPreview($, e.value.path, e.value.focus).catch(() => undefined)
     return done
   }).catch(($, e, next) => next(e))
+  // desk-review 의 리뷰 결과 패널에서 "diff 에서 보기"를 누르면 그 파일에서 diff 패널을 연다(턴 끝 카드의 파일 줄과 같은 길).
+  on('state.set', { plugin: 'desk-review', key: 'diffAt' }, async ($, e, next) => {
+    const done = await next(e)
+    if (e.value && typeof e.value.path === 'string' && e.value.path !== '') await openDiffAt($, e.value.path).catch(() => undefined)
+    return done
+  }).catch(($, e, next) => next(e))
   const isGather = options.replyInBlocks !== 'off'
   const isPreviewAuto = options.previewAutoOpen !== 'off'
 
@@ -3552,17 +3558,19 @@ export const register: Register = (on, options) => {
     const market = await $.process.run(['claude', 'plugin', 'marketplace', 'update', 'cc-desktop-mod'], { timeoutMs: 150_000 })
     if (market.exitCode !== 0) return { text: T.updateFailed(lastLine(market.stderr || market.stdout)) }
     const ran = await $.process.run(['claude', 'plugin', 'update', 'desk-look@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
-    // 같은 마켓의 desk-asana·desk-slack·desk-plan·desk-grant 도 함께 올린다. 설치하지 않았으면 실패하는데, 그건 알리지 않는다.
+    // 같은 마켓의 desk-asana·desk-slack·desk-plan·desk-review·desk-grant 도 함께 올린다. 설치하지 않았으면 실패하는데, 그건 알리지 않는다.
     // desk-grant 는 desk-asana·desk-slack 의 의존으로 깔린다. 없으면 설치는 하지 않고 두 패널이 설치를 안내한다.
     // 차례로 돌린다: 저마다 설치 기록(installed_plugins.json)을 읽고 고쳐 쓰므로 동시에 돌면 서로의 기록을 덮을 수 있다.
     const asanaRan = await $.process.run(['claude', 'plugin', 'update', 'desk-asana@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
     const slackRan = await $.process.run(['claude', 'plugin', 'update', 'desk-slack@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
     const planRan = await $.process.run(['claude', 'plugin', 'update', 'desk-plan@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
+    const reviewRan = await $.process.run(['claude', 'plugin', 'update', 'desk-review@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
     const grantRan = await $.process.run(['claude', 'plugin', 'update', 'desk-grant@cc-desktop-mod', '--json'], { timeoutMs: 150_000 })
     const siblings = [
       siblingUpdate('desk-asana', asanaRan.exitCode, asanaRan.stdout),
       siblingUpdate('desk-slack', slackRan.exitCode, slackRan.stdout),
       siblingUpdate('desk-plan', planRan.exitCode, planRan.stdout),
+      siblingUpdate('desk-review', reviewRan.exitCode, reviewRan.stdout),
       siblingUpdate('desk-grant', grantRan.exitCode, grantRan.stdout),
     ]
     if (isUpdated(ran.exitCode, ran.stdout) || siblings.some(note => note !== null)) {

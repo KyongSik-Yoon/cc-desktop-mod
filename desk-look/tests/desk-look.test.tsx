@@ -2853,6 +2853,38 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   await row.unmount()
 })
 
+// desk-review 흉내: diff 패널을 열어 달라는 요청(diffAt)을 ReviewStub 도구 호출로 쓴다.
+const reviewStub = {
+  name: 'desk-review',
+  register: ((on: On) => {
+    on('tool.call', { tool: 'ReviewStub' } as never, async ($, e) => {
+      await $.state.set({ plugin: 'desk-review', key: 'diffAt' }, (e as unknown as { diffAt: unknown }).diffAt as never)
+      return { result: 'ok' } as never
+    })
+  }) as never,
+}
+
+test('desk-review 가 diffAt 을 쓰면 diff 패널이 그 파일에서 열린다', { ...KO, plugins: [reviewStub] }, async ($, on) => {
+  const opened: string[] = []
+  on('process.run', gitStub as never)
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('clock.now', () => ({ value: 0 }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.txt', old_string: 'a', new_string: 'b\nc' } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  await $.tool.call({ tool: 'ReviewStub', diffAt: { path: '/repo/a.txt', n: 1 } } as never)
+  expect(opened).toEqual(['desk-diff'])
+  expect(await pane.find({ type: 'Code' })).toBeDefined()
+  // 비운 값(null)에는 열지 않는다
+  await $.tool.call({ tool: 'ReviewStub', diffAt: null } as never)
+  expect(opened).toEqual(['desk-diff'])
+  await pane.unmount()
+})
+
 test('백그라운드 작업 끝남 알림 줄: 기록에 있는 작업이면 눌러서 /desk-tasks 상세(에이전트의 답)를 연다', KO, async ($, on) => {
   const opened: string[] = []
   on('process.run', gitStub as never)
@@ -3203,7 +3235,7 @@ test('아래턱의 +/− 칩을 누르면 diff 패널이 열린다', KO, async (
   await band.unmount()
 })
 
-test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-asana·desk-slack·desk-plan·desk-grant 를 올린다', KO, async ($, on) => {
+test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-asana·desk-slack·desk-plan·desk-review·desk-grant 를 올린다', KO, async ($, on) => {
   const ran: string[] = []
   const result = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', ($, e: { argv: readonly string[] }) => {
@@ -3213,6 +3245,7 @@ test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-
     if (e.argv[3] === 'desk-asana@cc-desktop-mod') return result(1, '{"command":"update","outcome":"error","message":"Plugin not found"}\n') as never
     if (e.argv[3] === 'desk-slack@cc-desktop-mod') return result(0, '{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.55.0","newVersion":"0.55.1"}\n') as never
     if (e.argv[3] === 'desk-plan@cc-desktop-mod') return result(0, '{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.69.0","newVersion":"0.69.1"}\n') as never
+    if (e.argv[3] === 'desk-review@cc-desktop-mod') return result(0, '{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.72.3","newVersion":"0.73.0"}\n') as never
     if (e.argv[3] === 'desk-grant@cc-desktop-mod') return result(0, '{"command":"update","outcome":"ok","updateOutcome":"up_to_date","oldVersion":"0.70.0","newVersion":"0.70.0"}\n') as never
     return result(0, '{"command":"update","outcome":"ok","updateOutcome":"updated","oldVersion":"0.15.4","newVersion":"0.15.5"}\n') as never
   })
@@ -3228,9 +3261,10 @@ test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-
     'claude plugin update desk-asana@cc-desktop-mod --json',
     'claude plugin update desk-slack@cc-desktop-mod --json',
     'claude plugin update desk-plan@cc-desktop-mod --json',
+    'claude plugin update desk-review@cc-desktop-mod --json',
     'claude plugin update desk-grant@cc-desktop-mod --json',
   ])
-  expect((done as { text: string }).text).toBe('desk-look 을 0.15.4 → 0.15.5 로 올렸어요. 플러그인을 다시 불러와 적용해요.\ndesk-slack 도 0.55.0 → 0.55.1 로 올렸어요.\ndesk-plan 도 0.69.0 → 0.69.1 로 올렸어요.')
+  expect((done as { text: string }).text).toBe('desk-look 을 0.15.4 → 0.15.5 로 올렸어요. 플러그인을 다시 불러와 적용해요.\ndesk-slack 도 0.55.0 → 0.55.1 로 올렸어요.\ndesk-plan 도 0.69.0 → 0.69.1 로 올렸어요.\ndesk-review 도 0.72.3 → 0.73.0 로 올렸어요.')
   expect(commands).toEqual([])
   fire()
   await wait(20)
