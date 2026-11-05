@@ -67,6 +67,19 @@
       ]
     },
     {
+      "name": "desk-review",
+      "source": "./desk-review",
+      "description": "A /desk-review:simplify-review skill (/simplify, then /code-review medium) whose report opens in a side pane: each item with its file, line and reason, its current source a press away, and the file opened in desk-look's diff pane. Needs desk-look",
+      "category": "productivity",
+      "tags": [
+        "mod",
+        "code-review",
+        "simplify",
+        "terminal",
+        "tui"
+      ]
+    },
+    {
       "name": "desk-grant",
       "source": "./desk-grant",
       "description": "Helper installed with desk-asana and desk-slack: allows the Asana and Slack calls their side panes make, so they need no allow rules in your settings. Claude's own calls to those tools still get the usual permission check",
