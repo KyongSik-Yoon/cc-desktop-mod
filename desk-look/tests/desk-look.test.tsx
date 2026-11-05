@@ -2253,6 +2253,40 @@ test('질문 카드: Remote Control 이 붙은 세션은 엔진 창에 맡긴다
   expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(false)
 })
 
+test('질문 카드: /clear 뒤 입력이 없어도 그 앞에서 터미널로 입력했으면 카드(Remote Control 이 켜져 있어도)', KO, async ($, on) => {
+  const scripts: (readonly string[])[] = []
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('clock.now', () => ({ value: 0 }))
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  on('tool.call', () => ({ result: 'engine' }) as never)
+  on('clock.after', ($, e) => new Promise(resolve => {
+    if (e.ms < 1000) resolve({ value: undefined })
+  }) as never)
+  on('session.end', ($, e) => ({ sessionId: (e as { sessionId: string }).sessionId }) as never)
+  bridgedSession(on)
+  // 하네스는 /clear 때 atom 을 비우지 않으므로 promptOrigin 저장소를 여기서 들고 있다가 비운다
+  let origin: { value: unknown; version: number } = { value: undefined, version: 0 }
+  on('state.get', { plugin: 'desk-look', key: 'promptOrigin' }, () => ({ value: origin }) as never)
+  on('state.set', { plugin: 'desk-look', key: 'promptOrigin' }, ($, e) => {
+    origin = { value: (e as { value: unknown }).value, version: origin.version + 1 }
+    return { value: { isSet: true, version: origin.version } } as never
+  })
+  // 카드용 임시 폴더를 못 만들게 해 카드 길로 들어섰는지만 본다(엔진 창으로 돌아간다)
+  on('process.run', ($, e) => {
+    scripts.push(e.argv)
+    return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await $.prompt.submit({ text: '/handoff', origin: { kind: 'composer' }, wait: false } as never)
+  expect(origin.value).toBe('composer')
+  // /clear: 엔진은 새 세션의 atom 을 비우고 옛 세션에 session.end(clear)만 보낸다
+  origin = { value: undefined, version: origin.version + 1 }
+  await $.session.end({ reason: 'clear', sessionId: 'old' } as never)
+  for (let tries = 0; tries < 50 && origin.value === undefined; tries++) await wait(10)
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: '어느 쪽?', header: '', options: [{ label: 'a' }] }] } as never)
+  expect(scripts.some(argv => argv[0] === 'mktemp')).toBe(true)
+})
+
 test('질문 카드: 세션 상태 파일이 없어도 앱(bridge)에서 입력했으면 엔진 창', KO, async ($, on) => {
   const scripts: (readonly string[])[] = []
   on('session.surfaces', () => ({ value: ['terminal'] }))
