@@ -329,5 +329,9 @@ declare module 'claude-code' {
       planAsk: { id: string } | null
       preview: { path: string; focus: boolean; n: number } | null
     }
+    // desk-review(리뷰 결과 패널)가 쓰는 값: diff 패널을 이 파일에서 열어 달라는 요청(n 은 쓸 때마다 오른다).
+    'desk-review': {
+      diffAt: { path: string; n: number } | null
+    }
   }
 }

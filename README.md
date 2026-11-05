@@ -17,6 +17,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
 - **Asana and Slack panes** as two more plugins from the same marketplace, [desk-asana](desk-asana/README.md) and [desk-slack](desk-slack/README.md): install only the ones you use, so desk-look itself makes no network request of its own and calls no MCP server
 - **Plan approval in a card** instead of the full-screen dialog, as one more plugin from the same marketplace, [desk-plan](desk-plan/README.md)
+- **Simplify, then review, with the report in a side pane**: [desk-review](desk-review/README.md) runs `/simplify` and then `/code-review medium`, and each item unfolds in place to its diff or its current source
 - **English or Korean** labels, following Claude Code's own language setting by default
 
 ## Commands
@@ -31,7 +32,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - `/desk-monitor`: CPU and memory graphs for each Claude session running on this machine (Linux)
 - `/desk-fold`: Fold the open panes away to give the conversation the width; run it again to unfold them at the same scroll position
 - `/desk-quote`: Put the text you selected in the conversation into the prompt as a `>` quote, to ask about it. If you were already writing, the quote goes above your draft (after any earlier quotes) and the caret stays where you were typing. In the prompt, `>` lines (typed, pasted or inserted) look like quotes: the mark dimmed, the text italic and muted
-- `/desk-update`: Update desk-look, and desk-asana, desk-slack, desk-plan and desk-grant if installed, to the latest version
+- `/desk-update`: Update desk-look, and desk-asana, desk-slack, desk-plan, desk-review and desk-grant if installed, to the latest version
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
 
@@ -201,12 +202,13 @@ At the prompt of a Claude Code terminal session:
 
 Answer `y` when asked to add the marketplace, and pick the user scope.
 
-For the Asana or Slack pane, or the plan card, add the plugin you use from the same marketplace:
+For the Asana or Slack pane, the plan card or the review pane, add the plugin you use from the same marketplace:
 
 ```
 /plugin install desk-asana@cc-desktop-mod
 /plugin install desk-slack@cc-desktop-mod
 /plugin install desk-plan@cc-desktop-mod
+/plugin install desk-review@cc-desktop-mod
 ```
 
 desk-asana and desk-slack install [desk-grant](desk-grant/README.md) with them. If you already had either one, run `/plugin install desk-grant@cc-desktop-mod` once and then `/reload-plugins`.
@@ -232,7 +234,7 @@ Run `/desk-update` at the prompt, or from a shell:
 claude plugin update desk-look
 ```
 
-`/desk-update` also updates desk-asana, desk-slack, desk-plan and desk-grant when they are installed, and runs `/reload-plugins` for you when a new version came in; after the shell command, run it in your session.
+`/desk-update` also updates desk-asana, desk-slack, desk-plan, desk-review and desk-grant when they are installed, and runs `/reload-plugins` for you when a new version came in; after the shell command, run it in your session.
 
 ## Behavior by environment
 
@@ -259,7 +261,7 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` gathers the Claude Code release notes and the plugin API diff since the last check, to find what desk-look can use or drop. `CLAUDE.md` holds the repository's conventions (latest Claude Code only, a GitHub release for every version).
 
-The same commands work in `desk-asana`, `desk-slack`, `desk-plan` and `desk-grant`. desk-asana draws comments with desk-look's Markdown renderer, copied into `desk-asana/hooks/shared/` (a plugin is installed from its own folder only): after changing `desk-look/hooks/markdown.tsx` or `diagram.ts`, run `scripts/sync-shared.sh` and commit both. The release workflow fails while the copy differs (`scripts/sync-shared.sh --check`).
+The same commands work in `desk-asana`, `desk-slack`, `desk-plan`, `desk-review` and `desk-grant`. desk-asana draws comments with desk-look's Markdown renderer, copied into `desk-asana/hooks/shared/` (a plugin is installed from its own folder only): after changing `desk-look/hooks/markdown.tsx` or `diagram.ts`, run `scripts/sync-shared.sh` and commit both. The release workflow fails while the copy differs (`scripts/sync-shared.sh --check`).
 
 `desk-look/.claude-plugin/types/` holds type definitions the engine lays down again every time it loads the mod, so it isn't committed.
 

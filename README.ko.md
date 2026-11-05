@@ -17,6 +17,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - **GitHub 와 GitLab**: PR 은 `gh`, MR 은 `glab` 으로 읽음
 - **Asana·Slack 패널**은 같은 마켓의 플러그인 두 개 [desk-asana](desk-asana/README.ko.md)·[desk-slack](desk-slack/README.ko.md) 로: 쓰는 것만 설치하면 되고, desk-look 자신은 스스로 네트워크 요청을 하지 않고 MCP 서버도 부르지 않음
 - **계획 승인을 카드로**: 화면을 덮는 엔진 창 대신, 같은 마켓의 플러그인 [desk-plan](desk-plan/README.ko.md) 으로
+- **정리하고 리뷰하고, 결과는 옆 패널로**: [desk-review](desk-review/README.ko.md) 가 `/simplify` 다음 `/code-review medium` 을 돌리고, 항목을 누르면 그 자리에서 diff 나 지금 소스가 펼쳐집니다
 - **영어·한국어** 표시, 기본은 Claude Code 언어 설정을 따름
 
 ## 명령
@@ -31,7 +32,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - `/desk-monitor`: 이 컴퓨터에 떠 있는 Claude 세션마다 CPU·메모리 그래프(리눅스)
 - `/desk-fold`: 열린 패널을 접어 대화를 넓게, 다시 치면 같은 스크롤 위치로 편다
 - `/desk-quote`: 대화 기록에서 마우스로 고른 글을 `>` 인용으로 입력창에 넣어 묻기. 쓰던 글이 있으면 인용은 그 위(앞서 넣은 인용 다음)에 들어가고 커서는 쓰던 자리에 남음. 입력창의 `>` 줄(치거나 붙여넣거나 넣은 것)은 인용처럼 표시는 흐리게, 글은 기울여 흐린 색으로
-- `/desk-update`: desk-look 과 설치한 desk-asana·desk-slack·desk-plan·desk-grant 를 최신 버전으로
+- `/desk-update`: desk-look 과 설치한 desk-asana·desk-slack·desk-plan·desk-review·desk-grant 를 최신 버전으로
 
 패널 명령은 Claude 가 일하는 중에도 바로 실행된다. 큐에 들어가거나 턴을 멈추지 않고 패널만 연다.
 
@@ -201,12 +202,13 @@ Claude Code 터미널 세션의 프롬프트에서:
 
 마켓플레이스 추가를 물으면 `y`, 범위는 user 를 고르면 됩니다.
 
-Asana·Slack 패널이나 계획 카드는 같은 마켓에서 쓰는 플러그인을 더 설치합니다:
+Asana·Slack 패널, 계획 카드, 리뷰 패널은 같은 마켓에서 쓰는 플러그인을 더 설치합니다:
 
 ```
 /plugin install desk-asana@cc-desktop-mod
 /plugin install desk-slack@cc-desktop-mod
 /plugin install desk-plan@cc-desktop-mod
+/plugin install desk-review@cc-desktop-mod
 ```
 
 desk-asana·desk-slack 은 [desk-grant](desk-grant/README.ko.md) 를 함께 설치합니다. 이미 쓰고 있었다면 `/plugin install desk-grant@cc-desktop-mod` 를 한 번 하고 `/reload-plugins` 를 실행합니다.
@@ -232,7 +234,7 @@ desk-asana·desk-slack 은 [desk-grant](desk-grant/README.ko.md) 를 함께 설�
 claude plugin update desk-look
 ```
 
-`/desk-update` 는 설치한 desk-asana·desk-slack·desk-plan·desk-grant 도 함께 올리고, 새 버전을 받았으면 `/reload-plugins` 까지 대신 실행합니다. 셸 명령으로 올렸으면 세션에서 `/reload-plugins` 를 실행합니다.
+`/desk-update` 는 설치한 desk-asana·desk-slack·desk-plan·desk-review·desk-grant 도 함께 올리고, 새 버전을 받았으면 `/reload-plugins` 까지 대신 실행합니다. 셸 명령으로 올렸으면 세션에서 `/reload-plugins` 를 실행합니다.
 
 ## 환경별 동작
 
@@ -259,7 +261,7 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` 는 지난 점검 이후의 Claude Code 릴리즈 노트와 플러그인 API diff 를 모아, desk-look 이 쓰거나 걷어낼 거리를 찾습니다. 저장소 관례(최신 Claude Code 만 지원, 버전마다 GitHub 릴리즈)는 `CLAUDE.md` 에 있습니다.
 
-`desk-asana`·`desk-slack`·`desk-plan`·`desk-grant` 에서도 같은 명령을 씁니다. desk-asana 는 댓글을 desk-look 의 마크다운 렌더러로 그리는데, 플러그인은 자기 폴더만 설치되므로 `desk-asana/hooks/shared/` 에 복사해 둡니다. `desk-look/hooks/markdown.tsx`·`diagram.ts` 를 고쳤으면 `scripts/sync-shared.sh` 를 돌려 함께 커밋합니다. 복사본이 어긋나면 릴리즈 워크플로가 실패합니다(`scripts/sync-shared.sh --check`).
+`desk-asana`·`desk-slack`·`desk-plan`·`desk-review`·`desk-grant` 에서도 같은 명령을 씁니다. desk-asana 는 댓글을 desk-look 의 마크다운 렌더러로 그리는데, 플러그인은 자기 폴더만 설치되므로 `desk-asana/hooks/shared/` 에 복사해 둡니다. `desk-look/hooks/markdown.tsx`·`diagram.ts` 를 고쳤으면 `scripts/sync-shared.sh` 를 돌려 함께 커밋합니다. 복사본이 어긋나면 릴리즈 워크플로가 실패합니다(`scripts/sync-shared.sh --check`).
 
 `desk-look/.claude-plugin/types/` 는 엔진이 mod 를 로드할 때마다 다시 까는 타입 정의라 커밋하지 않습니다.
 
