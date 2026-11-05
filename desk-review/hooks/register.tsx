@@ -155,7 +155,7 @@ export const register: Register = (on, options) => {
     return {
       result: taken.isPlaced
         ? `Shown in the desk-review pane (${tally}). Reply with the one-line summary only; do not repeat the items.`
-        : `The terminal is too narrow for the pane (${tally}); the person can open it with /desk-review. Reply with the one-line summary only.`,
+        : `Kept the report (${tally}), but the pane could not open here (a narrow terminal, or no terminal); the person can open it with /desk-review. Reply with the one-line summary only.`,
     }
   })
 
