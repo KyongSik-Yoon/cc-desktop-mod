@@ -2,7 +2,7 @@
 
 **English** | [한국어](README.ko.md)
 
-desk-review is a Claude Code plugin (mod) with one skill and one side pane. `/desk-review:simplify-review` runs `/simplify` on your changes and then `/code-review medium` on the result, so the review also sees what the cleanup changed. Its report opens in a side pane: every cleanup fixed or skipped and every finding found or dismissed, each with its file, line and reason. Press an item to read the current source around that line, and open the file in desk-look's diff pane from there, without leaving Claude Code. It comes from the same marketplace as [desk-look](../README.md) and needs it for the diff pane.
+desk-review is a Claude Code plugin (mod) with one skill and one side pane. `/desk-review:simplify-review` runs `/simplify` on your changes and then `/code-review medium` on the result, so the review also sees what the cleanup changed. Its report opens in a side pane: every cleanup fixed or skipped and every finding found or dismissed, each with its file, line and reason. Press an item to unfold it in place: a fixed item shows its diff, the others the current source around that line, without leaving Claude Code. From there the file also opens in desk-look's diff pane. It comes from the same marketplace as [desk-look](../README.md) and needs it for the diff pane.
 
 ## Install
 
@@ -19,7 +19,7 @@ It follows the latest Claude Code release, like desk-look. desk-look's `/desk-up
 - `/desk-review:simplify-review [target]`: cleanup, then review, then the report in the pane. Without a target it looks at the current diff; a target is passed on to both skills
 - `/desk-review`: opens the last report again
 
-In the pane, from the top: the one-line summary with the counts, `1. Cleanup`, `2. Review`, `3. Not verified` and `4. Next`. An empty section says `None`. Press an item to unfold it: the source around its line, read from the file as it is now (not as it was when the report was written), with line numbers and highlighting. `◫ Open in diff` opens desk-look's diff pane at that file; a file with no uncommitted change is not in the diff, and desk-look says so. Without the pane (the tool refused or missing), the skill writes the same report as a Markdown file instead, which desk-look opens in its preview pane.
+In the pane, from the top: the one-line summary with the counts, `1. Cleanup`, `2. Review`, `3. Not verified` and `4. Next`. An empty section says `None`. Press an item to unfold it, right there in the pane. A fixed item shows the hunk of its uncommitted change that holds its line, as `+`/`−` lines. Every other item, and a fixed one whose change is already committed, shows the source around its line, read from the file as it is now (not as it was when the report was written), with line numbers and highlighting. `◫ Open in the Changes tab` opens desk-look's diff pane at that file, as a `Changes` tab beside this one; a file with no uncommitted change is not in the diff, and desk-look says so. Without the pane (the tool refused or missing), the skill writes the same report as a Markdown file instead, which desk-look opens in its preview pane.
 
 ## Settings
 
@@ -29,8 +29,9 @@ In the pane, from the top: the one-line summary with the counts, `1. Cleanup`, `
 
 ## What it runs and reads
 
-- Runs no programs and sends nothing over the network
+- `git diff HEAD -- <file>` (or `git diff -- <file>` before the first commit): when you unfold a fixed item, to show its change
 - Reads the file of an item when you unfold it, and desk-look's language
+- Sends nothing over the network
 
 ## Hooks and tools
 
@@ -38,7 +39,7 @@ In the pane, from the top: the one-line summary with the counts, `1. Cleanup`, `
 - `command.run` (`desk-review`): opens the last report
 - `ui.render` (`Pane`, `desk-review`): draws the report
 - `session.start`, `state.set` (desk-look's `lang`): register the tool and command, and follow desk-look's language
-- Writes its state `diffAt` when you press `◫ Open in diff`; desk-look's `state.set` hook on it opens the diff pane
+- Writes its state `diffAt` when you press `◫ Open in the Changes tab`; desk-look's `state.set` hook on it opens the diff pane
 
 ## License
 

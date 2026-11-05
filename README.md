@@ -17,7 +17,7 @@ It is a Claude Code function-hook plugin: the engine stays as it is, and only th
 - **GitHub and GitLab**: PRs through `gh`, merge requests through `glab`
 - **Asana and Slack panes** as two more plugins from the same marketplace, [desk-asana](desk-asana/README.md) and [desk-slack](desk-slack/README.md): install only the ones you use, so desk-look itself makes no network request of its own and calls no MCP server
 - **Plan approval in a card** instead of the full-screen dialog, as one more plugin from the same marketplace, [desk-plan](desk-plan/README.md)
-- **Simplify, then review, with the report in a side pane**: [desk-review](desk-review/README.md) runs `/simplify` and then `/code-review medium`, and each item opens its current source and the file in the diff pane
+- **Simplify, then review, with the report in a side pane**: [desk-review](desk-review/README.md) runs `/simplify` and then `/code-review medium`, and each item unfolds in place to its diff or its current source
 - **English or Korean** labels, following Claude Code's own language setting by default
 
 ## Commands

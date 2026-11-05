@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { DiffAt, ReviewItem, ReviewReport, Snippet, Stage, Status } from '../types'
-import { counts, itemsOf, parseReport, reviewTool, sourceWindow } from './review'
+import { counts, hunkAt, itemsOf, parseReport, reviewTool, sourceWindow } from './review'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 
 // 엔진 테마 키(desk-look 의 COLORS 와 같은 역할). hex 를 박으면 터미널 테마와 어긋난다.
@@ -41,16 +41,32 @@ async function takeReport($: EngineInterface, input: Record<string, unknown>) {
   return { report: parsed.report, isPlaced: opened?.isPlaced ?? false }
 }
 
-// 항목을 펴고 접는다. 처음 펼 때 지금 파일을 읽어 그 줄 둘레를 잘라 둔다(보고서를 만든 때가 아니라 지금 소스).
+// 고친 항목의 diff: 커밋 안 한 변경에서 그 줄을 담은 헌크. HEAD 가 없는 저장소(첫 커밋 전)는 스테이지 기준.
+// 바뀐 게 없거나(이미 커밋, git 이 모르는 새 파일) git 밖이면 null — 그때는 소스를 보인다.
+async function diffSnippet($: EngineInterface, item: ReviewItem): Promise<Snippet | null> {
+  const opts = { timeoutMs: 8000 }
+  const head = await $.process.run(['git', 'diff', 'HEAD', '--no-color', '--no-ext-diff', '-U3', '--', item.path], opts).catch(() => null)
+  const ran = head?.exitCode === 0 ? head : await $.process.run(['git', 'diff', '--no-color', '--no-ext-diff', '-U3', '--', item.path], opts).catch(() => null)
+  const hunk = ran?.exitCode === 0 ? hunkAt(ran.stdout, item.line) : null
+  return hunk === null ? null : { kind: 'diff', source: hunk }
+}
+
+// 지금 파일을 읽어 그 줄 둘레를 자른다(보고서를 만든 때가 아니라 지금 소스).
+async function sourceSnippet($: EngineInterface, item: ReviewItem): Promise<Snippet> {
+  return $.fs.read(item.path).then(
+    text => sourceWindow(text, item.line),
+    (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
+  )
+}
+
+// 항목을 펴고 접는다. 처음 펼 때 조각을 만들어 둔다: 고친 항목은 그 자리 diff, 나머지는 지금 소스.
 async function toggleItem($: EngineInterface, index: number, item: ReviewItem) {
   const key = String(index)
   const isOpening = !((await read($, open))[key] ?? false)
   await update($, open, state => ({ ...state, [key]: isOpening }))
   if (!isOpening) return
-  const snippet: Snippet = await $.fs.read(item.path).then(
-    text => sourceWindow(text, item.line),
-    (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
-  )
+  const diffed = item.status === 'fixed' ? await diffSnippet($, item) : null
+  const snippet = diffed ?? (await sourceSnippet($, item))
   await update($, snippets, state => ({ ...state, [key]: snippet }))
 }
 
@@ -83,8 +99,8 @@ async function itemBlock($: EngineInterface, els: Elements['terminal'], item: Re
     <Text color={COLORS.danger}>{T.unreadable(snippet.error)}</Text>
   ) : (
     <Box flexDirection="column">
-      {snippet.line !== item.line && <Text color={COLORS.muted}>{T.shifted(item.line, snippet.line)}</Text>}
-      <Code source={snippet.source} path={item.path} startLine={snippet.startLine} />
+      {snippet.kind === 'source' && snippet.line !== item.line && <Text color={COLORS.muted}>{T.shifted(item.line, snippet.line)}</Text>}
+      {snippet.kind === 'diff' ? <Code source={snippet.source} path={item.path} format="diff" /> : <Code source={snippet.source} path={item.path} startLine={snippet.startLine} />}
       <Button key={`diff-${index}`} plain dimColor label={T.openDiff} onPress={() => void showDiff($, item.path)} />
     </Box>
   )

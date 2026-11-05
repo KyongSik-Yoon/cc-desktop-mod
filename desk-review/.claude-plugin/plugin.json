@@ -1,7 +1,7 @@
 {
   "name": "desk-review",
   "version": "0.73.0",
-  "description": "Claude Code mod with a /desk-review:simplify-review skill (/simplify, then /code-review medium) whose report opens in a side pane: each fixed, skipped, found or dismissed item with its reason, its current source a press away, and the file opened in desk-look's diff pane. Needs desk-look",
+  "description": "Claude Code mod with a /desk-review:simplify-review skill (/simplify, then /code-review medium) whose report opens in a side pane: each fixed, skipped, found or dismissed item with its reason, its diff or current source unfolding in place, and the file opened in desk-look's diff pane. Needs desk-look",
   "keywords": [
     "claude-code",
     "claude-code-mod",

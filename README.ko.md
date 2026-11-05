@@ -17,7 +17,7 @@ Claude Code 의 함수 훅 플러그인이라, 엔진은 그대로 두고 화면
 - **GitHub 와 GitLab**: PR 은 `gh`, MR 은 `glab` 으로 읽음
 - **Asana·Slack 패널**은 같은 마켓의 플러그인 두 개 [desk-asana](desk-asana/README.ko.md)·[desk-slack](desk-slack/README.ko.md) 로: 쓰는 것만 설치하면 되고, desk-look 자신은 스스로 네트워크 요청을 하지 않고 MCP 서버도 부르지 않음
 - **계획 승인을 카드로**: 화면을 덮는 엔진 창 대신, 같은 마켓의 플러그인 [desk-plan](desk-plan/README.ko.md) 으로
-- **정리하고 리뷰하고, 결과는 옆 패널로**: [desk-review](desk-review/README.ko.md) 가 `/simplify` 다음 `/code-review medium` 을 돌리고, 항목마다 지금 소스와 diff 패널의 그 파일을 열어 줍니다
+- **정리하고 리뷰하고, 결과는 옆 패널로**: [desk-review](desk-review/README.ko.md) 가 `/simplify` 다음 `/code-review medium` 을 돌리고, 항목을 누르면 그 자리에서 diff 나 지금 소스가 펼쳐집니다
 - **영어·한국어** 표시, 기본은 Claude Code 언어 설정을 따름
 
 ## 명령

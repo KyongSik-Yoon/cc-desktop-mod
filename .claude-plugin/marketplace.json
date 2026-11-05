@@ -69,7 +69,7 @@
     {
       "name": "desk-review",
       "source": "./desk-review",
-      "description": "A /desk-review:simplify-review skill (/simplify, then /code-review medium) whose report opens in a side pane: each item with its file, line and reason, its current source a press away, and the file opened in desk-look's diff pane. Needs desk-look",
+      "description": "A /desk-review:simplify-review skill (/simplify, then /code-review medium) whose report opens in a side pane: each item with its file, line and reason, its diff or current source unfolding in place, and the file opened in desk-look's diff pane. Needs desk-look",
       "category": "productivity",
       "tags": [
         "mod",

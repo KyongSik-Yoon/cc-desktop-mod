@@ -95,7 +95,32 @@ export function sourceWindow(fileText: string, line: number, around = AROUND): S
   const at = Math.min(Math.max(1, line), lines.length)
   const start = Math.max(1, at - around)
   const end = Math.min(lines.length, at + around)
-  return { source: lines.slice(start - 1, end).join('\n'), startLine: start, line: at }
+  return { kind: 'source', source: lines.slice(start - 1, end).join('\n'), startLine: start, line: at }
+}
+
+// 한 파일의 `git diff` 출력에서 line(고친 뒤 줄 번호)을 담은 헌크. 담은 헌크가 없으면 그 줄에 가장 가까운 헌크,
+// 헌크가 하나도 없으면(바뀐 게 없음) null. Code format: 'diff' 는 @@ 헌크부터 받으므로 파일 머리는 뺀다.
+export function hunkAt(diffText: string, line: number): string | null {
+  const lines = diffText.replace(/\n$/, '').split('\n')
+  const hunks: Array<{ start: number; end: number; text: string }> = []
+  let at = -1
+  for (const [index, row] of lines.entries()) {
+    if (!row.startsWith('@@')) continue
+    if (at >= 0) hunks.push(hunkOf(lines, at, index))
+    at = index
+  }
+  if (at >= 0) hunks.push(hunkOf(lines, at, lines.length))
+  const distance = (hunk: { start: number; end: number }) => (line < hunk.start ? hunk.start - line : line > hunk.end ? line - hunk.end : 0)
+  const best = hunks.reduce<(typeof hunks)[number] | null>((pick, hunk) => (pick === null || distance(hunk) < distance(pick) ? hunk : pick), null)
+  return best?.text ?? null
+}
+
+// @@ -a,b +c,d @@ 줄(from)부터 to 앞까지 한 헌크. start·end 는 고친 뒤 쪽 줄 범위(d 가 0 이면 c 한 줄로 친다).
+function hunkOf(lines: string[], from: number, to: number) {
+  const head = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(lines[from]!)
+  const start = Number(head?.[1] ?? 0)
+  const count = head?.[2] === undefined ? 1 : Number(head[2])
+  return { start, end: start + Math.max(count, 1) - 1, text: lines.slice(from, to).join('\n') }
 }
 
 // 보고서 아래 한 줄 요약: 단계별 상태 수.

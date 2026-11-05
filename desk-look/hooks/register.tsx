@@ -3308,7 +3308,7 @@ export const register: Register = (on, options) => {
     if (e.value && isMarkdown(e.value.path)) await openPreview($, e.value.path, e.value.focus).catch(() => undefined)
     return done
   }).catch(($, e, next) => next(e))
-  // desk-review 의 리뷰 결과 패널에서 "diff 에서 보기"를 누르면 그 파일에서 diff 패널을 연다(턴 끝 카드의 파일 줄과 같은 길).
+  // desk-review 의 리뷰 결과 패널에서 "변경 사항 탭에서 열기"를 누르면 그 파일에서 diff 패널을 연다(턴 끝 카드의 파일 줄과 같은 길).
   on('state.set', { plugin: 'desk-review', key: 'diffAt' }, async ($, e, next) => {
     const done = await next(e)
     if (e.value && typeof e.value.path === 'string' && e.value.path !== '') await openDiffAt($, e.value.path).catch(() => undefined)
