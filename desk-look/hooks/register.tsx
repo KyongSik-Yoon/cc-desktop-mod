@@ -93,6 +93,10 @@ const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as AskSta
 // desk-plan 의 계획 카드. 떠 있으면 스피너 진행 띠·입력창 위 띠·질문 카드가 비킨다.
 const planAsking = atom({ plugin: 'desk-plan', key: 'planAsk' } as const, null as { id: string } | null)
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as PromptOrigin | null)
+// 같은 값을 모듈에도 둔다. 창 안의 /clear·/resume 은 atom 을 비우는데, 그 뒤 입력이 없으면(handoff 같은 플러그인이
+// /clear 뒤 명령을 넣는 경우) 카드 판정이 세션 상태 파일로 넘어가고, remoteControlAtStartup 이면 늘 엔진 창이 된다.
+// 같은 프로세스의 같은 사람이므로 refreshSessionState 가 이 값으로 atom 을 되살린다.
+let lastPromptOrigin: PromptOrigin | null = null
 
 // 터미널 입력이 collie 가 폰에서 보낸 것인지(ask.tsx PHONE): 최근 전송 기록 몇 개만 읽는다.
 // collie 는 herdr 패널에만 입력하므로 herdr 밖이면 읽지 않는다. collie 가 없으면 목록이 없어 false.
@@ -1801,6 +1805,8 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
   void refreshGraphics($).catch(() => undefined)
   void refreshOpenSessions($).catch(() => undefined)
   void update($, lang, () => currentLang()).catch(() => undefined)
+  const origin = lastPromptOrigin
+  if (origin !== null) void update($, promptOrigin, value => value ?? origin).catch(() => undefined)
   void refreshAdvisorGate($).catch(() => undefined)
 }
 
@@ -3417,7 +3423,10 @@ export const register: Register = (on, options) => {
     if (e.turnId !== undefined && e.command === undefined && !e.wait) inputIntoTurn = true
     // 사람이 어디서 입력했는지: 질문·계획 카드를 띄울지 고른다(ask.tsx PHONE). 엔진이 만든 프롬프트는 기록을 두고 간다.
     const origin = e.origin.kind === 'composer' && (await typedOnPhone($).catch(() => false)) ? 'phone' : e.origin.kind
-    if (origin === 'composer' || origin === 'bridge' || origin === 'phone') await update($, promptOrigin, () => origin).catch(() => undefined)
+    if (origin === 'composer' || origin === 'bridge' || origin === 'phone') {
+      lastPromptOrigin = origin
+      await update($, promptOrigin, () => origin).catch(() => undefined)
+    }
     // 백그라운드 작업이 끝났다는 알림: 셸·모니터는 이것으로만 끝을 안다.
     if (e.origin.kind === 'task-notification') {
       const notices = parseNotices(e.text)
