@@ -1,14 +1,11 @@
-// 리뷰 보고: 모델이 review_report 도구로 넘긴 입력을 검사해 패널이 그릴 모양으로 바꾸고,
-// 항목 줄 둘레의 소스를 잘라 준다. 엔진($)을 쓰지 않는 순수 함수만 둔다(register.tsx 가 부른다).
+// 리뷰 보고: 모델이 review_report 도구로 넘긴 입력을 검사해 패널이 그릴 모양으로 바꾼다.
+// 엔진($)을 쓰지 않는 순수 함수만 둔다(register.tsx 가 부른다).
 
-import type { ReviewItem, ReviewReport, Snippet, Stage, Status } from '../types'
+import type { ReviewItem, ReviewReport, Stage, Status } from '../types'
 
 export const STAGES = ['simplify', 'review'] as const
 // fixed·skipped 는 정리(simplify) 단계, found·dismissed 는 리뷰(code-review) 단계의 상태.
 export const STATUSES = { simplify: ['fixed', 'skipped'], review: ['found', 'dismissed'] } as const
-
-// 항목 줄 위아래로 보여 줄 줄 수.
-export const AROUND = 5
 
 export const REVIEW_TOOL_NAME = 'review_report'
 // on('tool.call', { tool: … }) 에는 이 이름을 글자 그대로 쓴다(validate 가 매처를 읽을 수 있게).
@@ -83,46 +80,9 @@ export function parseReport(input: Record<string, unknown>, cwd: string, id: num
   return { report: { id, summary, items, unverified: text(input.unverified), next: text(input.next) } }
 }
 
-// 단계별 항목(원래 순서와 번호를 지킨다). 번호는 펼침·조각의 키다.
+// 단계별 항목(원래 순서와 번호를 지킨다). 번호는 버튼 키다.
 export function itemsOf(report: ReviewReport, stage: Stage): Array<{ item: ReviewItem; index: number }> {
   return report.items.flatMap((item, index) => (item.stage === stage ? [{ item, index }] : []))
-}
-
-// 파일 글에서 line 둘레 around 줄. 줄이 파일보다 뒤면 끝 쪽을 보여 주고 line 은 마지막 줄로 붙인다.
-export function sourceWindow(fileText: string, line: number, around = AROUND): Snippet {
-  const lines = fileText.replace(/\n$/, '').split('\n')
-  if (fileText === '') return { error: 'empty' }
-  const at = Math.min(Math.max(1, line), lines.length)
-  const start = Math.max(1, at - around)
-  const end = Math.min(lines.length, at + around)
-  // 엔진 Code 는 빈 줄을 높이 0 으로 그려 줄 번호와 행이 어긋나므로 공백 한 칸으로(desk-look codeSource 와 같음).
-  const source = lines.slice(start - 1, end).map(text => text.replace(/\r$/, '') || ' ').join('\n')
-  return { kind: 'source', source, startLine: start, line: at }
-}
-
-// 한 파일의 `git diff` 출력에서 line(고친 뒤 줄 번호)을 담은 헌크. 담은 헌크가 없으면 그 줄에 가장 가까운 헌크,
-// 헌크가 하나도 없으면(바뀐 게 없음) null. Code format: 'diff' 는 @@ 헌크부터 받으므로 파일 머리는 뺀다.
-export function hunkAt(diffText: string, line: number): string | null {
-  const lines = diffText.replace(/\n$/, '').split('\n')
-  const hunks: Array<{ start: number; end: number; text: string }> = []
-  let at = -1
-  for (const [index, row] of lines.entries()) {
-    if (!row.startsWith('@@')) continue
-    if (at >= 0) hunks.push(hunkOf(lines, at, index))
-    at = index
-  }
-  if (at >= 0) hunks.push(hunkOf(lines, at, lines.length))
-  const distance = (hunk: { start: number; end: number }) => (line < hunk.start ? hunk.start - line : line > hunk.end ? line - hunk.end : 0)
-  const best = hunks.reduce<(typeof hunks)[number] | null>((pick, hunk) => (pick === null || distance(hunk) < distance(pick) ? hunk : pick), null)
-  return best?.text ?? null
-}
-
-// @@ -a,b +c,d @@ 줄(from)부터 to 앞까지 한 헌크. start·end 는 고친 뒤 쪽 줄 범위(d 가 0 이면 c 한 줄로 친다).
-function hunkOf(lines: string[], from: number, to: number) {
-  const head = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(lines[from]!)
-  const start = Number(head?.[1] ?? 0)
-  const count = head?.[2] === undefined ? 1 : Number(head[2])
-  return { start, end: start + Math.max(count, 1) - 1, text: lines.slice(from, to).join('\n') }
 }
 
 // 보고서 아래 한 줄 요약: 단계별 상태 수.

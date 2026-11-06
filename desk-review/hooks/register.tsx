@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import type { DiffAt, ReviewItem, ReviewReport, Snippet, Stage, Status } from '../types'
-import { counts, hunkAt, itemsOf, parseReport, reviewTool, sourceWindow } from './review'
+import type { DiffAt, ReviewItem, ReviewReport, Stage, Status } from '../types'
+import { counts, itemsOf, parseReport, reviewTool } from './review'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 
 // 엔진 테마 키(desk-look 의 COLORS 와 같은 역할). hex 를 박으면 터미널 테마와 어긋난다.
@@ -17,8 +17,6 @@ const COLORS = {
 const PANE = 'desk-review'
 
 const report = atom({ plugin: 'desk-review', key: 'report' } as const, null as ReviewReport | null)
-const open = atom({ plugin: 'desk-review', key: 'open' } as const, {} as Record<string, boolean>)
-const snippets = atom({ plugin: 'desk-review', key: 'snippets' } as const, {} as Record<string, Snippet>)
 const diffAt = atom({ plugin: 'desk-review', key: 'diffAt' } as const, null as DiffAt | null)
 
 const STATUS_COLOR: Record<Status, string> = { fixed: COLORS.success, skipped: COLORS.muted, found: COLORS.danger, dismissed: COLORS.muted }
@@ -28,51 +26,27 @@ async function openPane($: EngineInterface) {
   return $.ui.open({ id: PANE, title: T.paneTitle, focus: true })
 }
 
-// 모델이 넘긴 보고서를 받아 둔다. 새 보고서면 펼침·조각을 비운다.
+// 모델이 넘긴 보고서를 받아 둔다.
 async function takeReport($: EngineInterface, input: Record<string, unknown>) {
   const cwd = await $.session.cwd().catch(() => '')
   const before = await read($, report)
   const parsed = parseReport(input, cwd, (before?.id ?? 0) + 1)
   if ('error' in parsed) return parsed
-  await update($, open, () => ({}))
-  await update($, snippets, () => ({}))
   await update($, report, () => parsed.report)
   const opened = await openPane($).catch(() => null)
   return { report: parsed.report, isPlaced: opened?.isPlaced ?? false }
 }
 
-// 고친 항목의 diff: 커밋 안 한 변경에서 그 줄을 담은 헌크. HEAD 가 없는 저장소(첫 커밋 전)는 스테이지 기준.
-// 바뀐 게 없거나(이미 커밋, git 이 모르는 새 파일) git 밖이면 null — 그때는 소스를 보인다.
-async function diffSnippet($: EngineInterface, item: ReviewItem): Promise<Snippet | null> {
-  const opts = { timeoutMs: 8000 }
-  const head = await $.process.run(['git', 'diff', 'HEAD', '--no-color', '--no-ext-diff', '-U3', '--', item.path], opts).catch(() => null)
-  const ran = head?.exitCode === 0 ? head : await $.process.run(['git', 'diff', '--no-color', '--no-ext-diff', '-U3', '--', item.path], opts).catch(() => null)
-  const hunk = ran?.exitCode === 0 ? hunkAt(ran.stdout, item.line) : null
-  return hunk === null ? null : { kind: 'diff', source: hunk }
-}
-
-// 지금 파일을 읽어 그 줄 둘레를 자른다(보고서를 만든 때가 아니라 지금 소스).
-async function sourceSnippet($: EngineInterface, item: ReviewItem): Promise<Snippet> {
-  return $.fs.read(item.path).then(
-    text => sourceWindow(text, item.line),
-    (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
-  )
-}
-
-// 항목을 펴고 접는다. 처음 펼 때 조각을 만들어 둔다: 고친 항목은 그 자리 diff, 나머지는 지금 소스.
-async function toggleItem($: EngineInterface, index: number, item: ReviewItem) {
-  const key = String(index)
-  const isOpening = !((await read($, open))[key] ?? false)
-  await update($, open, state => ({ ...state, [key]: isOpening }))
-  if (!isOpening) return
-  const diffed = item.status === 'fixed' ? await diffSnippet($, item) : null
-  const snippet = diffed ?? (await sourceSnippet($, item))
-  await update($, snippets, state => ({ ...state, [key]: snippet }))
-}
-
 // desk-look 의 diff 패널을 이 파일에서 연다. 매번 n 을 올려 같은 파일을 다시 눌러도 state.set 이 불리게 한다.
+// 사람이 이 패널을 잡고 있으면 엔진이 desk-look 패널의 focus 를 거절해 변경 사항 탭이 이 탭 뒤에 열린다.
+// desk-look 은 남의 패널을 닫을 수 없으니 desk-look 의 openInFront 처럼 여기서 순서를 잡는다:
+// 이 패널을 닫고 → desk-look 이 변경 사항 탭을 연 뒤 → 이 패널을 그 뒤에 다시 연다.
 async function showDiff($: EngineInterface, path: string) {
+  const panes = await $.ui.panes().catch(() => [])
+  const isFront = panes.some(item => item.isShown && item.id === PANE)
+  if (isFront) await $.ui.close({ id: PANE })
   await update($, diffAt, current => ({ path, n: (current?.n ?? 0) + 1 }))
+  if (isFront) await $.ui.open({ id: PANE, title: T.paneTitle })
 }
 
 function heading(els: Elements['terminal'], label: string) {
@@ -84,55 +58,35 @@ function heading(els: Elements['terminal'], label: string) {
   )
 }
 
-async function itemBlock($: EngineInterface, els: Elements['terminal'], item: ReviewItem, index: number, isOpen: boolean, snippet: Snippet | undefined) {
-  const { Box, Text, Button, Code } = els
+// 항목: 상태·경로:줄 머리줄과 그 아래 이유. 좁은 패널이라 코드는 싣지 않고, 머리줄을 누르면 desk-look 변경 사항 탭에서 그 파일을 연다.
+function itemBlock($: EngineInterface, els: Elements['terminal'], item: ReviewItem, index: number) {
+  const { Box, Text, Button } = els
   const tone = STATUS_COLOR[item.status]
   // 경로는 폴더를 흐리게, 파일 이름을 굵게, 줄 번호를 강조색으로 해서 눈이 파일 이름에 먼저 가게 한다.
   const cut = item.file.lastIndexOf('/') + 1
-  const row = (
-    <Button key={`item-${index}`} plain onPress={() => void toggleItem($, index, item)}>
-      <Text color={tone} weight="semibold">{`${isOpen ? '▾' : '▸'} ${STATUS_MARK[item.status]} ${T[item.status]}  `}</Text>
-      <Text color={COLORS.muted}>{item.file.slice(0, cut)}</Text>
-      <Text color={COLORS.text} weight="semibold">
-        {item.file.slice(cut)}
-      </Text>
-      <Text color={COLORS.clay}>{`:${item.line}`}</Text>
-    </Button>
-  )
-  // 코드는 테두리 상자에, 긴 줄은 접지 않고 끝을 자른다(접으면 줄 번호 밑으로 흘러 읽기 어렵다). 전체는 변경 사항 탭에서.
-  const body = !isOpen ? null : snippet === undefined ? (
-    <Text color={COLORS.muted}>{T.loading}</Text>
-  ) : 'error' in snippet ? (
-    <Text color={COLORS.danger}>{T.unreadable(snippet.error)}</Text>
-  ) : (
-    <Box flexDirection="column">
-      {snippet.kind === 'source' && snippet.line !== item.line && <Text color={COLORS.muted}>{T.shifted(item.line, snippet.line)}</Text>}
-      <Box flexDirection="column" borderStyle="round" borderColor={COLORS.muted} paddingX={1}>
-        {snippet.kind === 'diff' ? (
-          <Code source={snippet.source} path={item.path} format="diff" wrap="truncate-end" />
-        ) : (
-          <Code source={snippet.source} path={item.path} startLine={snippet.startLine} wrap="truncate-end" />
-        )}
-      </Box>
-      <Button key={`diff-${index}`} plain dimColor label={T.openDiff} onPress={() => void showDiff($, item.path)} />
-    </Box>
-  )
-  // 항목마다 상태 색 세로 막대로 묶어, 이유·코드가 어느 항목 것인지 한눈에 갈리게 한다.
+  // 항목마다 상태 색 세로 막대로 묶어, 이유가 어느 항목 것인지 한눈에 갈리게 한다.
   return (
     <Box key={`block-${index}`} flexDirection="column" borderStyle="quote" borderColor={tone} paddingLeft={1}>
-      {row}
-      <Box flexDirection="column" paddingLeft={2}>
+      <Button key={`item-${index}`} plain onPress={() => void showDiff($, item.path)}>
+        <Text color={tone} weight="semibold">{`${STATUS_MARK[item.status]} ${T[item.status]}  `}</Text>
+        <Text color={COLORS.muted}>{item.file.slice(0, cut)}</Text>
+        <Text color={COLORS.text} weight="semibold">
+          {item.file.slice(cut)}
+        </Text>
+        <Text color={COLORS.clay}>{`:${item.line}`}</Text>
+        <Text color={COLORS.muted}>{' ◫'}</Text>
+      </Button>
+      <Box paddingLeft={2}>
         <Text color={COLORS.text}>{item.reason}</Text>
-        {body}
       </Box>
     </Box>
   )
 }
 
-async function stageBlock($: EngineInterface, els: Elements['terminal'], state: ReviewReport, stage: Stage, opened: Record<string, boolean>, cut: Record<string, Snippet>) {
+function stageBlock($: EngineInterface, els: Elements['terminal'], state: ReviewReport, stage: Stage) {
   const { Box, Text } = els
   const rows = itemsOf(state, stage)
-  const blocks = await Promise.all(rows.map(({ item, index }) => itemBlock($, els, item, index, opened[String(index)] ?? false, cut[String(index)])))
+  const blocks = rows.map(({ item, index }) => itemBlock($, els, item, index))
   return (
     // quote 테두리가 위아래에 빈 행을 하나씩 두므로 항목 사이는 따로 띄우지 않는다.
     <Box flexDirection="column">
@@ -200,7 +154,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
     const { Box, Text } = els
-    const [state, opened, cut] = await Promise.all([read($, report), read($, open), read($, snippets)])
+    const state = await read($, report)
     if (state === null) return <Text color={COLORS.muted}>{T.noReport}</Text>
     const n = counts(state)
     return (
@@ -210,8 +164,8 @@ export const register: Register = (on, options) => {
           <Text color={COLORS.text}>{state.summary}</Text>
           <Text color={COLORS.muted}>{T.counts(n.fixed, n.skipped, n.found, n.dismissed)}</Text>
         </Box>
-        {await stageBlock($, els, state, 'simplify', opened, cut)}
-        {await stageBlock($, els, state, 'review', opened, cut)}
+        {stageBlock($, els, state, 'simplify')}
+        {stageBlock($, els, state, 'review')}
         {textBlock(els, T.unverified, state.unverified)}
         {textBlock(els, T.next, state.next)}
       </Box>

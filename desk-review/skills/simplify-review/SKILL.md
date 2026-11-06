@@ -44,8 +44,8 @@ Call `mcp__desk-review__review_report` with every item:
 - `unverified`: tests not run, files not read, doubts left. Empty when there are none.
 - `next`: what the person has to decide, as two options with a recommendation. Empty when there is nothing.
 
-The pane draws each item with its reason; pressing one shows the current source around that line, and the
-file can be opened from there in desk-look's diff pane. So **do not paste code into the report**, and in your
+The pane draws each item as one line with its reason below; pressing it opens that file in desk-look's diff
+pane. So **do not paste code into the report**, and in your
 reply write only the one-line summary — never the items again.
 
 ### When the tool is missing or refuses
