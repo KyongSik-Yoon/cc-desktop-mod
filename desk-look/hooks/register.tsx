@@ -5126,8 +5126,9 @@ export const register: Register = (on, options) => {
         },
       })
       // 긴 패널은 withJumps 가 트리 위에 한 줄을 더해, 트리 안 파일 머리 위치가 창 위치보다 그만큼 앞선다.
-      diffTop = jumpsTop(tree, e)
-      return paneJumps($, els, e, tree)
+      const drawn = paneJumps($, els, e, tree)
+      diffTop = jumpsTop(e.requestId)
+      return drawn
     }
 
     // 테마를 모를 때(엔진 diff): 이전·다음 파일은 없다(머리 띠 자리를 셈하지 않는다).
