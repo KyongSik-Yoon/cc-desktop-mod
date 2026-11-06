@@ -28,9 +28,7 @@ export function learnRows(requestId: string, contentRows: number) {
 // 렌더는 스크롤마다 새 창 위치(offset)로 다시 불리므로, 막대를 창 첫 줄에 절대 위치로 붙이면 창을 따라온다.
 export function withJumps(els: Els, tree: unknown, e: PaneSite, jumps: Jumps) {
   const { Box, Button, Text } = els
-  const at = { offset: e.props.scroll?.offset ?? 0, bodyRows: e.props.scroll?.bodyRows ?? 0, columns: e.props.bodyColumns ?? 80 }
-  const rows = treeRows(tree, Math.max(1, at.columns - 1))
-  const isLong = at.bodyRows > 0 && rows > at.bodyRows
+  const { at, rows, isLong } = measure(tree, e)
   // 엔진이 세는 높이는 위 여백 줄과 "처음으로" 줄까지
   const estimate = isLong ? rows + 2 : rows
   let known = heights.get(e.requestId)
@@ -38,12 +36,13 @@ export function withJumps(els: Els, tree: unknown, e: PaneSite, jumps: Jumps) {
   const total = Math.max(known.contentRows ?? estimate, at.offset + at.bodyRows)
   const bar = scrollBar(total, at.offset, at.bodyRows)
   // 버튼과 막대는 트리 뒤에 둔다: 입력칸 앞 요소가 생기거나 사라지면 입력칸이 포커스를 잃는다.
-  // "끝으로"는 위 여백 한 줄에, 막대는 오른쪽 여백 한 칸에 절대 위치로 올린다.
+  // "끝으로"는 위 여백 한 줄에 절대 위치로 올린다. 막대는 오른쪽 끝 칸에 겹쳐 그린다: 여백을 두면 패널 폭에 맞춰 만든
+  // 줄(Slack 날짜 구분선, 마크다운 표)이 한 칸 모자라 접힌다. 겹쳐 가리는 것은 그런 줄의 끝 한 칸이다.
   return (
-    <Box flexDirection="column" paddingTop={isLong ? 1 : 0} paddingRight={isLong ? 1 : 0}>
+    <Box flexDirection="column" paddingTop={isLong ? 1 : 0}>
       {tree as never}
       {isLong && (
-        <Box key="pane-jump-start-row" justifyContent="flex-end">
+        <Box key="pane-jump-start-row" justifyContent="flex-end" paddingRight={1}>
           <Button key="pane-jump-start" plain dimColor label={jumps.toStart} onPress={() => jumps.scroll('start')} />
         </Box>
       )}
@@ -61,6 +60,18 @@ export function withJumps(els: Els, tree: unknown, e: PaneSite, jumps: Jumps) {
       )}
     </Box>
   )
+}
+
+// withJumps 가 트리 위에 더하는 줄 수: 창보다 긴 패널은 "끝으로" 줄 하나. 트리 안 위치를 창 위치(scroll.offset)와
+// 견줄 때 더한다(diff 패널의 파일 머리 위치).
+export function jumpsTop(tree: unknown, e: PaneSite): number {
+  return measure(tree, e).isLong ? 1 : 0
+}
+
+function measure(tree: unknown, e: PaneSite) {
+  const at = { offset: e.props.scroll?.offset ?? 0, bodyRows: e.props.scroll?.bodyRows ?? 0, columns: e.props.bodyColumns ?? 80 }
+  const rows = treeRows(tree, Math.max(1, at.columns))
+  return { at, rows, isLong: at.bodyRows > 0 && rows > at.bodyRows }
 }
 
 // 막대: 손잡이 길이는 창이 트리에서 차지하는 몫, 위치는 창이 내려간 몫. 끝에 닿으면 손잡이도 바닥에.

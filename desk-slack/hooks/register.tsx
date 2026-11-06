@@ -228,8 +228,9 @@ async function sendSlack($: EngineInterface, server: SlackServer, channel: strin
   slackSent++
   $.ui.toast(T.slackSent)
   await openSlackRoom($, server, channel, thread)
-  // 보낸 글이 맨 아래에 보이게
-  await scrollPane($, { in: SLACK_PANE, to: 'end' })
+  // 보낸 글이 맨 아래에 보이게. 기다리는 동안 다른 방으로 옮겼으면 그 방의 창은 건드리지 않는다.
+  const view = await read($, slackView)
+  if (view?.channel === channel && view.thread === thread) await scrollPane($, { in: SLACK_PANE, to: 'end' })
 }
 
 // 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).

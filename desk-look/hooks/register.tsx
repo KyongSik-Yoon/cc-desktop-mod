@@ -29,7 +29,7 @@ import type { MergeAction, MergeResult, Ran } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matchesPath, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, currentLang, langFromConfig, langSetting, setLang, type Lang } from './i18n'
 import { previewHtml } from './preview-html'
-import { learnRows, withJumps, type PaneSite } from './jumps'
+import { jumpsTop, learnRows, withJumps, type PaneSite } from './jumps'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
 
 export { cellWidth } from './markdown'
@@ -165,6 +165,8 @@ const diffGaps = atom({ plugin: 'desk-look', key: 'diffGaps' } as const, {} as R
 const diffFilter = atom({ plugin: 'desk-look', key: 'diffFilter' } as const, { isOpen: false, query: '' } as DiffFilter)
 // diff 패널이 마지막으로 그린 파일 머리 띠(위에서부터): 접기 id 와 첫 행. n·p 이동에 쓴다.
 let diffHeads: { id: string; top: number }[] = []
+// diff 패널 트리 위에 withJumps 가 더한 줄 수(jumpsTop). diffHeads·diffJumpTop 의 top 은 트리 안 위치라 창 위치와 견줄 때 더한다.
+let diffTop = 0
 // n·p·머리 띠 누름이 마지막으로 스크롤해 간 파일. 사람이 창을 옮기면 잊는다.
 let diffCursor: string | null = null
 
@@ -1172,7 +1174,7 @@ async function focusLine($: EngineInterface, id: string, line: number): Promise<
   for (let tries = 0; tries < 40 && diffJumpTop?.seq !== seq; tries++) await $.clock.sleep(25).catch(() => undefined)
   if (diffJumpTop?.seq !== seq) return false
   diffCursor = id
-  await restoreScroll($, PANE, Math.max(0, diffJumpTop.top - FOCUS_ABOVE))
+  await restoreScroll($, PANE, Math.max(0, diffJumpTop.top + diffTop - FOCUS_ABOVE))
   return true
 }
 
@@ -1225,7 +1227,7 @@ export function currentHead(heads: ReadonlyArray<{ id: string; top: number }>, f
 async function stepFile($: EngineInterface, by: 1 | -1) {
   const heads = diffHeads
   const state = await read($, open)
-  const at = currentHead(heads, state, diffCursor, paneOffsets.get(PANE) ?? 0)
+  const at = currentHead(heads, state, diffCursor, (paneOffsets.get(PANE) ?? 0) - diffTop)
   const target = at === -1 ? (by > 0 ? heads[0] : undefined) : heads[at + by]
   if (!target) return
   const opened = heads.filter(head => state[`fold:${head.id}`] === false).length
@@ -1384,12 +1386,14 @@ async function restoreScroll($: EngineInterface, id: string, offset: number) {
     for (let tries = 0; tries < 8 && restoreOffsets.has(id); tries++) {
       for (const to of ['end', 'start'] as const) {
         if (!restoreOffsets.has(id)) break
-        await scrollPane($, { to, in: id })
+        // 되풀이마다 scrollPane 으로 모든 그림을 다시 그리지 않고, 끝나면 한 번만(finally)
+        await $.ui.scroll({ to, in: id }).catch(() => undefined)
       }
       if (restoreOffsets.has(id)) await $.clock.sleep(100).catch(() => undefined)
     }
   } finally {
     restoreOffsets.delete(id)
+    $.ui.invalidate('ui.render')
   }
 }
 
@@ -5042,7 +5046,7 @@ export const register: Register = (on, options) => {
     const head = [tabs, titleRow, ...(filterRow ? [filterRow] : []), toolsRow, ...baseRows, ...(baseEmpty ? [baseEmpty] : [])]
 
     if (face && diffColors) {
-      return paneJumps($, els, e, virtualDiff({
+      const tree = virtualDiff({
         els,
         palette: diffColors,
         window: shown,
@@ -5120,7 +5124,10 @@ export const register: Register = (on, options) => {
             </Box>
           ),
         },
-      }))
+      })
+      // 긴 패널은 withJumps 가 트리 위에 한 줄을 더해, 트리 안 파일 머리 위치가 창 위치보다 그만큼 앞선다.
+      diffTop = jumpsTop(tree, e)
+      return paneJumps($, els, e, tree)
     }
 
     // 테마를 모를 때(엔진 diff): 이전·다음 파일은 없다(머리 띠 자리를 셈하지 않는다).
