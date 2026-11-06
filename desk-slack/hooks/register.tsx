@@ -33,8 +33,9 @@ import {
 } from './slack'
 import type { SlackCall } from './slack'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
-import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton } from './util'
+import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
 import { renderMarkdown } from './shared/markdown'
+import { withJumps } from './shared/jumps'
 
 const SLACK_PANE = 'desk-slack'
 // 답장 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -181,10 +182,12 @@ async function openSlack($: EngineInterface) {
 }
 
 // 방을 열면(다시 읽어도) 기록을 읽고 그 방 안 읽음을 지운다. thread 가 있으면 채널 기록 대신 그 스레드(부모와 답글).
+// 새로 들어온 방·스레드는 맨 아래(최근 글과 답장 칸)에서 시작한다. 같은 방을 다시 읽을 때(↻)는 읽던 자리를 둔다.
 async function openSlackRoom($: EngineInterface, server: SlackServer, channel: string, thread: string | null = null) {
   const isSame = (view: SlackView | null) => view?.channel === channel && view.thread === thread
+  const isEntry = !isSame(await read($, slackView))
   // 방과 스레드를 오가면 쓰던 답장이 다른 곳으로 가지 않게 비운다
-  if (!isSame(await read($, slackView))) slackDraft = ''
+  if (isEntry) slackDraft = ''
   await update($, slackView, (view): SlackView => ({ channel, thread, status: 'loading', posts: isSame(view) ? view!.posts : [] }))
   const got = await callSlack($, server, thread === null ? historyCall(channel) : threadCall(channel, thread), 'messages')
   const posts = got.ok ? (thread === null ? parseHistory(got.text) : parseThread(got.text)) : []
@@ -192,6 +195,8 @@ async function openSlackRoom($: EngineInterface, server: SlackServer, channel: s
     !isSame(view) ? view : got.ok ? { channel, thread, status: 'ok', posts } : { channel, thread, status: 'failed', posts: view!.posts, error: got.error },
   )
   if (!got.ok) return
+  // 글을 그린 뒤에 내린다: 엔진은 끝에 있던 창이 늘어난 내용을 따라 내려가게 하지 않는다(2.1.318 실측).
+  if (isEntry) await toSlackEnd($)
   const me = (await $.store.get('slackMe').catch(() => undefined)) as { id?: string } | undefined
   await saveInbox($, readRoom(await readInbox($), channel, posts, me?.id ?? '', thread))
 }
@@ -222,6 +227,25 @@ async function sendSlack($: EngineInterface, server: SlackServer, channel: strin
   slackSent++
   $.ui.toast(T.slackSent)
   await openSlackRoom($, server, channel, thread)
+  // 보낸 글이 맨 아래에 보이게
+  await toSlackEnd($)
+}
+
+async function toSlackEnd($: EngineInterface) {
+  await $.ui.scroll({ in: SLACK_PANE, to: 'end' }).catch(() => undefined)
+}
+
+// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
+type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
+  return withJumps(els, tree, {
+    bodyRows: e.props.scroll?.bodyRows ?? 0,
+    columns: e.props.bodyColumns ?? 80,
+    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
+    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
+  })
 }
 
 // ✕ 는 두 번 눌러 닫는다(Asana 담당자 넘기기와 같은 무장). channel 이 null 이면 모든 방(모두 닫기).
@@ -369,7 +393,7 @@ export const register: Register = (on, options) => {
           onPress={() => void (view.thread === null ? closeSlackView($) : openSlackRoom($, server, view.channel))}
         />
       )
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
             {back('slack-back')}
@@ -440,7 +464,7 @@ export const register: Register = (on, options) => {
             <Button key="slack-clear" plain dimColor label={T.inputClear} onPress={() => void clearSlackDraft($, view.channel, view.thread)} />
           </Box>
         </Box>
-      )
+      ))
     }
 
     const rooms = state ? roomList(state.inbox) : []
@@ -493,13 +517,13 @@ export const register: Register = (on, options) => {
         </Box>
       )
     })
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {head}
         {unruled}
         {message !== null && <Text color={state?.status === 'failed' ? COLORS.danger : COLORS.muted}>{message}</Text>}
         {rows.length > 0 && <Box flexDirection="column">{rows}</Box>}
       </Box>
-    )
+    ))
   })
 }
