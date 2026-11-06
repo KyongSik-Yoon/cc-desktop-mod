@@ -6,7 +6,7 @@ import { mix } from './theme'
 // 데스크톱 Code 탭 diff 모양: 줄 전체 폭 연초록·연분홍, 왼쪽 색 세로줄, 번호 한 칸, 추가·삭제 모두 문법 색,
 // 바뀐 단어는 더 진하게, 안 바뀐 구간은 "N unmodified lines" 한 줄로.
 // 엔진 Code 는 색을 바꿀 수 없어 줄마다 배경 Box 를 깔고 그 위에 문법 색만 Code 로 그린다(줄당 Code 하나라 비싸다:
-// 패널은 보이는 행만 그린다). 모든 행 높이가 정해져 있어(줄은 한 행으로 자른다) 행 번호로 위치를 셀 수 있다.
+// 패널은 보이는 행만 그린다). 모든 행 높이가 정해져 있어(줄은 한 행으로 자르거나, 줄바꿈 때는 직접 칸 폭으로 나눈다) 행 번호로 위치를 셀 수 있다.
 
 type Els = Elements['terminal']
 
@@ -168,7 +168,51 @@ export function openGaps(rows: DiffRow[], opened: ReadonlyMap<number, ReadonlyAr
 // 단어 강조가 있는 줄만 홀로 둔다(조각 Code 가 필요하다). 덩어리는 RUN_LINES 줄까지: 창 밖까지 통째로 그리지 않게.
 export type DiffBlock = Gap | { kind: 'lines'; lines: DiffLine[]; span?: [number, number] }
 export const RUN_LINES = 16
-export const blockHeight = (block: DiffBlock) => (block.kind === 'gap' ? GAP_ROWS : block.lines.length)
+// wrap: 줄바꿈할 본문 폭(textRoom), 0 이면 줄마다 한 행으로 자른다.
+export const blockHeight = (block: DiffBlock, wrap = 0) => (block.kind === 'gap' ? GAP_ROWS : wrap > 0 ? wrappedHeight(block.lines, wrap) : block.lines.length)
+
+// 줄바꿈(패널 w): 넓은 줄을 칸 폭으로 직접 나눠 여러 행으로 그린다. 엔진 Code 의 wrap 에 맡기면 행 수를 미리 몰라
+// 가상 스크롤·번호 칸·줄로 가기가 어긋난다. 한 줄은 WRAP_ROWS 행까지: 압축된 파일의 긴 줄이 화면을 덮지 않게,
+// 마지막 행에 나머지를 통째로 두어 Code 가 … 로 자른다.
+export const WRAP_ROWS = 10
+
+export function wrapLine(text: string, room: number): string[] {
+  if (cellWidth(text) <= room) return [text]
+  const pieces: string[] = []
+  let start = 0
+  let width = 0
+  let at = 0
+  for (const ch of text) {
+    const w = cellWidth(ch)
+    if (width + w > room && at > start) {
+      pieces.push(text.slice(start, at))
+      start = at
+      width = 0
+      if (pieces.length === WRAP_ROWS - 1) break
+    }
+    width += w
+    at += ch.length
+  }
+  pieces.push(text.slice(start))
+  return pieces
+}
+
+// 본문 폭: 막대 한 칸·번호 칸을 빼고, 줄바꿈 때는 오른쪽 끝 한 칸(위치 막대 자리, jumps.tsx)도 비운다.
+export const textRoom = (columns: number, gutter: number) => Math.max(4, columns - 1 - gutter)
+export const wrapRoom = (columns: number, gutter: number) => Math.max(4, textRoom(columns, gutter) - 1)
+
+const lineHeights = new WeakMap<DiffLine[], { wrap: number; heights: number[] }>()
+
+// 줄마다 행 수(덩어리 줄 배열마다 기억한다: 스크롤할 때마다 모든 덩어리 높이를 다시 잰다).
+export function wrappedHeights(lines: DiffLine[], wrap: number): number[] {
+  const hit = lineHeights.get(lines)
+  if (hit && hit.wrap === wrap && hit.heights.length === lines.length) return hit.heights
+  const heights = lines.map(line => wrapLine(codeSource(line.text), wrap).length)
+  lineHeights.set(lines, { wrap, heights })
+  return heights
+}
+
+const wrappedHeight = (lines: DiffLine[], wrap: number) => wrappedHeights(lines, wrap).reduce((sum, rows) => sum + rows, 0)
 
 export function diffBlocks(rows: DiffRow[], max = RUN_LINES): DiffBlock[] {
   const blocks: DiffBlock[] = []
@@ -232,14 +276,16 @@ export function gutterWidth(rows: DiffRow[]): number {
 export type LinePick = { Button: Els['Button']; first: number; mark: string; isPicked: (row: number) => boolean; onPress: (row: number) => void }
 // 안 바뀐 구간 펴기: 구간 글을 버튼으로(누를 수 있는 파일만, 새 파일 내용을 읽을 수 있는 git 파일).
 export type GapOpen = { Button: Els['Button']; onPress: (gap: Gap) => void }
-type RowOptions = { path?: string; gutter: number; columns: number; unmodified: (count: number) => string; pick?: LinePick; gap?: GapOpen }
+// wrap: 넓은 줄을 여러 행으로 나눈다(높이는 blockHeight(block, wrapRoom(columns, gutter)) 와 같다).
+type RowOptions = { path?: string; gutter: number; columns: number; wrap?: boolean; unmodified: (count: number) => string; pick?: LinePick; gap?: GapOpen }
 
 const mark = (line: DiffLine) => (line.kind === '+' ? '+' : line.kind === '-' ? '-' : ' ')
 const lineNo = (line: DiffLine) => (line.kind === '-' ? line.oldNo : line.newNo)
-const numberText = (line: DiffLine, gutter: number) => `${String(lineNo(line)).padStart(gutter - 3)} ${mark(line)} `
+// 줄바꿈된 줄의 이어지는 행은 번호 칸을 비운다(빈 줄 대신 공백: 끝의 빈 줄은 행으로 치지 않을 수 있다).
+const numberText = (line: DiffLine, gutter: number, rows = 1) => `${String(lineNo(line)).padStart(gutter - 3)} ${mark(line)} ` + '\n '.repeat(rows - 1)
 
 // 누를 수 있는 번호 칸: 줄마다 버튼 하나(색 있는 번호 글자). 막대 칸의 hover + 는 줄마다 요소가 둘 더 들어 스크롤이 무거워져 뺐다.
-function pickGutter(els: Pick<Els, 'Box' | 'Text'>, pick: LinePick, lines: DiffLine[], key: string, gutter: number, color: string) {
+function pickGutter(els: Pick<Els, 'Box' | 'Text'>, pick: LinePick, lines: DiffLine[], key: string, gutter: number, color: string, heights: number[] | null) {
   const { Box, Text } = els
   const { Button } = pick
   return (
@@ -250,7 +296,7 @@ function pickGutter(els: Pick<Els, 'Box' | 'Text'>, pick: LinePick, lines: DiffL
         return (
           <Button key={`${key}.p${index}`} plain onPress={() => pick.onPress(row)}>
             <Text color={isPicked ? pick.mark : color} inverse={isPicked}>
-              {numberText(line, gutter)}
+              {numberText(line, gutter, heights?.[index] ?? 1)}
             </Text>
           </Button>
         )
@@ -285,11 +331,15 @@ export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: Diff
   const isDel = first.kind === '-'
   const bg = isAdd ? palette.addBg : isDel ? palette.delBg : undefined
   const numberColor = isAdd ? palette.addBar : isDel ? palette.delBar : palette.muted
-  const room = Math.max(4, options.columns - 1 - options.gutter)
+  const room = textRoom(options.columns, options.gutter)
+  const wrap = options.wrap ? wrapRoom(options.columns, options.gutter) : 0
+  const heights = wrap > 0 ? wrappedHeights(lines, wrap) : null
+  const height = heights ? heights.reduce((sum, rows) => sum + rows, 0) : lines.length
   const code = (text: string, codeKey: string) => <Code key={codeKey} source={codeSource(text)} path={options.path} wrap="truncate-end" />
   const body: ReturnType<typeof code>[] = []
   // 바뀐 단어(한 줄 덩어리): 앞·가운데·뒤 세 조각. 조각마다 폭을 정해야 앞 Code 가 남은 폭을 다 먹지 않는다. 앞부분이 칸을 넘기면 강조를 뺀다.
-  const span = block.span
+  // 줄바꿈된 줄은 조각이 행을 넘나들어 강조를 뺀다.
+  const span = height === lines.length ? block.span : undefined
   const source = codeSource(first.text)
   const pre = span ? cellWidth(source.slice(0, span[0])) : 0
   const mid = span ? cellWidth(source.slice(span[0], span[1])) : 0
@@ -309,19 +359,21 @@ export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: Diff
     if (pre + mid < room && span[1] < source.length) body.push(code(source.slice(span[1]), `${key}.cc`))
   } else {
     // 빈 줄은 공백 하나로: Code 가 빈 줄을 접어 행이 모자라지 않게.
-    body.push(code(lines.map(line => codeSource(line.text)).join('\n'), `${key}.c`))
+    // 줄바꿈은 나눈 조각을 줄처럼 잇는다: 한 Code 라 문법 색이 행을 넘어 이어진다.
+    const text = (line: DiffLine) => (wrap > 0 ? wrapLine(codeSource(line.text), wrap).join('\n') : codeSource(line.text))
+    body.push(code(lines.map(text).join('\n'), `${key}.c`))
   }
   return (
-    <Box key={key} flexDirection="row" height={lines.length} overflow="hidden" {...(bg ? { backgroundColor: bg } : {})}>
+    <Box key={key} flexDirection="row" height={height} overflow="hidden" {...(bg ? { backgroundColor: bg } : {})}>
       {/* 막대는 칸 왼쪽 1/4 만(▎): 칸 전체를 칠하면 데스크탑의 가는 선보다 훨씬 굵어 시선을 끈다. 나머지는 줄 틴트가 비친다. */}
-      <Box width={1} height={lines.length} flexShrink={0}>
-        {isAdd || isDel ? <Text color={isAdd ? palette.addBar : palette.delBar}>{Array(lines.length).fill('▎').join('\n')}</Text> : null}
+      <Box width={1} height={height} flexShrink={0}>
+        {isAdd || isDel ? <Text color={isAdd ? palette.addBar : palette.delBar}>{Array(height).fill('▎').join('\n')}</Text> : null}
       </Box>
       {options.pick ? (
-        pickGutter(els, options.pick, lines, key, options.gutter, numberColor)
+        pickGutter(els, options.pick, lines, key, options.gutter, numberColor, heights)
       ) : (
         <Box width={options.gutter} flexShrink={0}>
-          <Text color={numberColor}>{lines.map(line => numberText(line, options.gutter)).join('\n')}</Text>
+          <Text color={numberColor}>{lines.map((line, index) => numberText(line, options.gutter, heights?.[index] ?? 1)).join('\n')}</Text>
         </Box>
       )}
       {body}

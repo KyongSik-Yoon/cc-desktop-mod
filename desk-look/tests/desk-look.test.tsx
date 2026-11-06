@@ -9,7 +9,7 @@ import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInl
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { scrollBar, treeRows } from '../hooks/jumps'
-import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
+import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan, WRAP_ROWS, wrapLine } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
 import { advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, orderSessions, procStatOf, sessionFileOf } from '../hooks/monitor'
 import { bandStayMs, currentHead, headAt, quoteDecorations, quoteInto, selectionIn } from '../hooks/register'
@@ -4962,6 +4962,24 @@ describe('데스크톱 모양 diff', () => {
     expect(blocks.reduce((sum, b) => sum + blockHeight(b), 0)).toBe(diffRows(parseHunks(patch)).length)
   })
 
+  test('줄바꿈: 칸 폭으로 나누고(넓은 글자는 두 칸), 한 줄은 WRAP_ROWS 행까지', KO, async () => {
+    expect(wrapLine('abcd', 4)).toEqual(['abcd'])
+    expect(wrapLine('abcdef', 4)).toEqual(['abcd', 'ef'])
+    // 한글 두 칸: 5칸에 둘까지, 넓은 글자를 반으로 가르지 않는다
+    expect(wrapLine('가나다', 5)).toEqual(['가나', '다'])
+    // 칸보다 넓은 글자 하나도 행 하나는 차지한다(빈 행으로 끝없이 돌지 않게)
+    expect(wrapLine('가가', 1)).toEqual(['가', '가'])
+    // 마지막 행은 나머지 통째(Code 가 … 로 자른다)
+    const capped = wrapLine('x'.repeat(100), 5)
+    expect(capped.length).toBe(WRAP_ROWS)
+    expect(capped.at(-1)?.length).toBe(100 - 5 * (WRAP_ROWS - 1))
+    // 덩어리 높이는 나눈 행 합, 안 바뀐 구간은 그대로
+    const patch = ['@@ -1,2 +1,3 @@', ' a', '+' + 'y'.repeat(25), '+b'].join('\n')
+    const blocks = diffBlocks(diffRows(parseHunks(patch)))
+    expect(blocks.map(b => blockHeight(b, 10))).toEqual([1, 4])
+    expect(blocks.map(b => blockHeight(b))).toEqual([1, 2])
+  })
+
   test('256색으로 그려질 때는 팔레트에 있는 색을 그대로 쓴다', KO, async () => {
     expect(isTruecolor({ COLORTERM: 'truecolor' })).toBe(true)
     expect(isTruecolor({ COLORTERM: '24bit' })).toBe(true)
@@ -5077,6 +5095,38 @@ describe('데스크톱 모양 diff', () => {
     expect(await pane.find({ type: 'Text', text: '안 바뀐 줄 9개' })).toBeDefined()
     expect(await pane.find({ key: 'file-src/cart.ts' } as never)).toBeDefined()
     expect(await pane.find({ key: 'file-big.ts' } as never)).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('diff 패널 줄바꿈(w): 넓은 줄을 패널 폭으로 나눠 여러 행으로 그리고 번호는 첫 행에만', KO, async ($, on) => {
+    lightTheme(on)
+    const long = `${'x'.repeat(100)} 한글한글`
+    // 파일이 둘이어야 모두 펴기(z)가 있다
+    const patch = `diff --git a/w.ts b/w.ts\n--- a/w.ts\n+++ b/w.ts\n@@ -1 +1 @@\n-short\n+${long}\ndiff --git a/v.ts b/v.ts\n--- a/v.ts\n+++ b/v.ts\n@@ -1 +1 @@\n-a\n+b`
+    on('process.run', (($: unknown, e: { argv: string[] }) => {
+      const stdout = e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? patch : e.argv.includes('--abbrev-ref') ? 'main\n' : ''
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }) as never)
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.now', () => ({ value: 0 }))
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    await $.command.run({ command: 'desk-diff', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true, bodyColumns: 40, bodyRows: 30 } as never })
+    await openAll(pane)
+    for (let tries = 0; tries < 50 && !(await pane.find({ type: 'Button', key: 'wrap' })); tries++) await wait(10)
+    // 끈 동안은 한 행으로 자른다
+    expect(JSON.stringify(await pane.drawn())).toContain(JSON.stringify(long))
+    await pane.press({ key: 'wrap' })
+    // 폭 40 − 막대 1 − 번호 4 − 위치 막대 1 = 34칸씩, 한글은 반으로 가르지 않는다
+    const pieces = ['x'.repeat(34), 'x'.repeat(34), `${'x'.repeat(32)} `, '한글한글']
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain(JSON.stringify(pieces.join('\n')))
+    expect(drawn).toContain('"height":4')
+    // 번호 칸은 첫 행에만 번호, 이어지는 행은 비운다
+    expect(drawn).toContain(JSON.stringify('1 + \n \n \n '))
+    // 다시 누르면 한 행으로
+    await pane.press({ key: 'wrap' })
+    expect(JSON.stringify(await pane.drawn())).toContain(JSON.stringify(long))
     await pane.unmount()
   })
 

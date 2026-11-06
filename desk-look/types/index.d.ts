@@ -304,6 +304,8 @@ declare module 'claude-code' {
       // diff 패널에서 편 안 바뀐 구간(패치 키마다)과 파일 이름 거르기.
       diffGaps: Record<string, OpenedGaps>
       diffFilter: DiffFilter
+      // diff 패널 줄바꿈(w). 켜면 넓은 줄을 여러 행으로 나눠 그린다.
+      diffWrap: boolean
       // diff 줄 댓글: 쓰는 중인 것(고른 줄 범위, 없으면 null)과 다음 프롬프트에 context 로 붙일 것.
       commentDraft: CommentDraft | null
       lineComments: LineComment[]
