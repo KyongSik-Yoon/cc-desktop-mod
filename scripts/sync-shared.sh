@@ -2,6 +2,7 @@
 # 플러그인끼리 같은 코드를 복사해 둔 것을 맞춘다. 플러그인은 자기 디렉터리만 설치되므로 서로의 파일을 가져올 수 없다.
 # - desk-look 의 마크다운 렌더러 → desk-asana/hooks/shared/, desk-slack/hooks/shared/
 # - desk-slack/hooks/util.tsx(형제 플러그인 공용 도우미) → desk-asana/hooks/util.tsx
+# - desk-look 의 긴 패널 처음·끝 버튼(jumps.tsx) → desk-asana·desk-slack·desk-review 의 hooks/shared/
 # 원본을 고쳤으면 이 스크립트를 돌려 함께 커밋한다. --check 는 어긋났는지만 본다(릴리즈 워크플로가 돌린다.
 # 플러그인 테스트는 파일을 읽을 수 없어 거기서는 못 본다). util.tsx 의 cellWidth 는 desk-look markdown.tsx 의
 # 것과 같아야 해서 --check 가 함께 보고, 다르면 손으로 맞춘다. desk-grant 가 허용하는 도구 이름도 desk-asana ASANA_TOOLS·
@@ -21,6 +22,9 @@ pairs=(
   "desk-look/hooks/vendor/lovely-mermaid.d.ts desk-slack/hooks/shared/vendor/lovely-mermaid.d.ts"
   "desk-look/hooks/vendor/LICENSE.lovely-mermaid desk-slack/hooks/shared/vendor/LICENSE.lovely-mermaid"
   "desk-slack/hooks/util.tsx desk-asana/hooks/util.tsx"
+  "desk-look/hooks/jumps.tsx desk-asana/hooks/shared/jumps.tsx"
+  "desk-look/hooks/jumps.tsx desk-slack/hooks/shared/jumps.tsx"
+  "desk-look/hooks/jumps.tsx desk-review/hooks/shared/jumps.tsx"
 )
 
 cell_width() {
