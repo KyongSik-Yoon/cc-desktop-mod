@@ -15,7 +15,8 @@ export type Jumps = { toEnd: string; toStart: string; scroll: (to: 'start' | 'en
 
 // 사람이 스크롤할 때 엔진이 알려 준 트리 높이(ui.scroll 의 contentRows)를 그때 그린 트리의 어림과 함께 둔다.
 // 어림이 달라지면(내용이 바뀌면) 버리고 다시 어림한다. $.ui.scroll 은 ui.scroll 을 거치지 않는다(2.1.318).
-const heights = new Map<string, { estimate: number; contentRows?: number }>()
+// top 은 마지막으로 그린 트리 위에 더한 줄 수(jumpsTop).
+const heights = new Map<string, { estimate: number; contentRows?: number; top?: number }>()
 
 // 각 플러그인의 ui.scroll 훅이 부른다.
 export function learnRows(requestId: string, contentRows: number) {
@@ -33,6 +34,7 @@ export function withJumps(els: Els, tree: unknown, e: PaneSite, jumps: Jumps) {
   const estimate = isLong ? rows + 2 : rows
   let known = heights.get(e.requestId)
   if (known?.estimate !== estimate) heights.set(e.requestId, (known = { estimate }))
+  known.top = isLong ? 1 : 0
   const total = Math.max(known.contentRows ?? estimate, at.offset + at.bodyRows)
   const bar = scrollBar(total, at.offset, at.bodyRows)
   // 버튼과 막대는 트리 뒤에 둔다: 입력칸 앞 요소가 생기거나 사라지면 입력칸이 포커스를 잃는다.
@@ -63,9 +65,9 @@ export function withJumps(els: Els, tree: unknown, e: PaneSite, jumps: Jumps) {
 }
 
 // withJumps 가 트리 위에 더하는 줄 수: 창보다 긴 패널은 "끝으로" 줄 하나. 트리 안 위치를 창 위치(scroll.offset)와
-// 견줄 때 더한다(diff 패널의 파일 머리 위치).
-export function jumpsTop(tree: unknown, e: PaneSite): number {
-  return measure(tree, e).isLong ? 1 : 0
+// 견줄 때 더한다(diff 패널의 파일 머리 위치). 트리를 다시 재지 않고 그 패널에 마지막으로 그린 withJumps 의 값을 읽는다.
+export function jumpsTop(requestId: string): number {
+  return heights.get(requestId)?.top ?? 0
 }
 
 function measure(tree: unknown, e: PaneSite) {
@@ -150,13 +152,12 @@ export function treeRows(node: unknown, columns: number): number {
     case 'Button':
       return outer + 1
     case 'Input':
+    case 'Image':
       return outer + (typeof props.rows === 'number' ? props.rows : 1)
     case 'Code':
       return outer + String(props.source ?? '').split('\n').length
     case 'Markdown':
       return outer + wrapped(String(props.text ?? ''), columns, true)
-    case 'Image':
-      return outer + (typeof props.rows === 'number' ? props.rows : 1)
   }
   const border = props.borderStyle ? 2 : 0
   const inner = Math.max(1, columns - edge(props, 'padding', 'Left') - edge(props, 'padding', 'Right') - border)
