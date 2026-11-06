@@ -167,9 +167,37 @@ describe('응답 렌더링', () => {
     expect(drawn).not.toContain('|---|')
     // 엔진 Code 는 빈 줄을 높이 0 으로 그린다: 빈 줄을 공백 한 칸으로
     expect(drawn).toContain('"source":"위\\n \\n아래"')
-    // Bash·Write 카드도 같은 도우미를 쓴다. CRLF 는 LF 로 맞춘 뒤 바꾼다
-    expect(codeSource('a\r\n\r\nb\n')).toBe('a\n \nb\n ')
+    // CRLF 는 LF 로 맞춘 뒤 바꾸고, 끝 줄바꿈은 빈 행으로 만들지 않는다. 통째로 빈 글은 한 칸
+    expect(codeSource('a\r\n\r\nb\n')).toBe('a\n \nb\n')
+    expect(codeSource('\nx')).toBe(' \nx')
+    expect(codeSource('')).toBe(' ')
     await reply.unmount()
+
+    // Bash 카드도 같은 도우미를 쓴다
+    const row = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolUse',
+      requestId: 'b1',
+      viewport: VIEWPORT,
+      props: { tool_use_id: 'b1', tool: 'Bash', input: { command: 'echo a\n\necho b\n' }, isRunning: false, isErrored: false, isInterrupted: false },
+    })
+    await row.press({ key: 'row-b1' })
+    expect(JSON.stringify(await row.find({ type: 'Code' }))).toContain('"source":"echo a\\n \\necho b\\n"')
+    await row.unmount()
+  })
+
+  test('인용 안 markdown 펜스는 흐린 톤을 이어받는다', KO, async $ => {
+    const quoted = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '> 앞\n>\n> ```md\n> # 안쪽 제목\n> ```', isFirstOfReply: true },
+    })
+    // 펜스 안 제목이 인용의 흐린 톤(inactive)을 이어받는다
+    expect(JSON.stringify(await quoted.drawn())).toContain('{"color":"inactive","weight":"semibold"},"children":["안쪽 제목"]')
+    await quoted.unmount()
   })
 
   test('속성 붙은 펜스, 알림 박스, 코드 바탕 폭', KO, async $ => {

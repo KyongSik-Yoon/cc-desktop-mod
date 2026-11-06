@@ -57,8 +57,12 @@ export function cellWidth(text: string): number {
 const FENCE = /^\s*(`{3,}|~{3,})\s*([^\s`]*)[^`]*$/
 const MARKDOWN_FENCE = /^(markdown|md)$/i
 
-// 엔진 Code 는 빈 줄을 높이 0 으로 그려 빼먹는다. 빈 줄을 공백 한 칸으로 넘긴다(diffview 는 줄마다 같은 일).
-export const codeSource = (source: string) => source.replace(/\r\n?/g, '\n').replace(/^$/gm, ' ')
+// 엔진 Code 는 빈 줄을 높이 0 으로 그려 빼먹는다. 빈 줄을 공백 한 칸으로 넘긴다.
+// 끝 줄바꿈 뒤의 빈 줄은 줄이 아니므로 두고(명령 끝 \n 이 빈 행이 되지 않게), 통째로 빈 글은 한 칸으로.
+export function codeSource(source: string): string {
+  const text = source.replace(/\r\n?/g, '\n')
+  return text === '' ? ' ' : text.replace(/^$(?=\n)/gm, ' ')
+}
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/
 const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/
 const BULLETS = ['•', '◦', '▪']
@@ -538,7 +542,8 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
             const code = (
               <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
                 {MARKDOWN_FENCE.test(block.language ?? '') ? (
-                  blocks(parseBlocks(block.source, options.breaks), k, room - 4)
+                  // 톤을 넘겨 인용 안이면 흐리게, 문서 모드여도 바깥 문서의 절 모양(강조색·밑줄)을 쓰지 않게 한다.
+                  blocks(parseBlocks(block.source, options.breaks), k, room - 4, tone ?? colors.text)
                 ) : (
                   <Code source={codeSource(block.source)} language={block.language} wrap="wrap" />
                 )}

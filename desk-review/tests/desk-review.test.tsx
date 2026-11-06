@@ -45,6 +45,8 @@ test('보고서 입력: 검사·경로 풀기·단계 묶기·줄 둘레 자르�
   // 파일보다 뒤의 줄은 마지막 줄로 붙인다
   expect(sourceWindow(SOURCE, 40)).toMatchObject({ startLine: 25, line: 30 })
   expect(sourceWindow('', 1)).toEqual({ error: 'empty' })
+  // 엔진 Code 는 빈 줄을 높이 0 으로 그린다: 빈 줄은 공백 한 칸, CRLF 의 \r 은 뺀다
+  expect(sourceWindow('a\r\n\r\nb\n', 2)).toMatchObject({ source: 'a\n \nb' })
 
   // 고친 줄을 담은 헌크만, 파일 머리 없이. 담은 헌크가 없으면 가장 가까운 헌크, 헌크가 없으면 null
   expect(hunkAt(DIFF, 12)).toBe(HUNK_12)
