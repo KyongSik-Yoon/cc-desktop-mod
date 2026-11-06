@@ -6,6 +6,9 @@ export type Lang = 'en' | 'ko'
 
 const ko = {
   paneTitle: '리뷰 결과',
+  // 긴 패널의 맨 위·맨 아래 버튼(jumps.tsx). 같은 일을 하는 키를 함께 적는다.
+  jumpEnd: '↓ 끝으로 · End',
+  jumpStart: '↑ 처음으로 · Home',
   cmdReview: '마지막 정리·리뷰 결과를 옆 패널로 엽니다',
   noReport: '아직 리뷰 결과가 없어요. /desk-review:simplify-review 로 만드세요.',
   opened: '리뷰 결과를 옆 패널에 펼쳤어요.',
@@ -26,6 +29,8 @@ export type Strings = typeof ko
 
 const en: Strings = {
   paneTitle: 'Review',
+  jumpEnd: '↓ Bottom · End',
+  jumpStart: '↑ Top · Home',
   cmdReview: 'Open the last simplify-and-review report in a side pane',
   noReport: 'No review report yet. Make one with /desk-review:simplify-review.',
   opened: 'Opened the review report in the side pane.',

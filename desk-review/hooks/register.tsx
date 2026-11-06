@@ -4,6 +4,7 @@ import type { Elements, EngineInterface, Register } from 'claude-code'
 import type { DiffAt, ReviewItem, ReviewReport, Stage, Status } from '../types'
 import { counts, itemsOf, parseReport, reviewTool } from './review'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
+import { withJumps } from './shared/jumps'
 
 // 엔진 테마 키(desk-look 의 COLORS 와 같은 역할). hex 를 박으면 터미널 테마와 어긋난다.
 const COLORS = {
@@ -114,6 +115,19 @@ async function pickLang($: EngineInterface) {
   return setLang(langFromConfig(row?.value))
 }
 
+// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
+type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+function paneJumps($: EngineInterface, els: Elements['terminal'], e: PaneSite, tree: unknown) {
+  return withJumps(els, tree, {
+    bodyRows: e.props.scroll?.bodyRows ?? 0,
+    columns: e.props.bodyColumns ?? 80,
+    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
+    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
+  })
+}
+
 export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
@@ -157,7 +171,7 @@ export const register: Register = (on, options) => {
     const state = await read($, report)
     if (state === null) return <Text color={COLORS.muted}>{T.noReport}</Text>
     const n = counts(state)
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         <Box flexDirection="column">
           {heading(els, T.summary)}
@@ -169,6 +183,6 @@ export const register: Register = (on, options) => {
         {textBlock(els, T.unverified, state.unverified)}
         {textBlock(els, T.next, state.next)}
       </Box>
-    )
+    ))
   })
 }
