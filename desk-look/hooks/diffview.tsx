@@ -134,14 +134,33 @@ export function diffRows(hunks: Hunk[], gaps = true): DiffRow[] {
   return rows
 }
 
-// 편 구간: 새 번호로 고른 구간 행을 문맥 줄로 바꾼다. lines 는 그 구간의 줄들(새 파일에서 읽은 것).
+// 편 구간: opened 는 새 번호 start 부터 읽은 줄들(새 파일에서). 안 바뀐 구간 안에 드는 줄만 문맥 줄로 펴고,
+// 구간을 일부만 열면(리뷰 항목 줄 둘레) 남은 앞뒤는 작은 구간으로 남긴다. 마지막 hunk 뒤에 든 줄은 끝에 붙이고
+// 그 앞 틈은 구간으로 둔다(파일 끝까지의 줄 수는 모르니 뒤 틈은 없다). hunk 안의 줄은 이미 보이니 건너뛴다.
 export function openGaps(rows: DiffRow[], opened: ReadonlyMap<number, ReadonlyArray<string>>): DiffRow[] {
   if (opened.size === 0) return rows
-  return rows.flatMap((row): DiffRow[] => {
-    const lines = row.kind === 'gap' ? opened.get(row.newStart) : undefined
-    if (row.kind !== 'gap' || !lines) return [row]
-    return lines.map((text, index) => ({ kind: 'line', line: { kind: ' ', text, oldNo: row.oldStart + index, newNo: row.newStart + index } }))
-  })
+  const ranges = [...opened].map(([start, lines]) => ({ start, lines })).sort((a, b) => a.start - b.start)
+  const spread = (oldStart: number, newStart: number, count: number | null): DiffRow[] => {
+    const out: DiffRow[] = []
+    const end = count === null ? Infinity : newStart + count
+    const gap = (from: number, to: number): DiffRow => ({ kind: 'gap', count: to - from, oldStart: oldStart + (from - newStart), newStart: from })
+    let at = newStart
+    for (const range of ranges) {
+      const from = Math.max(range.start, at)
+      const to = Math.min(range.start + range.lines.length, end)
+      if (from >= to) continue
+      if (from > at) out.push(gap(at, from))
+      for (let n = from; n < to; n++) out.push({ kind: 'line', line: { kind: ' ', text: range.lines[n - range.start] ?? '', oldNo: oldStart + (n - newStart), newNo: n } })
+      at = to
+    }
+    if (count !== null && at < end) out.push(gap(at, end))
+    return out
+  }
+  const lines = rows.flatMap(row => (row.kind === 'line' ? [row.line] : []))
+  const lastNew = Math.max(0, ...lines.map(line => line.newNo))
+  const lastOld = Math.max(0, ...lines.map(line => line.oldNo))
+  const body = rows.flatMap(row => (row.kind === 'gap' ? spread(row.oldStart, row.newStart, row.count) : [row]))
+  return [...body, ...spread(lastOld + 1, lastNew + 1, null)]
 }
 
 // 그리는 단위: 안 바뀐 구간 표시, 또는 같은 종류(추가·삭제·문맥)로 이어진 줄 덩어리. 덩어리 하나를 배경 Box 하나와

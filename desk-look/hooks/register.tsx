@@ -1120,7 +1120,7 @@ function previewChip(els: Els, $: EngineInterface, key: string, path: string, la
   return <els.Button key={`preview-${key}`} plain dimColor label={label} onPress={() => void openPreview($, path).catch(() => undefined)} />
 }
 
-async function openDiffAt($: EngineInterface, path: string) {
+async function openDiffAt($: EngineInterface, path: string, line?: number) {
   await refreshDiffView($, 'uncommitted')
   const inGit = matchDiffFile(await read($, diff), path)
   // git 이 모르는 파일(저장소 밖)은 세션 편집 기록에서 찾는다. 경로는 도구가 준 절대 경로다.
@@ -1134,7 +1134,45 @@ async function openDiffAt($: EngineInterface, path: string) {
   }
   // git 밖 파일이면 묶음도 편다: 접힌 묶음 안의 파일 머리 띠는 그리지 않아 스크롤해 갈 곳이 없다.
   await update($, open, state => ({ ...onlyOpen(state, target), ...(inGit === null ? { [OUTSIDE_GROUP]: false } : {}) }))
+  // 줄을 받았으면(리뷰 항목) 그 줄 둘레를 펴고 그 줄로 간다. git 밖 편집은 그때의 줄 번호라 지금 줄과 안 맞아 파일 머리로.
+  if (line !== undefined && !target.startsWith(OUTSIDE) && (await focusLine($, target, line))) return
   await scrollToFile($, target)
+}
+
+// 줄로 가기: 그 파일 diff 에서 줄 둘레 FOCUS_AROUND 줄을 새 쪽 파일(작업 트리, 커밋별이면 그 커밋)에서 읽어 편다
+// (안 바뀐 구간이나 마지막 hunk 뒤라 diff 에 없던 줄). 그 줄을 표시하고, 그려진 위치를 받아 위로 몇 줄 남기고 스크롤한다.
+const FOCUS_AROUND = 8
+const FOCUS_ABOVE = 6
+let diffJump: { key: string; newNo: number; seq: number } | null = null
+let diffJumpTop: { seq: number; top: number } | null = null
+let jumpSeq = 0
+
+async function focusLine($: EngineInterface, id: string, line: number): Promise<boolean> {
+  const view = await read($, diffView)
+  const commit = id.startsWith('c:') ? view.commits.find(row => id.startsWith(`c:${row.short}:`)) : undefined
+  const files = commit ? (view.commitFiles[commit.sha] ?? []) : id.startsWith('b:') ? view.files : await read($, diff)
+  const path = commit ? id.slice(`c:${commit.short}:`.length) : id.startsWith('b:') ? id.slice(2) : id
+  const file = files.find(row => row.path === path)
+  if (!file?.patch) return false
+  const source: GapSource = commit ? { kind: 'commit', sha: commit.sha } : { kind: 'worktree' }
+  const lines = await gapSource($, file.path, source)
+  if (lines === null || lines.length === 0) return false
+  const at = Math.min(Math.max(1, line), lines.length)
+  const from = Math.max(1, at - FOCUS_AROUND)
+  const shown = lines.slice(from - 1, Math.min(lines.length, at + FOCUS_AROUND)).map(untab)
+  const key = `d-${id}`
+  await update($, diffGaps, gaps => {
+    const kept = gaps[key]?.patch === file.patch ? (gaps[key]?.lines ?? {}) : {}
+    return { ...gaps, [key]: { patch: file.patch, lines: { ...kept, [from]: shown } } }
+  })
+  const seq = ++jumpSeq
+  diffJump = { key, newNo: at, seq }
+  // 편 그림이 그려져 그 줄의 위치가 나올 때까지 기다린다(막 연 패널은 첫 그림 전이다).
+  for (let tries = 0; tries < 40 && diffJumpTop?.seq !== seq; tries++) await $.clock.sleep(25).catch(() => undefined)
+  if (diffJumpTop?.seq !== seq) return false
+  diffCursor = id
+  await restoreScroll($, PANE, Math.max(0, diffJumpTop.top - FOCUS_ABOVE))
+  return true
 }
 
 // 커밋 안 한 변경에 없는 파일을 찾을 diff 칸과 그 안의 파일 id. 브랜치 diff 에 있으면 브랜치 칸,
@@ -2778,7 +2816,7 @@ const openedCache = new Map<string, { patch: string; starts: string; made: { row
 function withOpenedGaps(key: string, patch: string, opened: OpenedGaps | undefined): { rows: DiffRow[]; blocks: DiffBlock[] } {
   const made = patchBlocks(patch)
   if (!opened || opened.patch !== patch) return made
-  const starts = Object.keys(opened.lines).join(',')
+  const starts = Object.entries(opened.lines).map(([start, lines]) => `${start}+${lines.length}`).join(',')
   const hit = openedCache.get(key)
   if (hit && hit.patch === patch && hit.starts === starts) return hit.made
   const rows = openGaps(made.rows, new Map(Object.entries(opened.lines).map(([start, lines]) => [Number(start), lines])))
@@ -2813,6 +2851,8 @@ function virtualDiff(v: VirtualDiff) {
     return at + height > windowTop && at < windowTop + rows
   }
   const spacer = (key: string) => items.push({ key, height: 1, node: () => <Box key={key} height={1} /> })
+  // 줄로 가기의 그 줄이 든 덩어리(rowItems 클로저가 채운다).
+  const jumped: { at: { seq: number; key: string; inner: number } | null } = { at: null }
   const rowItems = (patch: string, key: string, path: string, indent: number, scope: string, source?: GapSource) => {
     const { rows, blocks } = source ? withOpenedGaps(key, patch, v.gaps[key]) : patchBlocks(patch)
     const gap = source ? { Button: v.els.Button, onPress: (at: Gap) => v.onGap({ key, patch, path, source, gap: at }) } : undefined
@@ -2833,10 +2873,13 @@ function virtualDiff(v: VirtualDiff) {
       cuts.length === 0
         ? blocks
         : [...cuts, rows.length - 1].flatMap((cut, index) => diffBlocks(rows.slice(index === 0 ? 0 : (cuts[index - 1] ?? 0) + 1, cut + 1)))
+    // 줄로 가기(리뷰 항목)의 그 줄: 고른 줄처럼 번호를 뒤집어 표시하고, 그려진 위치를 focusLine 에 알린다.
+    const jump = diffJump?.key === key ? diffJump : null
+    const jumpRow = jump ? rows.findIndex(row => row.kind === 'line' && row.line.kind !== '-' && row.line.newNo === jump.newNo) : -1
     const pick = {
       Button: v.els.Button,
       mark: COLORS.link,
-      isPicked: (row: number) => picked !== null && row >= picked[0] && row <= picked[1],
+      isPicked: (row: number) => row === jumpRow || (picked !== null && row >= picked[0] && row <= picked[1]),
       onPress: (row: number) => {
         const at = rows[row]
         if (at?.kind === 'line') v.notes.onLine({ patch: key, path, scope, line: at.line })
@@ -2847,6 +2890,7 @@ function virtualDiff(v: VirtualDiff) {
       const rowKey = `${key}.${index}`
       const first = row
       row += block.kind === 'gap' ? 1 : block.lines.length
+      if (jump && jumpRow >= first && jumpRow < row) jumped.at = { seq: jump.seq, key: rowKey, inner: jumpRow - first }
       items.push({
         key: rowKey,
         height: blockHeight(block),
@@ -2931,6 +2975,7 @@ function virtualDiff(v: VirtualDiff) {
     top += item.height
   }
   diffHeads = heads.map(head => ({ id: head.id, top: tops.get(head.key) ?? 0 }))
+  if (jumped.at) diffJumpTop = { seq: jumped.at.seq, top: (tops.get(jumped.at.key) ?? 0) + jumped.at.inner }
   // 내용이 줄어 창이 끝을 넘으면 엔진은 다시 묻지 않고 창을 끝으로 깎는다. 그 자리를 미리 그린다.
   windowTop = Math.max(0, Math.min(windowTop, top - rows))
   const steps = windowPlan(items, windowTop, rows)
@@ -3339,7 +3384,8 @@ export const register: Register = (on, options) => {
   // desk-review 의 리뷰 결과 패널에서 "변경 사항 탭에서 열기"를 누르면 그 파일에서 diff 패널을 연다(턴 끝 카드의 파일 줄과 같은 길).
   on('state.set', { plugin: 'desk-review', key: 'diffAt' }, async ($, e, next) => {
     const done = await next(e)
-    if (e.value && typeof e.value.path === 'string' && e.value.path !== '') await openDiffAt($, e.value.path).catch(() => undefined)
+    const line = typeof e.value?.line === 'number' && e.value.line >= 1 ? e.value.line : undefined
+    if (e.value && typeof e.value.path === 'string' && e.value.path !== '') await openDiffAt($, e.value.path, line).catch(() => undefined)
     return done
   }).catch(($, e, next) => next(e))
   const isGather = options.replyInBlocks !== 'off'

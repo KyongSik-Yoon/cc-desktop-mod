@@ -89,8 +89,8 @@ test('review_report 도구: 보고서를 받아 패널을 열고, 항목은 머�
   await pane.press({ key: 'item-0' })
   await pane.press({ key: 'item-2' })
   expect(seen.diffAt).toEqual([
-    { path: '/repo/src/a.ts', n: 1 },
-    { path: '/repo/src/a.ts', n: 2 },
+    { path: '/repo/src/a.ts', line: 12, n: 1 },
+    { path: '/repo/src/a.ts', line: 40, n: 2 },
   ])
   // 누를 때 파일·git 을 읽지 않는다
   expect(seen.reads).toBe(0)
