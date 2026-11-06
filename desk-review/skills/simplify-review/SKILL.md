@@ -25,6 +25,8 @@ Call the two skills **in this order, in one turn**. Do not ask the person anythi
 ## Final report — the point of this skill
 
 After both steps, **always** report once, as below. Without it the skill did not run.
+Write every text in the report (`summary`, each `reason` and `resolution`, `unverified`, `next`) in the language the
+person writes to you, not in the language of these instructions.
 Write it even when code-review already reported through `ReportFindings` — then point at each finding
 with its `short_summary` in one line instead of repeating its text.
 
@@ -33,14 +35,18 @@ with its `short_summary` in one line instead of repeating its text.
 Call `mcp__desk-review__review_report` with every item:
 
 - `summary`: one sentence — what changed and what the review found.
-- `items`: one entry per cleanup and per finding, `{ stage, status, file, line, reason }`.
+- `items`: one entry per cleanup and per finding, `{ stage, status, file, line, reason, resolution }`.
   - `stage: "simplify"` with `status` `fixed` (applied) or `skipped` (left alone).
-  - `stage: "review"` with `status` `found` (a real defect) or `dismissed` (rejected on verification).
+  - `stage: "review"` with `status` `fixed` (a real defect, fixed in this run), `found` (a real defect, left unfixed)
+    or `dismissed` (rejected on verification).
   - `file`: the full path, relative to the working directory or absolute. Never just the file name, never shortened with `…`.
   - `line`: the 1-based line the item is about. For a fix, the first changed line after the fix.
   - `reason`: **always**. Why it was fixed (duplication, needless complexity …), why it was skipped
     (false positive, out of scope, would change behaviour …), how it breaks (which input, what goes wrong),
     or why it was rejected (the evidence from verification).
+  - `resolution`: **always** for a review item marked `fixed` or `found`. For `fixed`, what was changed to fix it;
+    for `found`, why it was left unfixed (it needs the person's decision, it is out of scope, the fix is a larger
+    change …). The person reads it to know what is still open.
 - `unverified`: tests not run, files not read, doubts left. Empty when there are none.
 - `next`: what the person has to decide, as two options with a recommendation. Empty when there is nothing.
 
@@ -53,7 +59,7 @@ reply write only the one-line summary — never the items again.
 If `mcp__desk-review__review_report` is not available, or refuses the input twice, write the same report as
 Markdown in the session's scratchpad directory (from the system prompt; `/tmp/claude-$(id -u)/` without one)
 as `simplify-review-<YYYYMMDD-HHMMSS>.md`, and reply with its full path and the one-line summary.
-In that file, put under each item's `path:line` a code block: for `fixed` the diff hunk of that change
+In that file, put under each item's `path:line` its reason and, for a real finding, its resolution, then a code block: for `fixed` the diff hunk of that change
 (`git diff -U3 -- <file>`, language `diff`), for the others about five lines either side of the line from the
 current file. Read the code from the file or the diff; never rewrite it from memory. Do not use tables, and write
 "None" for an empty section rather than leaving it out.

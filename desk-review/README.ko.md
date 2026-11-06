@@ -2,7 +2,7 @@
 
 [English](README.md) | **한국어**
 
-desk-review 는 스킬 하나와 옆 패널 하나를 가진 Claude Code 플러그인(mod)입니다. `/desk-review:simplify-review` 는 변경분에 `/simplify` 를 돌린 뒤 그 결과에 `/code-review medium` 을 돌립니다. 그래서 정리가 바꾼 코드도 리뷰가 봅니다. 결과는 옆 패널에 열립니다. 정리는 고침·안 고침, 리뷰는 찾음·버림으로, 항목마다 파일·줄·이유가 붙습니다. 항목을 누르면 desk-look 의 diff 패널이 그 파일에서, 결과 옆 `변경 사항` 탭으로 열립니다. [desk-look](../README.ko.md) 과 같은 마켓에서 받고, diff 패널 때문에 desk-look 이 있어야 합니다.
+desk-review 는 스킬 하나와 옆 패널 하나를 가진 Claude Code 플러그인(mod)입니다. `/desk-review:simplify-review` 는 변경분에 `/simplify` 를 돌린 뒤 그 결과에 `/code-review medium` 을 돌립니다. 그래서 정리가 바꾼 코드도 리뷰가 봅니다. 결과는 옆 패널에 열립니다. 정리는 고침·안 고침, 리뷰는 고침·남김·버림으로, 항목마다 파일·줄·이유가 붙고, 리뷰에서 찾은 결함에는 고친 방법이나 남긴 까닭이 붙습니다. 항목을 누르면 desk-look 의 diff 패널이 그 파일에서, 결과 옆 `변경 사항` 탭으로 열립니다. [desk-look](../README.ko.md) 과 같은 마켓에서 받고, diff 패널 때문에 desk-look 이 있어야 합니다.
 
 ## 설치
 
@@ -37,6 +37,7 @@ desk-look 처럼 Claude Code 최신 버전에 맞춰 만듭니다. desk-look 의
 - 도구 `review_report`(`mcp__desk-review__review_report`): 스킬이 결과를 넘깁니다. `tool.call` 훅이 검사해 담아 두고 패널을 엽니다. 이유가 빠졌거나 상태가 틀렸거나 줄이 없으면 고칠 곳과 함께 거절합니다
 - `command.run`(`desk-review`): 마지막 결과를 엽니다
 - `ui.render`(`Pane`, `desk-review`): 결과를 그립니다
+- `ui.scroll`(`Pane`, `desk-review`): 오른쪽 끝 위치 막대에 쓸 패널 높이를 적어 둡니다. 창은 엔진이 옮기는 대로 둡니다
 - `session.start`, `state.set`(desk-look 의 `lang`): 도구·명령을 걸고 desk-look 의 언어를 따릅니다
 - 항목을 누르면 자기 상태 `diffAt` 을 씁니다. desk-look 이 그 `state.set` 을 훅해 diff 패널을 엽니다
 

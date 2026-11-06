@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface, Timer, UiScrollArgs } from 'claude-code'
 
 import type { FoldedPane, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView } from '../types'
 import {
@@ -33,8 +33,9 @@ import {
 } from './slack'
 import type { SlackCall } from './slack'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
-import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton } from './util'
+import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
 import { renderMarkdown } from './shared/markdown'
+import { learnRows, withJumps, type PaneSite } from './shared/jumps'
 
 const SLACK_PANE = 'desk-slack'
 // 답장 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -181,10 +182,12 @@ async function openSlack($: EngineInterface) {
 }
 
 // 방을 열면(다시 읽어도) 기록을 읽고 그 방 안 읽음을 지운다. thread 가 있으면 채널 기록 대신 그 스레드(부모와 답글).
+// 새로 들어온 방·스레드는 맨 아래(최근 글과 답장 칸)에서 시작한다. 같은 방을 다시 읽을 때(↻)는 읽던 자리를 둔다.
 async function openSlackRoom($: EngineInterface, server: SlackServer, channel: string, thread: string | null = null) {
   const isSame = (view: SlackView | null) => view?.channel === channel && view.thread === thread
+  const isEntry = !isSame(await read($, slackView))
   // 방과 스레드를 오가면 쓰던 답장이 다른 곳으로 가지 않게 비운다
-  if (!isSame(await read($, slackView))) slackDraft = ''
+  if (isEntry) slackDraft = ''
   await update($, slackView, (view): SlackView => ({ channel, thread, status: 'loading', posts: isSame(view) ? view!.posts : [] }))
   const got = await callSlack($, server, thread === null ? historyCall(channel) : threadCall(channel, thread), 'messages')
   const posts = got.ok ? (thread === null ? parseHistory(got.text) : parseThread(got.text)) : []
@@ -192,6 +195,9 @@ async function openSlackRoom($: EngineInterface, server: SlackServer, channel: s
     !isSame(view) ? view : got.ok ? { channel, thread, status: 'ok', posts } : { channel, thread, status: 'failed', posts: view!.posts, error: got.error },
   )
   if (!got.ok) return
+  // 글을 그린 뒤에 내린다: 엔진은 끝에 있던 창이 늘어난 내용을 따라 내려가게 하지 않는다(2.1.318 실측).
+  // 기다리는 동안 다른 방으로 옮겼으면 그 방의 창은 건드리지 않는다.
+  if (isEntry && isSame(await read($, slackView))) await scrollPane($, { in: SLACK_PANE, to: 'end' })
   const me = (await $.store.get('slackMe').catch(() => undefined)) as { id?: string } | undefined
   await saveInbox($, readRoom(await readInbox($), channel, posts, me?.id ?? '', thread))
 }
@@ -222,6 +228,22 @@ async function sendSlack($: EngineInterface, server: SlackServer, channel: strin
   slackSent++
   $.ui.toast(T.slackSent)
   await openSlackRoom($, server, channel, thread)
+  // 보낸 글이 맨 아래에 보이게. 기다리는 동안 다른 방으로 옮겼으면 그 방의 창은 건드리지 않는다.
+  const view = await read($, slackView)
+  if (view?.channel === channel && view.thread === thread) await scrollPane($, { in: SLACK_PANE, to: 'end' })
+}
+
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).
+function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
+  return withJumps(els, tree, e, { toEnd: T.jumpEnd, toStart: T.jumpStart, scroll: to => void scrollPane($, { in: e.requestId, to }) })
+}
+
+// 플러그인이 패널 창을 옮기는 곳은 모두 이것으로: 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아(2.1.318)
+// 위치 막대(jumps.tsx)가 옛 자리에 남으므로, 옮겼으면 다시 그린다.
+async function scrollPane($: EngineInterface, args: UiScrollArgs) {
+  const moved = await $.ui.scroll(args).catch(() => ({ deny: 'failed' }))
+  if (moved.deny === undefined) $.ui.invalidate('ui.render')
+  return moved
 }
 
 // ✕ 는 두 번 눌러 닫는다(Asana 담당자 넘기기와 같은 무장). channel 이 null 이면 모든 방(모두 닫기).
@@ -338,6 +360,12 @@ export const register: Register = (on, options) => {
 
   // Slack 패널: 나에게 온 DM·그룹 DM 을 대화방으로(최근 방부터), 하나를 누르면 그 방의 최근 대화와 답장.
   // 마지막 글이 스레드 답글인 방은 그 스레드로 열린다. 방 안의 "답글 N개" 를 누르면 그 스레드, ← 는 방으로.
+  // 막대 손잡이 크기에 쓰는 트리 높이(shared/jumps.tsx): 엔진은 사람이 스크롤할 때만 알려 준다. 창은 엔진이 옮긴다.
+  on('ui.scroll', { component: 'Pane', requestId: SLACK_PANE }, ($, e, next) => {
+    learnRows(e.requestId, e.contentRows)
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: SLACK_PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
@@ -369,7 +397,7 @@ export const register: Register = (on, options) => {
           onPress={() => void (view.thread === null ? closeSlackView($) : openSlackRoom($, server, view.channel))}
         />
       )
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
             {back('slack-back')}
@@ -440,7 +468,7 @@ export const register: Register = (on, options) => {
             <Button key="slack-clear" plain dimColor label={T.inputClear} onPress={() => void clearSlackDraft($, view.channel, view.thread)} />
           </Box>
         </Box>
-      )
+      ))
     }
 
     const rooms = state ? roomList(state.inbox) : []
@@ -493,13 +521,13 @@ export const register: Register = (on, options) => {
         </Box>
       )
     })
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {head}
         {unruled}
         {message !== null && <Text color={state?.status === 'failed' ? COLORS.danger : COLORS.muted}>{message}</Text>}
         {rows.length > 0 && <Box flexDirection="column">{rows}</Box>}
       </Box>
-    )
+    ))
   })
 }

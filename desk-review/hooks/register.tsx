@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register } from 'claude-code'
+import type { Elements, EngineInterface, Register, UiScrollArgs } from 'claude-code'
 
 import type { DiffAt, ReviewItem, ReviewReport, Stage, Status } from '../types'
 import { counts, itemsOf, parseReport, reviewTool } from './review'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
+import { learnRows, withJumps, type PaneSite } from './shared/jumps'
 
 // 엔진 테마 키(desk-look 의 COLORS 와 같은 역할). hex 를 박으면 터미널 테마와 어긋난다.
 const COLORS = {
@@ -79,6 +80,15 @@ function itemBlock($: EngineInterface, els: Elements['terminal'], item: ReviewIt
       <Box paddingLeft={2}>
         <Text color={COLORS.text}>{item.reason}</Text>
       </Box>
+      {/* 리뷰에서 찾은 결함: 어떻게 고쳤는지, 왜 남겼는지 */}
+      {item.resolution && (
+        <Box paddingLeft={2}>
+          <Text color={COLORS.text}>
+            <Text color={tone} weight="semibold">{`${item.status === 'fixed' ? T.howFixed : T.whyLeft} `}</Text>
+            {item.resolution}
+          </Text>
+        </Box>
+      )}
     </Box>
   )
 }
@@ -112,6 +122,19 @@ async function pickLang($: EngineInterface) {
   if (value === 'en' || value === 'ko') return setLang(value)
   const row = (await $.config.list().catch(() => [])).find(item => item.key === 'language')
   return setLang(langFromConfig(row?.value))
+}
+
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).
+function paneJumps($: EngineInterface, els: Elements['terminal'], e: PaneSite, tree: unknown) {
+  return withJumps(els, tree, e, { toEnd: T.jumpEnd, toStart: T.jumpStart, scroll: to => void scrollPane($, { in: e.requestId, to }) })
+}
+
+// 플러그인이 패널 창을 옮기는 곳은 모두 이것으로: 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아(2.1.318)
+// 위치 막대(jumps.tsx)가 옛 자리에 남으므로, 옮겼으면 다시 그린다.
+async function scrollPane($: EngineInterface, args: UiScrollArgs) {
+  const moved = await $.ui.scroll(args).catch(() => ({ deny: 'failed' }))
+  if (moved.deny === undefined) $.ui.invalidate('ui.render')
+  return moved
 }
 
 export const register: Register = (on, options) => {
@@ -150,6 +173,12 @@ export const register: Register = (on, options) => {
     return { text: T.opened }
   })
 
+  // 막대 손잡이 크기에 쓰는 트리 높이(shared/jumps.tsx): 엔진은 사람이 스크롤할 때만 알려 준다. 창은 엔진이 옮긴다.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, ($, e, next) => {
+    learnRows(e.requestId, e.contentRows)
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
@@ -157,7 +186,7 @@ export const register: Register = (on, options) => {
     const state = await read($, report)
     if (state === null) return <Text color={COLORS.muted}>{T.noReport}</Text>
     const n = counts(state)
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         <Box flexDirection="column">
           {heading(els, T.summary)}
@@ -169,6 +198,6 @@ export const register: Register = (on, options) => {
         {textBlock(els, T.unverified, state.unverified)}
         {textBlock(els, T.next, state.next)}
       </Box>
-    )
+    ))
   })
 }

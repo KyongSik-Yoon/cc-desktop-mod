@@ -40,4 +40,4 @@ Claude Code 터미널 세션의 입력창에서:
 
 MIT (`LICENSE`)
 
-`hooks/shared/` 는 메시지를 그리는 desk-look 마크다운 렌더러의 복사본이고, `hooks/shared/vendor/lovely-mermaid.js` 는 [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 0.3.3(Apache-2.0, `hooks/shared/vendor/LICENSE.lovely-mermaid`)을 줄이지 않고 넣은 것이다. 프로그램을 실행하거나 요청을 보내지 않는다.
+`hooks/shared/` 는 메시지를 그리는 desk-look 마크다운 렌더러와 긴 패널 도우미(`jumps.tsx`: 맨 위·맨 아래 버튼과 위치 막대)의 복사본이고, `hooks/shared/vendor/lovely-mermaid.js` 는 [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 0.3.3(Apache-2.0, `hooks/shared/vendor/LICENSE.lovely-mermaid`)을 줄이지 않고 넣은 것이다. 프로그램을 실행하거나 요청을 보내지 않는다.

@@ -4,8 +4,9 @@
 import type { ReviewItem, ReviewReport, Stage, Status } from '../types'
 
 export const STAGES = ['simplify', 'review'] as const
-// fixed·skipped 는 정리(simplify) 단계, found·dismissed 는 리뷰(code-review) 단계의 상태.
-export const STATUSES = { simplify: ['fixed', 'skipped'], review: ['found', 'dismissed'] } as const
+// 정리(simplify): fixed(고침)·skipped(안 고침). 리뷰(code-review): fixed(찾아서 이번에 고침)·found(찾았지만 남김)·
+// dismissed(확인해 보니 아님). 리뷰에서 찾은 것은 고쳤는지 남겼는지 갈라야 사람이 다음 할 일을 안다.
+export const STATUSES = { simplify: ['fixed', 'skipped'], review: ['fixed', 'found', 'dismissed'] } as const
 
 export const REVIEW_TOOL_NAME = 'review_report'
 // on('tool.call', { tool: … }) 에는 이 이름을 글자 그대로 쓴다(validate 가 매처를 읽을 수 있게).
@@ -19,18 +20,28 @@ export function reviewTool() {
       status: {
         type: 'string',
         enum: ['fixed', 'skipped', 'found', 'dismissed'],
-        description: 'simplify: fixed or skipped. review: found (a real defect) or dismissed (rejected on verification).',
+        description:
+          'simplify: fixed (applied) or skipped (left alone). review: fixed (a real defect, fixed in this run), found (a real defect, left unfixed) or dismissed (rejected on verification).',
       },
       file: { type: 'string', description: 'File path, relative to the working directory or absolute. Never shortened.' },
       line: { type: 'integer', minimum: 1, description: '1-based line the item is about.' },
-      reason: { type: 'string', description: 'Why: what was simplified, why it was left alone, how it breaks, or why it was rejected.' },
+      reason: {
+        type: 'string',
+        description: 'Why: what was simplified and why, why a cleanup was left alone, how the defect breaks (which input, what goes wrong), or why the finding was rejected.',
+      },
+      resolution: {
+        type: 'string',
+        description:
+          'Review items marked fixed or found, required there: what was changed to fix the defect, or why it was left unfixed (needs the person\'s decision, out of scope, a larger change …).',
+      },
     },
     required: ['stage', 'status', 'file', 'line', 'reason'],
   }
   return {
     name: REVIEW_TOOL_NAME,
     description: [
-      "Shows a simplify-and-review report in desk-review's side pane: every cleanup fixed or skipped, every review finding found or dismissed, each with its file, line and reason.",
+      "Shows a simplify-and-review report in desk-review's side pane: every cleanup fixed or skipped, every review finding fixed, left unfixed or dismissed, each with its file, line and reason, and for a real finding how it was fixed or why it was left.",
+      'Write every text in the language the person writes to you, not the language of these instructions.',
       'The person presses an item to read its current source and opens the file in the diff pane from there.',
       'Use it for the final report of the simplify-review skill; put only the one-line summary in your reply.',
     ].join(' '),
@@ -75,7 +86,10 @@ export function parseReport(input: Record<string, unknown>, cwd: string, id: num
     if (!(line >= 1)) return { error: `${at}.line must be a 1-based line number.` }
     const reason = text(fields.reason)
     if (reason === '') return { error: `${at}.reason is empty: every item needs a reason.` }
-    items.push({ stage, status: status as Status, file, path: absPath(cwd, file), line, reason })
+    const resolution = text(fields.resolution)
+    const isReal = stage === 'review' && (status === 'fixed' || status === 'found')
+    if (isReal && resolution === '') return { error: `${at}.resolution is empty: say how the defect was fixed, or why it was left unfixed.` }
+    items.push({ stage, status: status as Status, file, path: absPath(cwd, file), line, reason, ...(isReal ? { resolution } : {}) })
   }
   return { report: { id, summary, items, unverified: text(input.unverified), next: text(input.next) } }
 }

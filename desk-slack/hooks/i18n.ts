@@ -14,6 +14,9 @@ const ko = {
   slackInbox: (rooms: number, unread: number) => (unread > 0 ? `대화방 ${rooms} · 안 읽음 ${unread}` : `대화방 ${rooms}`),
   slackUnruled: 'desk-grant 가 이 패널의 Slack 호출을 허용하지 않아 desk-slack 이 Slack 을 부르지 않아요(새 메시지 확인·알림도 멈춤). desk-grant 를 desk-slack 과 같은 버전으로 올리세요: /desk-update 뒤 /reload-plugins.',
   slackBack: '← 대화방',
+  // 긴 패널의 맨 위·맨 아래 버튼(jumps.tsx). 같은 일을 하는 키를 함께 적는다.
+  jumpEnd: '↓ 끝으로 · End',
+  jumpStart: '↑ 처음으로 · Home',
   slackCloseConfirm: '✕ 닫을까요?',
   slackCloseAll: '모두 닫기',
   slackCloseAllConfirm: '모두 닫을까요?',
@@ -55,6 +58,8 @@ const en: Strings = {
   slackInbox: (rooms: number, unread: number) => (unread > 0 ? `${rooms} conversations · ${unread} unread` : `${rooms} conversations`),
   slackUnruled: 'desk-grant does not allow this pane\'s Slack calls, so desk-slack does not call Slack (checking for new messages and notifications stop too). Bring desk-grant to the same version as desk-slack: /desk-update, then /reload-plugins.',
   slackBack: '← Conversations',
+  jumpEnd: '↓ Bottom · End',
+  jumpStart: '↑ Top · Home',
   slackCloseConfirm: '✕ Close?',
   slackCloseAll: 'Close all',
   slackCloseAllConfirm: 'Close all?',

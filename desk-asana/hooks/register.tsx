@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, UiScrollArgs } from 'claude-code'
 
 import type { AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, FoldedPane } from '../types'
 import {
@@ -39,7 +39,8 @@ import {
 import type { AsanaCall } from './asana'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { renderMarkdown } from './shared/markdown'
-import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton } from './util'
+import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
+import { learnRows, withJumps, type PaneSite } from './shared/jumps'
 
 const ASANA_PANE = 'desk-asana'
 // 댓글 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -322,11 +323,11 @@ async function goToAsanaTask($: EngineInterface, server: AsanaServer, gid: strin
   await leaveAsanaTask($)
   if (round !== asanaNavRound) return
   await update($, asanaView, (): AsanaView => ({ gid, status: 'loading', task: null, trail }))
-  await $.ui.scroll({ in: ASANA_PANE, to: 'start' }).catch(() => undefined)
+  await scrollPane($, { in: ASANA_PANE, to: 'start' })
   await loadAsanaTask($, server, gid)
   if (from === null) return
   for (let tries = 0; tries < 8 && round === asanaNavRound; tries++) {
-    const moved = await $.ui.scroll({ in: ASANA_PANE, to: { key: `asana-sub-${from}` }, block: 'center' }).catch(() => ({ deny: 'failed' }))
+    const moved = await scrollPane($, { in: ASANA_PANE, to: { key: `asana-sub-${from}` }, block: 'center' })
     if (!moved.deny) return
     await $.clock.sleep(100).catch(() => undefined)
   }
@@ -574,6 +575,19 @@ async function pickLang($: EngineInterface) {
   return setLang(langFromConfig(row?.value))
 }
 
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).
+function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
+  return withJumps(els, tree, e, { toEnd: T.jumpEnd, toStart: T.jumpStart, scroll: to => void scrollPane($, { in: e.requestId, to }) })
+}
+
+// 플러그인이 패널 창을 옮기는 곳은 모두 이것으로: 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아(2.1.318)
+// 위치 막대(jumps.tsx)가 옛 자리에 남으므로, 옮겼으면 다시 그린다.
+async function scrollPane($: EngineInterface, args: UiScrollArgs) {
+  const moved = await $.ui.scroll(args).catch(() => ({ deny: 'failed' }))
+  if (moved.deny === undefined) $.ui.invalidate('ui.render')
+  return moved
+}
+
 export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
@@ -630,6 +644,12 @@ export const register: Register = (on, options) => {
   })
 
   // Asana 패널: 내 태스크를 프로젝트별로, 하나를 누르면 상세(상태·담당자·드롭다운 필드·설명·댓글)와 댓글 달기.
+  // 막대 손잡이 크기에 쓰는 트리 높이(shared/jumps.tsx): 엔진은 사람이 스크롤할 때만 알려 준다. 창은 엔진이 옮긴다.
+  on('ui.scroll', { component: 'Pane', requestId: ASANA_PANE }, ($, e, next) => {
+    learnRows(e.requestId, e.contentRows)
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: ASANA_PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
@@ -724,7 +744,7 @@ export const register: Register = (on, options) => {
       const subtasks = task.subtasks ?? []
       const canPickStatus = task.status !== null && task.statuses.length > 0
       const isStatusPicking = armed['asana:status'] ?? false
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           {head}
           <Box flexDirection="column">
@@ -900,7 +920,7 @@ export const register: Register = (on, options) => {
             <Button key="asana-back-end" plain dimColor label={backLabel} onPress={() => void backAsanaTask($, server)} />
           </Box>
         </Box>
-      )
+      ))
     }
 
     const room = Math.max(16, columns - 10)
@@ -1023,7 +1043,7 @@ export const register: Register = (on, options) => {
             : mine.length === 0
               ? T.asanaNoProjects
               : null
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           {tabs}
           {unruled}
@@ -1045,7 +1065,7 @@ export const register: Register = (on, options) => {
             )}
           </Box>
         </Box>
-      )
+      ))
     }
 
     // 검색 중이면 찾은 태스크를, 아니면 내 태스크를 같은 모양(프로젝트 묶음)으로 보인다.
@@ -1066,7 +1086,7 @@ export const register: Register = (on, options) => {
                   ? T.asanaNoMatch
                   : T.asanaEmpty
                 : null
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {!isUnready && tabs}
         {unruled}
@@ -1113,6 +1133,6 @@ export const register: Register = (on, options) => {
           </Box>
         )}
       </Box>
-    )
+    ))
   })
 }
