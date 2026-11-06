@@ -151,6 +151,25 @@ describe('응답 렌더링', () => {
     await reply.unmount()
   })
 
+  test('markdown 펜스는 렌더링하고, 다른 코드 블록은 빈 줄을 공백으로 넘긴다', KO, async $ => {
+    const reply = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '```markdown\n## 현상\n\n**굵게** 본문\n\n| 가 | 나 |\n|---|---|\n| 1 | 2 |\n```\n\n```text\n위\n\n아래\n```', isFirstOfReply: true },
+    })
+    const drawn = JSON.stringify(await reply.drawn())
+    // markdown 펜스: 원문 기호 없이 제목·굵게·표로
+    expect(drawn).not.toContain('## 현상')
+    expect(drawn).not.toContain('**굵게**')
+    expect(drawn).toContain('현상')
+    expect(drawn).not.toContain('|---|')
+    // 엔진 Code 는 빈 줄을 높이 0 으로 그린다: 빈 줄을 공백 한 칸으로
+    expect(drawn).toContain('"source":"위\\n \\n아래"')
+    await reply.unmount()
+  })
+
   test('속성 붙은 펜스, 알림 박스, 코드 바탕 폭', KO, async $ => {
     const blocks = parseBlocks('```ts title="a.ts"\nconst a = 1\n```\n\n## 다음\n\n````md\n```\n안쪽\n```\n````\n\n끝')
     expect(blocks.map(block => block.kind)).toEqual(['code', 'heading', 'code', 'paragraph'])
