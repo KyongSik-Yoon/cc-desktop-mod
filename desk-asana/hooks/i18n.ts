@@ -8,6 +8,9 @@ const ko = {
   // 여러 줄 입력칸 뒤 버튼: 쓴 글을 한 번에 비운다(엔진 칸의 ^U 는 한 줄씩만 지운다)
   inputClear: '지우기',
   foldAll: '모두 접기',
+  // 긴 패널의 맨 위·맨 아래 버튼(jumps.tsx). 같은 일을 하는 키를 함께 적는다.
+  jumpEnd: '↓ 끝으로 · End',
+  jumpStart: '↑ 처음으로 · Home',
   unfoldAll: '모두 펴기',
   asanaNoServer: 'Asana MCP 서버가 연결돼 있지 않아요. /mcp 에서 Asana 를 연결하세요.',
   asanaLoading: 'Asana 를 읽는 중이에요…',
@@ -96,6 +99,8 @@ const en: Strings = {
   cancel: 'Cancel',
   inputClear: 'Clear',
   foldAll: 'Collapse all',
+  jumpEnd: '↓ Bottom · End',
+  jumpStart: '↑ Top · Home',
   unfoldAll: 'Expand all',
   asanaNoServer: 'No Asana MCP server is connected. Connect Asana in /mcp.',
   asanaLoading: 'Reading Asana…',

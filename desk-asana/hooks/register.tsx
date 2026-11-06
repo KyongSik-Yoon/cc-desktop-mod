@@ -39,7 +39,8 @@ import {
 import type { AsanaCall } from './asana'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { renderMarkdown } from './shared/markdown'
-import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton } from './util'
+import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
+import { withJumps } from './shared/jumps'
 
 const ASANA_PANE = 'desk-asana'
 // 댓글 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -574,6 +575,19 @@ async function pickLang($: EngineInterface) {
   return setLang(langFromConfig(row?.value))
 }
 
+// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
+type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
+  return withJumps(els, tree, {
+    bodyRows: e.props.scroll?.bodyRows ?? 0,
+    columns: e.props.bodyColumns ?? 80,
+    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
+    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
+  })
+}
+
 export const register: Register = (on, options) => {
   const language = langSetting(options)
   setLang(language === 'auto' ? 'en' : language)
@@ -724,7 +738,7 @@ export const register: Register = (on, options) => {
       const subtasks = task.subtasks ?? []
       const canPickStatus = task.status !== null && task.statuses.length > 0
       const isStatusPicking = armed['asana:status'] ?? false
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           {head}
           <Box flexDirection="column">
@@ -900,7 +914,7 @@ export const register: Register = (on, options) => {
             <Button key="asana-back-end" plain dimColor label={backLabel} onPress={() => void backAsanaTask($, server)} />
           </Box>
         </Box>
-      )
+      ))
     }
 
     const room = Math.max(16, columns - 10)
@@ -1023,7 +1037,7 @@ export const register: Register = (on, options) => {
             : mine.length === 0
               ? T.asanaNoProjects
               : null
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           {tabs}
           {unruled}
@@ -1045,7 +1059,7 @@ export const register: Register = (on, options) => {
             )}
           </Box>
         </Box>
-      )
+      ))
     }
 
     // 검색 중이면 찾은 태스크를, 아니면 내 태스크를 같은 모양(프로젝트 묶음)으로 보인다.
@@ -1066,7 +1080,7 @@ export const register: Register = (on, options) => {
                   ? T.asanaNoMatch
                   : T.asanaEmpty
                 : null
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {!isUnready && tabs}
         {unruled}
@@ -1113,6 +1127,6 @@ export const register: Register = (on, options) => {
           </Box>
         )}
       </Box>
-    )
+    ))
   })
 }
