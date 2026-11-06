@@ -5257,8 +5257,14 @@ describe('diff 패널: 안 바뀐 줄 펴기·거르기·기준 고르기·파�
     expect(opened.some(row => row.kind === 'gap')).toBe(false)
     const context = opened.filter(row => row.kind === 'line' && row.line.text.startsWith('l'))
     expect(context.map(row => (row.kind === 'line' ? `${row.line.kind}${row.line.oldNo}:${row.line.newNo}` : ''))).toEqual([' 3:4', ' 4:5', ' 5:6', ' 6:7', ' 7:8', ' 8:9', ' 9:10'])
-    // 고르지 않은 구간은 그대로
-    expect(openGaps(rows, new Map([[99, ['x']]]))).toEqual(rows)
+    // 구간 밖(hunk 안 줄)만 고르면 그대로
+    expect(openGaps(rows, new Map([[1, ['a']]]))).toEqual(rows)
+    // 일부만 열면(리뷰 항목 줄 둘레) 앞뒤는 작은 구간으로 남는다
+    const part = openGaps(rows, new Map([[6, ['l6', 'l7']]]))
+    expect(part.flatMap(row => (row.kind === 'gap' ? [`gap${row.newStart}+${row.count}`] : row.line.text.startsWith('l') ? [`${row.line.oldNo}:${row.line.newNo}`] : []))).toEqual(['gap4+2', '5:6', '6:7', 'gap8+3'])
+    // 마지막 hunk 뒤 줄은 끝에 붙이고 그 앞 틈은 구간으로(뒤 틈은 줄 수를 몰라 없다)
+    const tail = openGaps(rows, new Map([[14, ['t14', 't15']]]))
+    expect(tail.slice(-3).map(row => (row.kind === 'gap' ? `gap${row.oldStart}/${row.newStart}+${row.count}` : `${row.line.oldNo}:${row.line.newNo}`))).toEqual(['gap11/12+2', '13:14', '14:15'])
 
     expect(matchesPath('backend/src/GenAiStore.kt', 'genai store')).toBe(true)
     expect(matchesPath('backend/src/GenAiStore.kt', 'GENAI kt')).toBe(true)
@@ -5302,6 +5308,28 @@ describe('diff 패널: 안 바뀐 줄 펴기·거르기·기준 고르기·파�
     $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true, bodyRows: 30 } as never })
   const gapButton = async (pane: Awaited<ReturnType<typeof mountDiff>>) =>
     ((await pane.findAll({ type: 'Button' })) as { key?: string }[]).map(button => String(button.key)).find(key => key.endsWith('.g'))
+
+  test('diffAt 에 줄이 있으면 그 줄 둘레만 펴고(구간 안·마지막 hunk 뒤) 그 줄 번호를 표시한다', { ...KO, plugins: [reviewStub] }, async ($, on) => {
+    themed(on, { '/repo/src/cart.ts': lines(40, { 2: 'L2', 21: 'L21' }) })
+    on('process.run', (($: unknown, e: { argv: string[] }) =>
+      out(e.argv[1] === 'diff' && e.argv[2] === 'HEAD' ? CART : e.argv.includes('--show-toplevel') ? '/repo\n' : e.argv.includes('--abbrev-ref') ? 'main\n' : '')) as never)
+    await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+    const pane = await mountDiff($)
+    const texts = async () => JSON.stringify(await pane.drawn())
+    const marked = async () => JSON.stringify((await pane.findAll({ type: 'Text' })).filter(node => (node as { props?: { inverse?: boolean } }).props?.inverse === true))
+    // 두 hunk 사이 구간(4~19)의 12번째 줄: 4~20 을 펴되 구간 밖 줄은 안 건드린다
+    await $.tool.call({ tool: 'ReviewStub', diffAt: { path: '/repo/src/cart.ts', n: 1, line: 12 } } as never)
+    expect(await texts()).toContain('l12')
+    expect(await marked()).toContain('12')
+    // 마지막 hunk(20~22) 뒤 30번째 줄: diff 에 없던 줄을 22~38 로 붙인다
+    await $.tool.call({ tool: 'ReviewStub', diffAt: { path: '/repo/src/cart.ts', n: 2, line: 30 } } as never)
+    const after = await texts()
+    expect(after).toContain('l30')
+    expect(after).toContain('l38')
+    expect(after).not.toContain('l39')
+    expect(await marked()).toContain('30')
+    await pane.unmount()
+  })
 
   test('안 바뀐 줄을 누르면 작업 트리 파일에서 그 줄을 읽어 그 자리에 편다, 파일이 달라졌으면 diff 를 다시 읽는다', KO, async ($, on) => {
     const files: Record<string, string> = { '/repo/src/cart.ts': lines(30, { 2: 'L2', 21: 'L21' }) }

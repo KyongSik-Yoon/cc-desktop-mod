@@ -331,7 +331,8 @@ declare module 'claude-code' {
     }
     // desk-review(리뷰 결과 패널)가 쓰는 값: diff 패널을 이 파일에서 열어 달라는 요청(n 은 쓸 때마다 오른다).
     'desk-review': {
-      diffAt: { path: string; n: number } | null
+      // line: 그 줄 둘레를 펴고 그 줄로 간다(없으면 파일 머리로). 옛 desk-review 는 쓰지 않는다.
+      diffAt: { path: string; n: number; line?: number } | null
     }
   }
 }
