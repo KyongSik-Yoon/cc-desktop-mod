@@ -196,7 +196,8 @@ async function openSlackRoom($: EngineInterface, server: SlackServer, channel: s
   )
   if (!got.ok) return
   // 글을 그린 뒤에 내린다: 엔진은 끝에 있던 창이 늘어난 내용을 따라 내려가게 하지 않는다(2.1.318 실측).
-  if (isEntry) await toSlackEnd($)
+  // 기다리는 동안 다른 방으로 옮겼으면 그 방의 창은 건드리지 않는다.
+  if (isEntry && isSame(await read($, slackView))) await toSlackEnd($)
   const me = (await $.store.get('slackMe').catch(() => undefined)) as { id?: string } | undefined
   await saveInbox($, readRoom(await readInbox($), channel, posts, me?.id ?? '', thread))
 }
