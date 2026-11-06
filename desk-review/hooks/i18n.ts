@@ -19,10 +19,6 @@ const ko = {
   skipped: '안 고침',
   found: '찾음',
   dismissed: '버림',
-  openDiff: '◫ 변경 사항 탭에서 열기',
-  loading: '읽는 중…',
-  unreadable: (error: string) => `파일을 못 읽었어요 (${error})`,
-  shifted: (asked: number, shown: number) => `${asked}번째 줄이 없어서 마지막 줄 ${shown} 을 보여요`,
   counts: (fixed: number, skipped: number, found: number, dismissed: number) => `고침 ${fixed} · 안 고침 ${skipped} · 찾음 ${found} · 버림 ${dismissed}`,
 }
 
@@ -43,10 +39,6 @@ const en: Strings = {
   skipped: 'Skipped',
   found: 'Found',
   dismissed: 'Dismissed',
-  openDiff: '◫ Open in the Changes tab',
-  loading: 'Reading…',
-  unreadable: error => `Couldn't read the file (${error})`,
-  shifted: (asked, shown) => `There is no line ${asked}; showing the last line, ${shown}`,
   counts: (fixed, skipped, found, dismissed) => `${fixed} fixed · ${skipped} skipped · ${found} found · ${dismissed} dismissed`,
 }
 
