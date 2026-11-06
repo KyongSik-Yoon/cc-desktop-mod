@@ -86,13 +86,20 @@ function heading(els: Elements['terminal'], label: string) {
 
 async function itemBlock($: EngineInterface, els: Elements['terminal'], item: ReviewItem, index: number, isOpen: boolean, snippet: Snippet | undefined) {
   const { Box, Text, Button, Code } = els
-  const label = T[item.status]
+  const tone = STATUS_COLOR[item.status]
+  // 경로는 폴더를 흐리게, 파일 이름을 굵게, 줄 번호를 강조색으로 해서 눈이 파일 이름에 먼저 가게 한다.
+  const cut = item.file.lastIndexOf('/') + 1
   const row = (
-    <Button key={`item-${index}`} plain dimColor={!isOpen} onPress={() => void toggleItem($, index, item)}>
-      <Text color={STATUS_COLOR[item.status]}>{`${isOpen ? '▾' : '▸'} ${STATUS_MARK[item.status]} ${label} `}</Text>
-      <Text color={COLORS.text}>{`${item.file}:${item.line}`}</Text>
+    <Button key={`item-${index}`} plain onPress={() => void toggleItem($, index, item)}>
+      <Text color={tone} weight="semibold">{`${isOpen ? '▾' : '▸'} ${STATUS_MARK[item.status]} ${T[item.status]}  `}</Text>
+      <Text color={COLORS.muted}>{item.file.slice(0, cut)}</Text>
+      <Text color={COLORS.text} weight="semibold">
+        {item.file.slice(cut)}
+      </Text>
+      <Text color={COLORS.clay}>{`:${item.line}`}</Text>
     </Button>
   )
+  // 코드는 테두리 상자에, 긴 줄은 접지 않고 끝을 자른다(접으면 줄 번호 밑으로 흘러 읽기 어렵다). 전체는 변경 사항 탭에서.
   const body = !isOpen ? null : snippet === undefined ? (
     <Text color={COLORS.muted}>{T.loading}</Text>
   ) : 'error' in snippet ? (
@@ -100,15 +107,22 @@ async function itemBlock($: EngineInterface, els: Elements['terminal'], item: Re
   ) : (
     <Box flexDirection="column">
       {snippet.kind === 'source' && snippet.line !== item.line && <Text color={COLORS.muted}>{T.shifted(item.line, snippet.line)}</Text>}
-      {snippet.kind === 'diff' ? <Code source={snippet.source} path={item.path} format="diff" /> : <Code source={snippet.source} path={item.path} startLine={snippet.startLine} />}
+      <Box flexDirection="column" borderStyle="round" borderColor={COLORS.muted} paddingX={1}>
+        {snippet.kind === 'diff' ? (
+          <Code source={snippet.source} path={item.path} format="diff" wrap="truncate-end" />
+        ) : (
+          <Code source={snippet.source} path={item.path} startLine={snippet.startLine} wrap="truncate-end" />
+        )}
+      </Box>
       <Button key={`diff-${index}`} plain dimColor label={T.openDiff} onPress={() => void showDiff($, item.path)} />
     </Box>
   )
+  // 항목마다 상태 색 세로 막대로 묶어, 이유·코드가 어느 항목 것인지 한눈에 갈리게 한다.
   return (
-    <Box key={`block-${index}`} flexDirection="column">
+    <Box key={`block-${index}`} flexDirection="column" borderStyle="quote" borderColor={tone} paddingLeft={1}>
       {row}
-      <Box flexDirection="column" paddingLeft={4}>
-        <Text color={COLORS.muted}>{item.reason}</Text>
+      <Box flexDirection="column" paddingLeft={2}>
+        <Text color={COLORS.text}>{item.reason}</Text>
         {body}
       </Box>
     </Box>
@@ -120,6 +134,7 @@ async function stageBlock($: EngineInterface, els: Elements['terminal'], state: 
   const rows = itemsOf(state, stage)
   const blocks = await Promise.all(rows.map(({ item, index }) => itemBlock($, els, item, index, opened[String(index)] ?? false, cut[String(index)])))
   return (
+    // quote 테두리가 위아래에 빈 행을 하나씩 두므로 항목 사이는 따로 띄우지 않는다.
     <Box flexDirection="column">
       {heading(els, stage === 'simplify' ? T.simplify : T.review)}
       {blocks.length > 0 ? blocks : <Text color={COLORS.muted}>{T.none}</Text>}
