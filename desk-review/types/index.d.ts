@@ -4,8 +4,8 @@ export type Status = 'fixed' | 'skipped' | 'found' | 'dismissed'
 export type ReviewItem = { stage: Stage; status: Status; file: string; path: string; line: number; reason: string }
 // review_report 도구로 받은 보고서. id 는 받을 때마다 오른다.
 export type ReviewReport = { id: number; summary: string; items: ReviewItem[]; unverified: string; next: string }
-// desk-look 에 diff 패널을 이 파일에서 열어 달라는 요청. n 은 쓸 때마다 올려 같은 파일을 다시 열 때도 값이 바뀌게 한다.
-export type DiffAt = { path: string; n: number }
+// desk-look 에 diff 패널을 이 파일의 그 줄에서 열어 달라는 요청. n 은 쓸 때마다 올려 같은 파일을 다시 열 때도 값이 바뀌게 한다.
+export type DiffAt = { path: string; n: number; line: number }
 
 declare module 'claude-code' {
   interface PluginState {

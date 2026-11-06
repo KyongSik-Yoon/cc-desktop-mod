@@ -37,15 +37,15 @@ async function takeReport($: EngineInterface, input: Record<string, unknown>) {
   return { report: parsed.report, isPlaced: opened?.isPlaced ?? false }
 }
 
-// desk-look 의 diff 패널을 이 파일에서 연다. 매번 n 을 올려 같은 파일을 다시 눌러도 state.set 이 불리게 한다.
+// desk-look 의 diff 패널을 이 파일의 그 줄에서 연다. 매번 n 을 올려 같은 파일을 다시 눌러도 state.set 이 불리게 한다.
 // 사람이 이 패널을 잡고 있으면 엔진이 desk-look 패널의 focus 를 거절해 변경 사항 탭이 이 탭 뒤에 열린다.
 // desk-look 은 남의 패널을 닫을 수 없으니 desk-look 의 openInFront 처럼 여기서 순서를 잡는다:
 // 이 패널을 닫고 → desk-look 이 변경 사항 탭을 연 뒤 → 이 패널을 그 뒤에 다시 연다.
-async function showDiff($: EngineInterface, path: string) {
+async function showDiff($: EngineInterface, path: string, line: number) {
   const panes = await $.ui.panes().catch(() => [])
   const isFront = panes.some(item => item.isShown && item.id === PANE)
   if (isFront) await $.ui.close({ id: PANE })
-  await update($, diffAt, current => ({ path, n: (current?.n ?? 0) + 1 }))
+  await update($, diffAt, current => ({ path, line, n: (current?.n ?? 0) + 1 }))
   if (isFront) await $.ui.open({ id: PANE, title: T.paneTitle })
 }
 
@@ -67,7 +67,7 @@ function itemBlock($: EngineInterface, els: Elements['terminal'], item: ReviewIt
   // 항목마다 상태 색 세로 막대로 묶어, 이유가 어느 항목 것인지 한눈에 갈리게 한다.
   return (
     <Box key={`block-${index}`} flexDirection="column" borderStyle="quote" borderColor={tone} paddingLeft={1}>
-      <Button key={`item-${index}`} plain onPress={() => void showDiff($, item.path)}>
+      <Button key={`item-${index}`} plain onPress={() => void showDiff($, item.path, item.line)}>
         <Text color={tone} weight="semibold">{`${STATUS_MARK[item.status]} ${T[item.status]}  `}</Text>
         <Text color={COLORS.muted}>{item.file.slice(0, cut)}</Text>
         <Text color={COLORS.text} weight="semibold">
