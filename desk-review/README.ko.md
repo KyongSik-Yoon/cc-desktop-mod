@@ -2,7 +2,7 @@
 
 [English](README.md) | **한국어**
 
-desk-review 는 스킬 하나와 옆 패널 하나를 가진 Claude Code 플러그인(mod)입니다. `/desk-review:simplify-review` 는 변경분에 `/simplify` 를 돌린 뒤 그 결과에 `/code-review medium` 을 돌립니다. 그래서 정리가 바꾼 코드도 리뷰가 봅니다. 결과는 옆 패널에 열립니다. 정리는 고침·안 고침, 리뷰는 찾음·버림으로, 항목마다 파일·줄·이유가 붙습니다. 항목을 누르면 desk-look 의 diff 패널이 그 파일에서, 결과 옆 `변경 사항` 탭으로 열립니다. [desk-look](../README.ko.md) 과 같은 마켓에서 받고, diff 패널 때문에 desk-look 이 있어야 합니다.
+desk-review 는 스킬 하나와 옆 패널 하나를 가진 Claude Code 플러그인(mod)입니다. `/desk-review:simplify-review` 는 변경분에 `/simplify` 를 돌린 뒤 그 결과에 `/code-review medium` 을 돌립니다. 그래서 정리가 바꾼 코드도 리뷰가 봅니다. 결과는 옆 패널에 열립니다. 정리는 고침·안 고침, 리뷰는 고침·남김·버림으로, 항목마다 파일·줄·이유가 붙고, 리뷰에서 찾은 결함에는 고친 방법이나 남긴 까닭이 붙습니다. 항목을 누르면 desk-look 의 diff 패널이 그 파일에서, 결과 옆 `변경 사항` 탭으로 열립니다. [desk-look](../README.ko.md) 과 같은 마켓에서 받고, diff 패널 때문에 desk-look 이 있어야 합니다.
 
 ## 설치
 

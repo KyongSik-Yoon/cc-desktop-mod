@@ -20,9 +20,13 @@ const ko = {
   none: '없음',
   fixed: '고침',
   skipped: '안 고침',
-  found: '찾음',
+  // 리뷰에서 찾았지만 이번에 고치지 않고 남긴 결함
+  found: '남김',
   dismissed: '버림',
-  counts: (fixed: number, skipped: number, found: number, dismissed: number) => `고침 ${fixed} · 안 고침 ${skipped} · 찾음 ${found} · 버림 ${dismissed}`,
+  // 리뷰 결함의 처리(resolution) 앞에 붙는 말
+  howFixed: '고친 방법:',
+  whyLeft: '남긴 까닭:',
+  counts: (fixed: number, skipped: number, found: number, dismissed: number) => `고침 ${fixed} · 안 고침 ${skipped} · 남김 ${found} · 버림 ${dismissed}`,
 }
 
 export type Strings = typeof ko
@@ -42,9 +46,11 @@ const en: Strings = {
   none: 'None',
   fixed: 'Fixed',
   skipped: 'Skipped',
-  found: 'Found',
+  found: 'Open',
   dismissed: 'Dismissed',
-  counts: (fixed, skipped, found, dismissed) => `${fixed} fixed · ${skipped} skipped · ${found} found · ${dismissed} dismissed`,
+  howFixed: 'Fix:',
+  whyLeft: 'Left open:',
+  counts: (fixed, skipped, found, dismissed) => `${fixed} fixed · ${skipped} skipped · ${found} open · ${dismissed} dismissed`,
 }
 
 export const T: Strings = { ...en }

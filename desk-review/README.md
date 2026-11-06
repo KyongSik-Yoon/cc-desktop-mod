@@ -2,7 +2,7 @@
 
 **English** | [한국어](README.ko.md)
 
-desk-review is a Claude Code plugin (mod) with one skill and one side pane. `/desk-review:simplify-review` runs `/simplify` on your changes and then `/code-review medium` on the result, so the review also sees what the cleanup changed. Its report opens in a side pane: every cleanup fixed or skipped and every finding found or dismissed, each with its file, line and reason. Press an item to open its file in desk-look's diff pane, as a `Changes` tab beside the report. It comes from the same marketplace as [desk-look](../README.md) and needs it for the diff pane.
+desk-review is a Claude Code plugin (mod) with one skill and one side pane. `/desk-review:simplify-review` runs `/simplify` on your changes and then `/code-review medium` on the result, so the review also sees what the cleanup changed. Its report opens in a side pane: every cleanup fixed or skipped and every finding fixed, left open or dismissed, each with its file, line and reason, and for a real finding how it was fixed or why it was left open. Press an item to open its file in desk-look's diff pane, as a `Changes` tab beside the report. It comes from the same marketplace as [desk-look](../README.md) and needs it for the diff pane.
 
 ## Install
 

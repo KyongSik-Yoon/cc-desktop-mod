@@ -80,6 +80,15 @@ function itemBlock($: EngineInterface, els: Elements['terminal'], item: ReviewIt
       <Box paddingLeft={2}>
         <Text color={COLORS.text}>{item.reason}</Text>
       </Box>
+      {/* 리뷰에서 찾은 결함: 어떻게 고쳤는지, 왜 남겼는지 */}
+      {item.resolution && (
+        <Box paddingLeft={2}>
+          <Text color={COLORS.text}>
+            <Text color={tone} weight="semibold">{`${item.status === 'fixed' ? T.howFixed : T.whyLeft} `}</Text>
+            {item.resolution}
+          </Text>
+        </Box>
+      )}
     </Box>
   )
 }

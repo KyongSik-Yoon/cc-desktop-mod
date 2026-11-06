@@ -1,7 +1,8 @@
 export type Stage = 'simplify' | 'review'
 export type Status = 'fixed' | 'skipped' | 'found' | 'dismissed'
 // 보고서 항목. file 은 사람에게 보이는 그대로(모델이 준 경로), path 는 세션 폴더 기준으로 푼 절대 경로.
-export type ReviewItem = { stage: Stage; status: Status; file: string; path: string; line: number; reason: string }
+// resolution 은 리뷰에서 찾은 결함(fixed·found)을 어떻게 고쳤는지, 또는 왜 남겼는지. 0.74.0 앞 보고서에는 없다.
+export type ReviewItem = { stage: Stage; status: Status; file: string; path: string; line: number; reason: string; resolution?: string }
 // review_report 도구로 받은 보고서. id 는 받을 때마다 오른다.
 export type ReviewReport = { id: number; summary: string; items: ReviewItem[]; unverified: string; next: string }
 // desk-look 에 diff 패널을 이 파일의 그 줄에서 열어 달라는 요청. n 은 쓸 때마다 올려 같은 파일을 다시 열 때도 값이 바뀌게 한다.
