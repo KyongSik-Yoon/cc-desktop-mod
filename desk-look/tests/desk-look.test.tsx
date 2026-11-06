@@ -5,7 +5,7 @@ import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
-import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
+import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
@@ -149,6 +149,55 @@ describe('응답 렌더링', () => {
     expect(renderDiagram('this is not mermaid ((')).toBeNull()
     expect(JSON.stringify(await reply.drawn())).toContain('"borderStyle":"quote"')
     await reply.unmount()
+  })
+
+  test('markdown 펜스는 렌더링하고, 다른 코드 블록은 빈 줄을 공백으로 넘긴다', KO, async $ => {
+    const reply = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '```markdown\n## 현상\n\n**굵게** 본문\n\n| 가 | 나 |\n|---|---|\n| 1 | 2 |\n```\n\n```text\n위\n\n아래\n```', isFirstOfReply: true },
+    })
+    const drawn = JSON.stringify(await reply.drawn())
+    // markdown 펜스: 원문 기호 없이 제목·굵게·표로
+    expect(drawn).not.toContain('## 현상')
+    expect(drawn).not.toContain('**굵게**')
+    expect(drawn).toContain('현상')
+    expect(drawn).not.toContain('|---|')
+    // 엔진 Code 는 빈 줄을 높이 0 으로 그린다: 빈 줄을 공백 한 칸으로
+    expect(drawn).toContain('"source":"위\\n \\n아래"')
+    // CRLF 는 LF 로 맞춘 뒤 바꾸고, 끝 줄바꿈은 빈 행으로 만들지 않는다. 통째로 빈 글은 한 칸
+    expect(codeSource('a\r\n\r\nb\n')).toBe('a\n \nb\n')
+    expect(codeSource('\nx')).toBe(' \nx')
+    expect(codeSource('')).toBe(' ')
+    await reply.unmount()
+
+    // Bash 카드도 같은 도우미를 쓴다
+    const row = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolUse',
+      requestId: 'b1',
+      viewport: VIEWPORT,
+      props: { tool_use_id: 'b1', tool: 'Bash', input: { command: 'echo a\n\necho b\n' }, isRunning: false, isErrored: false, isInterrupted: false },
+    })
+    await row.press({ key: 'row-b1' })
+    expect(JSON.stringify(await row.find({ type: 'Code' }))).toContain('"source":"echo a\\n \\necho b\\n"')
+    await row.unmount()
+  })
+
+  test('인용 안 markdown 펜스는 흐린 톤을 이어받는다', KO, async $ => {
+    const quoted = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '> 앞\n>\n> ```md\n> # 안쪽 제목\n> ```', isFirstOfReply: true },
+    })
+    // 펜스 안 제목이 인용의 흐린 톤(inactive)을 이어받는다
+    expect(JSON.stringify(await quoted.drawn())).toContain('{"color":"inactive","weight":"semibold"},"children":["안쪽 제목"]')
+    await quoted.unmount()
   })
 
   test('속성 붙은 펜스, 알림 박스, 코드 바탕 폭', KO, async $ => {

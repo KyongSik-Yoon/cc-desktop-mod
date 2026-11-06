@@ -1,6 +1,6 @@
 import type { Elements } from 'claude-code'
 
-import { cellWidth } from './markdown'
+import { cellWidth, codeSource } from './markdown'
 import { mix } from './theme'
 
 // 데스크톱 Code 탭 diff 모양: 줄 전체 폭 연초록·연분홍, 왼쪽 색 세로줄, 번호 한 칸, 추가·삭제 모두 문법 색,
@@ -267,11 +267,11 @@ export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: Diff
   const bg = isAdd ? palette.addBg : isDel ? palette.delBg : undefined
   const numberColor = isAdd ? palette.addBar : isDel ? palette.delBar : palette.muted
   const room = Math.max(4, options.columns - 1 - options.gutter)
-  const code = (text: string, codeKey: string) => <Code key={codeKey} source={text === '' ? ' ' : text} path={options.path} wrap="truncate-end" />
+  const code = (text: string, codeKey: string) => <Code key={codeKey} source={codeSource(text)} path={options.path} wrap="truncate-end" />
   const body: ReturnType<typeof code>[] = []
   // 바뀐 단어(한 줄 덩어리): 앞·가운데·뒤 세 조각. 조각마다 폭을 정해야 앞 Code 가 남은 폭을 다 먹지 않는다. 앞부분이 칸을 넘기면 강조를 뺀다.
   const span = block.span
-  const source = first.text === '' ? ' ' : first.text
+  const source = codeSource(first.text)
   const pre = span ? cellWidth(source.slice(0, span[0])) : 0
   const mid = span ? cellWidth(source.slice(span[0], span[1])) : 0
   if (span && mid > 0 && pre < room) {
@@ -290,7 +290,7 @@ export function diffBlock(els: Pick<Els, 'Box' | 'Text' | 'Code'>, palette: Diff
     if (pre + mid < room && span[1] < source.length) body.push(code(source.slice(span[1]), `${key}.cc`))
   } else {
     // 빈 줄은 공백 하나로: Code 가 빈 줄을 접어 행이 모자라지 않게.
-    body.push(code(lines.map(line => (line.text === '' ? ' ' : line.text)).join('\n'), `${key}.c`))
+    body.push(code(lines.map(line => codeSource(line.text)).join('\n'), `${key}.c`))
   }
   return (
     <Box key={key} flexDirection="row" height={lines.length} overflow="hidden" {...(bg ? { backgroundColor: bg } : {})}>

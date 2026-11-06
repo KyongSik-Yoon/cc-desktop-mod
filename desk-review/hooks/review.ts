@@ -95,7 +95,9 @@ export function sourceWindow(fileText: string, line: number, around = AROUND): S
   const at = Math.min(Math.max(1, line), lines.length)
   const start = Math.max(1, at - around)
   const end = Math.min(lines.length, at + around)
-  return { kind: 'source', source: lines.slice(start - 1, end).join('\n'), startLine: start, line: at }
+  // 엔진 Code 는 빈 줄을 높이 0 으로 그려 줄 번호와 행이 어긋나므로 공백 한 칸으로(desk-look codeSource 와 같음).
+  const source = lines.slice(start - 1, end).map(text => text.replace(/\r$/, '') || ' ').join('\n')
+  return { kind: 'source', source, startLine: start, line: at }
 }
 
 // 한 파일의 `git diff` 출력에서 line(고친 뒤 줄 번호)을 담은 헌크. 담은 헌크가 없으면 그 줄에 가장 가까운 헌크,
