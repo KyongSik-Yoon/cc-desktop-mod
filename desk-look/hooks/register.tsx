@@ -29,6 +29,7 @@ import type { MergeAction, MergeResult, Ran } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matchesPath, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, currentLang, langFromConfig, langSetting, setLang, type Lang } from './i18n'
 import { previewHtml } from './preview-html'
+import { withJumps } from './jumps'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
 
 export { cellWidth } from './markdown'
@@ -2258,6 +2259,20 @@ function backgroundHintOf(state: Runs): string | null {
 
 type Els = Elements['terminal']
 
+// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만).
+// 테스트 하네스처럼 창을 모르는 곳(scroll 없음)에서는 버튼 없이 그대로 그린다.
+type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
+  return withJumps(els, tree, {
+    bodyRows: e.props.scroll?.bodyRows ?? 0,
+    columns: e.props.bodyColumns ?? 80,
+    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
+    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
+  })
+}
+
 // 에이전트 패널: 엔진 목록을 기록에 합친다. 끝난 에이전트는 목록에서 곧 빠지므로 기록이 남긴다.
 async function refreshAgents($: EngineInterface) {
   const [list, now] = await Promise.all([$.agent.list(), $.clock.now()])
@@ -4319,7 +4334,7 @@ export const register: Register = (on, options) => {
       session.status === 'busy' ? ([T.liveBusy, COLORS.clay] as const) : session.status === 'waiting' ? ([T.liveWaiting, COLORS.warning] as const) : ([T.monitorIdle, COLORS.muted] as const)
     const minutes = Math.round((MONITOR_POINTS * MONITOR_TICK) / 60_000)
 
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         <Box flexDirection="column">
           <Text color={COLORS.text} weight="semibold">
@@ -4366,7 +4381,7 @@ export const register: Register = (on, options) => {
           )
         })}
       </Box>
-    )
+    ))
   })
 
   // 세션 패널: 프로젝트별로 묶은 최근 세션. 현재 세션은 클레이색 ●.
@@ -4407,7 +4422,7 @@ export const register: Register = (on, options) => {
       return <Text color={color}>{` · ${label}`}</Text>
     }
 
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1}>
           <Text color={COLORS.text} weight="semibold">
@@ -4461,7 +4476,7 @@ export const register: Register = (on, options) => {
           ))}
         </Box>
       </Box>
-    )
+    ))
   })
 
   // 에이전트 패널: 목록(실행 중·끝남)과, 한 에이전트를 누르면 그 대화(지시·답변·도구 묶음).
@@ -4495,7 +4510,7 @@ export const register: Register = (on, options) => {
           {value as never}
         </Box>
       )
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
             {back('agent-back')}
@@ -4517,7 +4532,7 @@ export const register: Register = (on, options) => {
           {live && stopButton(els, $, agent, openState)}
           <Box>{back('agent-back-end')}</Box>
         </Box>
-      )
+      ))
     }
     if (view !== null) {
       const shown = detail?.id === view ? detail : null
@@ -4525,7 +4540,7 @@ export const register: Register = (on, options) => {
       const facts = agent
         ? [agent.tokens !== undefined ? T.agentTokens(formatTokens(agent.tokens)) : undefined, T.agentToolUses(agent.toolUses), agentElapsed(agent, now)].filter(Boolean).join(' · ')
         : ''
-      return (
+      return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           <Box columnGap={1}>
             {back('agent-back')}
@@ -4575,12 +4590,12 @@ export const register: Register = (on, options) => {
           )}
           <Box>{back('agent-back-end')}</Box>
         </Box>
-      )
+      ))
     }
 
     const { live, done } = orderAgents(records)
     const doneFolded = openState[DONE_FOLDED] ?? false
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {live.length === 0 && done.length === 0 && <Text color={COLORS.muted}>{Object.keys(records).length > 0 ? T.tasksAllCleared : T.noAgents}</Text>}
         {live.length > 0 && (
@@ -4605,7 +4620,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
       </Box>
-    )
+    ))
   })
 
   // 컨텍스트 패널: /context 의 항목별 내역을 막대로, 그 아래 사용 한도와 비용.
@@ -4630,7 +4645,7 @@ export const register: Register = (on, options) => {
     const columns = (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 80
     const isCut = file.text.length > PREVIEW_ROOM
     const folder = file.path.slice(0, Math.max(0, file.path.length - fileName(file.path).length - 1))
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column">
         <Box columnGap={2}>
           <Box flexShrink={0}>
@@ -4667,7 +4682,7 @@ export const register: Register = (on, options) => {
           </Box>
         )}
       </Box>
-    )
+    ))
   })
 
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
@@ -4686,7 +4701,7 @@ export const register: Register = (on, options) => {
       .filter(Boolean)
       .join(' · ')
 
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         <Box columnGap={1}>
           <Text color={COLORS.text} weight="semibold">
@@ -4708,7 +4723,7 @@ export const register: Register = (on, options) => {
         {sessionFlow(els, live, detail, columns)}
         {live && live.limits.length > 0 && limitRows(els, live)}
       </Box>
-    )
+    ))
   })
 
   // diff 패널 창이 움직이면(휠·스크롤 키·openDiffAt 의 스크롤) 위치를 적어 그 앞뒤만 다시 그린다.
@@ -5026,7 +5041,7 @@ export const register: Register = (on, options) => {
     const head = [tabs, titleRow, ...(filterRow ? [filterRow] : []), toolsRow, ...baseRows, ...(baseEmpty ? [baseEmpty] : [])]
 
     if (face && diffColors) {
-      return virtualDiff({
+      return paneJumps($, els, e, virtualDiff({
         els,
         palette: diffColors,
         window: shown,
@@ -5104,12 +5119,12 @@ export const register: Register = (on, options) => {
             </Box>
           ),
         },
-      })
+      }))
     }
 
     // 테마를 모를 때(엔진 diff): 이전·다음 파일은 없다(머리 띠 자리를 셈하지 않는다).
     diffHeads = []
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {tabs}
         <Box flexDirection="column">{head.slice(1) as never}</Box>
@@ -5138,7 +5153,7 @@ export const register: Register = (on, options) => {
             )
           })}
       </Box>
-    )
+    ))
   })
 
   on('ui.render', { component: 'Pane', requestId: PR_PANE }, async ($, e) => {
@@ -5215,7 +5230,7 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    return (
+    return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         <Box flexDirection="column">
           <Box columnGap={1}>
@@ -5283,7 +5298,7 @@ export const register: Register = (on, options) => {
           {(info.threads ?? []).map(threadRow)}
         </Box>
       </Box>
-    )
+    ))
   })
 }
 

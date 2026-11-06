@@ -204,6 +204,9 @@ const ko = {
   noCommits: '커밋이 없어요.',
   emptyCommit: '보여 줄 diff 가 없어요(병합 커밋이거나 빈 커밋).',
   prevFile: '이전 파일',
+  // 긴 패널의 맨 위·맨 아래 버튼(jumps.tsx). 같은 일을 하는 키를 함께 적는다.
+  jumpEnd: '↓ 끝으로 · End',
+  jumpStart: '↑ 처음으로 · Home',
   nextFile: '다음 파일',
   filterFiles: '거르기',
   filterLabel: '파일',
@@ -536,6 +539,8 @@ const en: Strings = {
   noCommits: 'No commits.',
   emptyCommit: 'No diff to show (a merge or empty commit).',
   prevFile: 'prev file',
+  jumpEnd: '↓ Bottom · End',
+  jumpStart: '↑ Top · Home',
   nextFile: 'next file',
   filterFiles: 'filter',
   filterLabel: 'Files',

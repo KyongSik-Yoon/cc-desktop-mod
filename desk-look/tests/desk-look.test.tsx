@@ -8,6 +8,7 @@ import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatu
 import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
+import { treeRows } from '../hooks/jumps'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
 import { advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, orderSessions, procStatOf, sessionFileOf } from '../hooks/monitor'
@@ -4754,6 +4755,42 @@ describe('미리보기 패널', () => {
     await $.turn.complete({ durationMs: 2000, reason: 'answer', answer: '썼어요', turnId: 't2' } as never)
     expect(opened).toHaveLength(2)
     await pane.unmount()
+  })
+
+  // 누르면 $.ui.scroll 로 끝·처음으로 간다: 하네스는 버튼 클로저의 ui.scroll 을 기록하지 않아 실화면으로 확인했다.
+  test('긴 패널은 맨 위에 끝으로, 맨 아래에 처음으로(창보다 짧으면 없음)', KO, async ($, on) => {
+    const files: Record<string, string> = {}
+    docWorld(on, files)
+    await $.tool.call({ tool: 'Write', file_path: '/repo/NOTES.md', content: DOC } as never)
+    await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '썼어요', turnId: 't1' } as never)
+    const mount = (bodyRows: number) =>
+      $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-preview', viewport: VIEWPORT, props: { title: 'NOTES.md', isFocused: true, bodyColumns: 70, scroll: { offset: 0, bodyRows } } as never })
+    const short = await mount(5)
+    const drawn = JSON.stringify(await short.drawn())
+    expect(drawn).toContain('↓ 끝으로 · End')
+    expect(drawn).toContain('↑ 처음으로 · Home')
+    // 버튼은 문서 뒤에 둔다(입력칸 앞 요소가 바뀌지 않게)
+    expect(drawn.indexOf('↓ 끝으로')).toBeGreaterThan(drawn.indexOf('릴리즈 노트'))
+    expect(await short.find({ key: 'pane-jump-start' })).toBeDefined()
+    await short.unmount()
+    const tall = await mount(500)
+    expect(JSON.stringify(await tall.drawn())).not.toContain('끝으로')
+    await tall.unmount()
+  })
+
+  test('트리 높이 어림: 세로는 합과 간격, 가로는 가장 높은 것, 높이·숨김·절대 위치, 글은 폭으로 접는다', KO, () => {
+    const text = (value: string, props: Record<string, unknown> = {}) => ({ type: 'Text', props, children: [value] })
+    const box = (props: Record<string, unknown>, ...children: unknown[]) => ({ type: 'Box', props, children })
+    expect(treeRows(box({ flexDirection: 'column', rowGap: 1 }, text('a'), text('b'), text('c')), 40)).toBe(5)
+    expect(treeRows(box({}, text('a'), box({ flexDirection: 'column' }, text('b'), text('c'))), 40)).toBe(2)
+    expect(treeRows(box({ flexDirection: 'column' }, box({ height: 7 }), box({ display: 'none' }, text('x')), box({ position: 'absolute' }, text('y'))), 40)).toBe(7)
+    // 40칸에 50칸 글은 두 줄, 한글 30자(60칸)도 두 줄, 줄바꿈은 따로, 자르는 글은 한 줄
+    expect(treeRows(text('x'.repeat(50)), 40)).toBe(2)
+    expect(treeRows(text('가'.repeat(30)), 40)).toBe(2)
+    expect(treeRows(text('a\nb\nc'), 40)).toBe(3)
+    expect(treeRows(text('x'.repeat(90), { wrap: 'truncate-end' }), 40)).toBe(1)
+    expect(treeRows(box({ flexDirection: 'column', paddingY: 1, borderStyle: 'round' }, text('a')), 40)).toBe(5)
+    expect(treeRows({ type: 'Code', props: { source: '1\n2\n3' } }, 40)).toBe(3)
   })
 
   test('브라우저용 HTML: 패널과 같은 구조, 글은 이스케이프, 위험한 링크는 글자만', KO, async () => {
