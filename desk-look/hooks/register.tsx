@@ -3,7 +3,7 @@ import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurf
 
 import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
-import { cellWidth, parseBlocks, renderMarkdown } from './markdown'
+import { cellWidth, codeSource, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
 import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
@@ -2919,7 +2919,7 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall, columns: number) {
     case 'Bash':
       return (
         <Box flexDirection="column">
-          <Code source={stringField(fields, 'command') ?? ''} language="bash" wrap="wrap" />
+          <Code source={codeSource(stringField(fields, 'command') ?? '')} language="bash" wrap="wrap" />
           {output && <Text color={COLORS.muted}>{cap(output, 30)}</Text>}
         </Box>
       )
@@ -2934,7 +2934,7 @@ function callDetail({ Box, Text, Code }: Els, call: RunCall, columns: number) {
       return diffLines({ Box, Text, Code }, diffColors, rows.slice(0, 40), `edit-${call.tool_use_id}`, filePath, columns, rows.length - 40)
     }
     case 'Write':
-      return <Code source={cap(stringField(fields, 'content') ?? '', 40)} path={filePath} />
+      return <Code source={codeSource(cap(stringField(fields, 'content') ?? '', 40))} path={filePath} />
     default:
       return <Text color={COLORS.muted}>{cap(output || JSON.stringify(call.input, null, 2), 20)}</Text>
   }

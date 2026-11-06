@@ -5,7 +5,7 @@ import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
-import { cellWidth, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
+import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
@@ -167,6 +167,8 @@ describe('응답 렌더링', () => {
     expect(drawn).not.toContain('|---|')
     // 엔진 Code 는 빈 줄을 높이 0 으로 그린다: 빈 줄을 공백 한 칸으로
     expect(drawn).toContain('"source":"위\\n \\n아래"')
+    // Bash·Write 카드도 같은 도우미를 쓴다. CRLF 는 LF 로 맞춘 뒤 바꾼다
+    expect(codeSource('a\r\n\r\nb\n')).toBe('a\n \nb\n ')
     await reply.unmount()
   })
 

@@ -56,6 +56,9 @@ export function cellWidth(text: string): number {
 // 여는 펜스 뒤 info string 은 첫 단어만 언어로 쓰고 나머지(title="…" 등)는 버린다.
 const FENCE = /^\s*(`{3,}|~{3,})\s*([^\s`]*)[^`]*$/
 const MARKDOWN_FENCE = /^(markdown|md)$/i
+
+// 엔진 Code 는 빈 줄을 높이 0 으로 그려 빼먹는다. 빈 줄을 공백 한 칸으로 넘긴다(diffview 는 줄마다 같은 일).
+export const codeSource = (source: string) => source.replace(/\r\n?/g, '\n').replace(/^$/gm, ' ')
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/
 const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/
 const BULLETS = ['•', '◦', '▪']
@@ -532,14 +535,13 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
           }
           {
             // markdown 펜스(이슈·MR 초안 등)는 올라갈 모습으로 그린다. 원문은 copy 로.
-            // 엔진 Code 는 빈 줄을 높이 0 으로 그려 빼먹으므로 공백 한 칸으로 넘긴다(diffview 와 같음).
-            const code = MARKDOWN_FENCE.test(block.language ?? '') ? (
+            const code = (
               <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
-                {blocks(parseBlocks(block.source, options.breaks), k, room - 4)}
-              </Box>
-            ) : (
-              <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
-                <Code source={block.source.replace(/^$/gm, ' ')} language={block.language} wrap="wrap" />
+                {MARKDOWN_FENCE.test(block.language ?? '') ? (
+                  blocks(parseBlocks(block.source, options.breaks), k, room - 4)
+                ) : (
+                  <Code source={codeSource(block.source)} language={block.language} wrap="wrap" />
+                )}
               </Box>
             )
             const onCopy = options.onCopy
