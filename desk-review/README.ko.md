@@ -37,6 +37,7 @@ desk-look 처럼 Claude Code 최신 버전에 맞춰 만듭니다. desk-look 의
 - 도구 `review_report`(`mcp__desk-review__review_report`): 스킬이 결과를 넘깁니다. `tool.call` 훅이 검사해 담아 두고 패널을 엽니다. 이유가 빠졌거나 상태가 틀렸거나 줄이 없으면 고칠 곳과 함께 거절합니다
 - `command.run`(`desk-review`): 마지막 결과를 엽니다
 - `ui.render`(`Pane`, `desk-review`): 결과를 그립니다
+- `ui.scroll`(`Pane`, `desk-review`): 오른쪽 끝 위치 막대에 쓸 패널 높이를 적어 둡니다. 창은 엔진이 옮기는 대로 둡니다
 - `session.start`, `state.set`(desk-look 의 `lang`): 도구·명령을 걸고 desk-look 의 언어를 따릅니다
 - 항목을 누르면 자기 상태 `diffAt` 을 씁니다. desk-look 이 그 `state.set` 을 훅해 diff 패널을 엽니다
 

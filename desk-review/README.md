@@ -37,6 +37,7 @@ In the pane, from the top: the one-line summary with the counts, `1. Cleanup`, `
 - Tool `review_report` (`mcp__desk-review__review_report`): the skill gives it the report; the `tool.call` hook checks it, keeps it and opens the pane. A report with a missing reason, an unknown status or no line is refused with what to fix
 - `command.run` (`desk-review`): opens the last report
 - `ui.render` (`Pane`, `desk-review`): draws the report
+- `ui.scroll` (`Pane`, `desk-review`): notes the pane's height for the position bar on its right edge; the window moves as the engine moves it
 - `session.start`, `state.set` (desk-look's `lang`): register the tool and command, and follow desk-look's language
 - Writes its state `diffAt` when you press an item; desk-look's `state.set` hook on it opens the diff pane
 
