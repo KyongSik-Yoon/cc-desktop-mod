@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument } from 'claude-code'
+import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument, UiScrollArgs } from 'claude-code'
 
 import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
@@ -29,7 +29,7 @@ import type { MergeAction, MergeResult, Ran } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matchesPath, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, currentLang, langFromConfig, langSetting, setLang, type Lang } from './i18n'
 import { previewHtml } from './preview-html'
-import { learnRows, withJumps } from './jumps'
+import { learnRows, withJumps, type PaneSite } from './jumps'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
 
 export { cellWidth } from './markdown'
@@ -1251,10 +1251,9 @@ async function pickFile($: EngineInterface, id: string) {
 async function scrollToFile($: EngineInterface, id: string) {
   for (let tries = 0; tries < 20 && diffDrawnFolds[`fold:${id}`] !== false; tries++) await $.clock.sleep(25).catch(() => undefined)
   for (let tries = 0; tries < 8; tries++) {
-    const moved = await $.ui.scroll({ to: { key: `file-${id}` }, in: PANE, block: 'start' }).catch(() => ({ deny: 'failed' }))
+    const moved = await scrollPane($, { to: { key: `file-${id}` }, in: PANE, block: 'start' })
     if (!moved.deny) {
       diffCursor = id
-      $.ui.invalidate('ui.render')
       return
     }
     await $.clock.sleep(100).catch(() => undefined)
@@ -1335,9 +1334,7 @@ async function openDiff($: EngineInterface, scope?: DiffScope) {
   await refreshDiffView($, scope)
   await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   // 맨 위에서 보여 준다. 다시 연 패널의 창과 적어 둔 위치(diffWindow)도 이 스크롤로 맞춰진다.
-  await $.ui.scroll({ to: 'start', in: PANE }).catch(() => undefined)
-  // 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아 위치 막대(jumps.tsx)가 옛 자리에 남으므로 다시 그린다.
-  $.ui.invalidate('ui.render')
+  await scrollPane($, { to: 'start', in: PANE })
 }
 
 // 열린 패널이 있으면 접고(닫되 제목·스크롤을 적어 둔다), 없으면 접어 둔 패널을 다시 연다.
@@ -1387,13 +1384,12 @@ async function restoreScroll($: EngineInterface, id: string, offset: number) {
     for (let tries = 0; tries < 8 && restoreOffsets.has(id); tries++) {
       for (const to of ['end', 'start'] as const) {
         if (!restoreOffsets.has(id)) break
-        await $.ui.scroll({ to, in: id }).catch(() => undefined)
+        await scrollPane($, { to, in: id })
       }
       if (restoreOffsets.has(id)) await $.clock.sleep(100).catch(() => undefined)
     }
   } finally {
     restoreOffsets.delete(id)
-    $.ui.invalidate('ui.render')
   }
 }
 
@@ -2263,20 +2259,17 @@ function backgroundHintOf(state: Runs): string | null {
 
 type Els = Elements['terminal']
 
-// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만).
-// 테스트 하네스처럼 창을 모르는 곳(scroll 없음)에서는 버튼 없이 그대로 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
-
-// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).
 function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
-  return withJumps(els, tree, {
-    requestId: e.requestId,
-    offset: e.props.scroll?.offset ?? 0,
-    bodyRows: e.props.scroll?.bodyRows ?? 0,
-    columns: e.props.bodyColumns ?? 80,
-    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
-    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
-  })
+  return withJumps(els, tree, e, { toEnd: T.jumpEnd, toStart: T.jumpStart, scroll: to => void scrollPane($, { in: e.requestId, to }) })
+}
+
+// 플러그인이 패널 창을 옮기는 곳은 모두 이것으로: 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아(2.1.318)
+// 위치 막대(jumps.tsx)가 옛 자리에 남으므로, 옮겼으면 다시 그린다.
+async function scrollPane($: EngineInterface, args: UiScrollArgs) {
+  const moved = await $.ui.scroll(args).catch(() => ({ deny: 'failed' }))
+  if (moved.deny === undefined) $.ui.invalidate('ui.render')
+  return moved
 }
 
 // 에이전트 패널: 엔진 목록을 기록에 합친다. 끝난 에이전트는 목록에서 곧 빠지므로 기록이 남긴다.

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface, Timer, UiScrollArgs } from 'claude-code'
 
 import type { FoldedPane, SlackInbox, SlackPoller, SlackRoom, SlackServer, SlackState, SlackView } from '../types'
 import {
@@ -35,7 +35,7 @@ import type { SlackCall } from './slack'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
 import { renderMarkdown } from './shared/markdown'
-import { learnRows, withJumps } from './shared/jumps'
+import { learnRows, withJumps, type PaneSite } from './shared/jumps'
 
 const SLACK_PANE = 'desk-slack'
 // 답장 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -197,7 +197,7 @@ async function openSlackRoom($: EngineInterface, server: SlackServer, channel: s
   if (!got.ok) return
   // 글을 그린 뒤에 내린다: 엔진은 끝에 있던 창이 늘어난 내용을 따라 내려가게 하지 않는다(2.1.318 실측).
   // 기다리는 동안 다른 방으로 옮겼으면 그 방의 창은 건드리지 않는다.
-  if (isEntry && isSame(await read($, slackView))) await toSlackEnd($)
+  if (isEntry && isSame(await read($, slackView))) await scrollPane($, { in: SLACK_PANE, to: 'end' })
   const me = (await $.store.get('slackMe').catch(() => undefined)) as { id?: string } | undefined
   await saveInbox($, readRoom(await readInbox($), channel, posts, me?.id ?? '', thread))
 }
@@ -229,28 +229,20 @@ async function sendSlack($: EngineInterface, server: SlackServer, channel: strin
   $.ui.toast(T.slackSent)
   await openSlackRoom($, server, channel, thread)
   // 보낸 글이 맨 아래에 보이게
-  await toSlackEnd($)
+  await scrollPane($, { in: SLACK_PANE, to: 'end' })
 }
 
-// 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아, 위치 막대(shared/jumps.tsx)가 옛 자리에 남는다.
-async function toSlackEnd($: EngineInterface) {
-  await $.ui.scroll({ in: SLACK_PANE, to: 'end' }).catch(() => undefined)
-  $.ui.invalidate('ui.render')
-}
-
-// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
-
-// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).
 function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
-  return withJumps(els, tree, {
-    requestId: e.requestId,
-    offset: e.props.scroll?.offset ?? 0,
-    bodyRows: e.props.scroll?.bodyRows ?? 0,
-    columns: e.props.bodyColumns ?? 80,
-    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
-    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
-  })
+  return withJumps(els, tree, e, { toEnd: T.jumpEnd, toStart: T.jumpStart, scroll: to => void scrollPane($, { in: e.requestId, to }) })
+}
+
+// 플러그인이 패널 창을 옮기는 곳은 모두 이것으로: 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아(2.1.318)
+// 위치 막대(jumps.tsx)가 옛 자리에 남으므로, 옮겼으면 다시 그린다.
+async function scrollPane($: EngineInterface, args: UiScrollArgs) {
+  const moved = await $.ui.scroll(args).catch(() => ({ deny: 'failed' }))
+  if (moved.deny === undefined) $.ui.invalidate('ui.render')
+  return moved
 }
 
 // ✕ 는 두 번 눌러 닫는다(Asana 담당자 넘기기와 같은 무장). channel 이 null 이면 모든 방(모두 닫기).

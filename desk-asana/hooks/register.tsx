@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, UiScrollArgs } from 'claude-code'
 
 import type { AsanaDetail, AsanaEdit, AsanaProject, AsanaProjects, AsanaProjectView, AsanaSearch, AsanaServer, AsanaState, AsanaTab, AsanaTask, AsanaUser, AsanaView, FoldedPane } from '../types'
 import {
@@ -40,7 +40,7 @@ import type { AsanaCall } from './asana'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { renderMarkdown } from './shared/markdown'
 import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
-import { learnRows, withJumps } from './shared/jumps'
+import { learnRows, withJumps, type PaneSite } from './shared/jumps'
 
 const ASANA_PANE = 'desk-asana'
 // 댓글 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -323,13 +323,12 @@ async function goToAsanaTask($: EngineInterface, server: AsanaServer, gid: strin
   await leaveAsanaTask($)
   if (round !== asanaNavRound) return
   await update($, asanaView, (): AsanaView => ({ gid, status: 'loading', task: null, trail }))
-  await $.ui.scroll({ in: ASANA_PANE, to: 'start' }).catch(() => undefined)
+  await scrollPane($, { in: ASANA_PANE, to: 'start' })
   await loadAsanaTask($, server, gid)
-  // 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아 위치 막대(shared/jumps.tsx)가 옛 자리에 남으므로 다시 그린다.
-  if (from === null) return $.ui.invalidate('ui.render')
+  if (from === null) return
   for (let tries = 0; tries < 8 && round === asanaNavRound; tries++) {
-    const moved = await $.ui.scroll({ in: ASANA_PANE, to: { key: `asana-sub-${from}` }, block: 'center' }).catch(() => ({ deny: 'failed' }))
-    if (!moved.deny) return $.ui.invalidate('ui.render')
+    const moved = await scrollPane($, { in: ASANA_PANE, to: { key: `asana-sub-${from}` }, block: 'center' })
+    if (!moved.deny) return
     await $.clock.sleep(100).catch(() => undefined)
   }
 }
@@ -576,19 +575,17 @@ async function pickLang($: EngineInterface) {
   return setLang(langFromConfig(row?.value))
 }
 
-// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
-
-// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).
 function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
-  return withJumps(els, tree, {
-    requestId: e.requestId,
-    offset: e.props.scroll?.offset ?? 0,
-    bodyRows: e.props.scroll?.bodyRows ?? 0,
-    columns: e.props.bodyColumns ?? 80,
-    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
-    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
-  })
+  return withJumps(els, tree, e, { toEnd: T.jumpEnd, toStart: T.jumpStart, scroll: to => void scrollPane($, { in: e.requestId, to }) })
+}
+
+// 플러그인이 패널 창을 옮기는 곳은 모두 이것으로: 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아(2.1.318)
+// 위치 막대(jumps.tsx)가 옛 자리에 남으므로, 옮겼으면 다시 그린다.
+async function scrollPane($: EngineInterface, args: UiScrollArgs) {
+  const moved = await $.ui.scroll(args).catch(() => ({ deny: 'failed' }))
+  if (moved.deny === undefined) $.ui.invalidate('ui.render')
+  return moved
 }
 
 export const register: Register = (on, options) => {

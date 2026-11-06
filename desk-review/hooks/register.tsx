@@ -1,10 +1,10 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register } from 'claude-code'
+import type { Elements, EngineInterface, Register, UiScrollArgs } from 'claude-code'
 
 import type { DiffAt, ReviewItem, ReviewReport, Stage, Status } from '../types'
 import { counts, itemsOf, parseReport, reviewTool } from './review'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
-import { learnRows, withJumps } from './shared/jumps'
+import { learnRows, withJumps, type PaneSite } from './shared/jumps'
 
 // 엔진 테마 키(desk-look 의 COLORS 와 같은 역할). hex 를 박으면 터미널 테마와 어긋난다.
 const COLORS = {
@@ -115,19 +115,17 @@ async function pickLang($: EngineInterface) {
   return setLang(langFromConfig(row?.value))
 }
 
-// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
-
-// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로", 오른쪽 끝에 위치 막대(jumps.tsx).
 function paneJumps($: EngineInterface, els: Elements['terminal'], e: PaneSite, tree: unknown) {
-  return withJumps(els, tree, {
-    requestId: e.requestId,
-    offset: e.props.scroll?.offset ?? 0,
-    bodyRows: e.props.scroll?.bodyRows ?? 0,
-    columns: e.props.bodyColumns ?? 80,
-    toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
-    toStart: { label: T.jumpStart, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'start' }).catch(() => undefined) },
-  })
+  return withJumps(els, tree, e, { toEnd: T.jumpEnd, toStart: T.jumpStart, scroll: to => void scrollPane($, { in: e.requestId, to }) })
+}
+
+// 플러그인이 패널 창을 옮기는 곳은 모두 이것으로: 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아(2.1.318)
+// 위치 막대(jumps.tsx)가 옛 자리에 남으므로, 옮겼으면 다시 그린다.
+async function scrollPane($: EngineInterface, args: UiScrollArgs) {
+  const moved = await $.ui.scroll(args).catch(() => ({ deny: 'failed' }))
+  if (moved.deny === undefined) $.ui.invalidate('ui.render')
+  return moved
 }
 
 export const register: Register = (on, options) => {

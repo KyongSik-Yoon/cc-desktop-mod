@@ -7,7 +7,11 @@ import type { Elements } from 'claude-code'
 
 type Els = Elements['terminal']
 
-export type Jump = { label: string; onPress: () => void }
+// 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳(scroll 없음)에서는 그대로 그린다.
+export type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
+
+// 버튼 문구와, 창을 옮기는 클로저($.ui.scroll 을 부르는 register.tsx 의 것)
+export type Jumps = { toEnd: string; toStart: string; scroll: (to: 'start' | 'end') => void }
 
 // 사람이 스크롤할 때 엔진이 알려 준 트리 높이(ui.scroll 의 contentRows)를 그때 그린 트리의 어림과 함께 둔다.
 // 어림이 달라지면(내용이 바뀌면) 버리고 다시 어림한다. $.ui.scroll 은 ui.scroll 을 거치지 않는다(2.1.318).
@@ -22,19 +26,16 @@ export function learnRows(requestId: string, contentRows: number) {
 // 버튼과 막대는 트리가 창보다 길 때만. 엔진은 트리 높이를 사람이 스크롤할 때만 알려 주므로 그리기 전에 어림한다.
 // 어림이 몇 줄 틀려도 창 높이 언저리에서 버튼이 보이고 말고가 바뀌거나 막대 손잡이가 조금 어긋날 뿐이다.
 // 렌더는 스크롤마다 새 창 위치(offset)로 다시 불리므로, 막대를 창 첫 줄에 절대 위치로 붙이면 창을 따라온다.
-export function withJumps(
-  els: Els,
-  tree: unknown,
-  at: { requestId: string; offset: number; bodyRows: number; columns: number; toEnd: Jump; toStart: Jump },
-) {
+export function withJumps(els: Els, tree: unknown, e: PaneSite, jumps: Jumps) {
   const { Box, Button, Text } = els
+  const at = { offset: e.props.scroll?.offset ?? 0, bodyRows: e.props.scroll?.bodyRows ?? 0, columns: e.props.bodyColumns ?? 80 }
   const rows = treeRows(tree, Math.max(1, at.columns - 1))
   const isLong = at.bodyRows > 0 && rows > at.bodyRows
   // 엔진이 세는 높이는 위 여백 줄과 "처음으로" 줄까지
   const estimate = isLong ? rows + 2 : rows
-  const known = heights.get(at.requestId)
-  if (known?.estimate !== estimate) heights.set(at.requestId, { estimate })
-  const total = Math.max((known?.estimate === estimate ? known.contentRows : undefined) ?? estimate, at.offset + at.bodyRows)
+  let known = heights.get(e.requestId)
+  if (known?.estimate !== estimate) heights.set(e.requestId, (known = { estimate }))
+  const total = Math.max(known.contentRows ?? estimate, at.offset + at.bodyRows)
   const bar = scrollBar(total, at.offset, at.bodyRows)
   // 버튼과 막대는 트리 뒤에 둔다: 입력칸 앞 요소가 생기거나 사라지면 입력칸이 포커스를 잃는다.
   // "끝으로"는 위 여백 한 줄에, 막대는 오른쪽 여백 한 칸에 절대 위치로 올린다.
@@ -43,12 +44,12 @@ export function withJumps(
       {tree as never}
       {isLong && (
         <Box key="pane-jump-start-row" justifyContent="flex-end">
-          <Button key="pane-jump-start" plain dimColor label={at.toStart.label} onPress={at.toStart.onPress} />
+          <Button key="pane-jump-start" plain dimColor label={jumps.toStart} onPress={() => jumps.scroll('start')} />
         </Box>
       )}
       {isLong && (
         <Box key="pane-jump-end-row" position="absolute" top={0} right={1}>
-          <Button key="pane-jump-end" plain dimColor label={at.toEnd.label} onPress={at.toEnd.onPress} />
+          <Button key="pane-jump-end" plain dimColor label={jumps.toEnd} onPress={() => jumps.scroll('end')} />
         </Box>
       )}
       {isLong && (
@@ -89,11 +90,12 @@ function childrenOf(node: Node): unknown[] {
   return (Array.isArray(raw) ? raw.flat(Infinity) : [raw]).filter(child => child !== null && child !== undefined && child !== false && child !== '')
 }
 
-// 터미널 칸 수 어림: 한글·한자·가나·전각·이모지는 두 칸.
-function cells(text: string): number {
+// 터미널 칸 수: markdown.tsx 의 cellWidth 와 같아야 한다(sync-shared.sh --check 가 본다). desk-review 에는 markdown.tsx
+// 복사본이 없어 가져오지 않고 같은 것을 둔다.
+export function cellWidth(text: string): number {
   let width = 0
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0
     const isWide =
       (code >= 0x1100 && code <= 0x115f) ||
       (code >= 0x2e80 && code <= 0xa4cf) ||
@@ -102,7 +104,7 @@ function cells(text: string): number {
       (code >= 0xfe30 && code <= 0xfe4f) ||
       (code >= 0xff00 && code <= 0xff60) ||
       (code >= 0xffe0 && code <= 0xffe6) ||
-      code >= 0x1f300
+      (code >= 0x1f300 && code <= 0x1faff)
     width += isWide ? 2 : 1
   }
   return width
@@ -116,7 +118,7 @@ function textOf(node: unknown): string {
 }
 
 function wrapped(text: string, columns: number, isWrapping: boolean): number {
-  return text.split('\n').reduce((rows, line) => rows + (isWrapping ? Math.max(1, Math.ceil(cells(line) / Math.max(1, columns))) : 1), 0)
+  return text.split('\n').reduce((rows, line) => rows + (isWrapping ? Math.max(1, Math.ceil(cellWidth(line) / Math.max(1, columns))) : 1), 0)
 }
 
 // 트리가 차지할 줄 수 어림(Yoga 를 흉내 낸 대강): 세로 Box 는 자식 합과 간격, 가로 Box 는 가장 높은 자식,
