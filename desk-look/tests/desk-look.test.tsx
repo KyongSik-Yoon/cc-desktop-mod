@@ -8,7 +8,7 @@ import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatu
 import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
-import { treeRows } from '../hooks/jumps'
+import { scrollBar, treeRows } from '../hooks/jumps'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
 import { advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, orderSessions, procStatOf, sessionFileOf } from '../hooks/monitor'
@@ -4772,10 +4772,22 @@ describe('미리보기 패널', () => {
     // 버튼은 문서 뒤에 둔다(입력칸 앞 요소가 바뀌지 않게)
     expect(drawn.indexOf('↓ 끝으로')).toBeGreaterThan(drawn.indexOf('릴리즈 노트'))
     expect(await short.find({ key: 'pane-jump-start' })).toBeDefined()
+    // 오른쪽 끝 위치 막대: 손잡이(█)와 트랙(│)
+    expect(drawn).toContain('█')
+    expect(drawn).toContain('│')
     await short.unmount()
     const tall = await mount(500)
     expect(JSON.stringify(await tall.drawn())).not.toContain('끝으로')
     await tall.unmount()
+  })
+
+  test('위치 막대: 손잡이는 창이 차지하는 몫, 위치는 내려간 몫, 끝이면 바닥', () => {
+    expect(scrollBar(100, 0, 20)).toEqual({ above: 0, thumb: 4, below: 16 })
+    expect(scrollBar(100, 80, 20)).toEqual({ above: 16, thumb: 4, below: 0 })
+    expect(scrollBar(100, 40, 20)).toEqual({ above: 8, thumb: 4, below: 8 })
+    // 아주 길어도 손잡이는 한 칸, 창보다 짧은 높이가 와도 창을 넘지 않는다
+    expect(scrollBar(10_000, 0, 20).thumb).toBe(1)
+    expect(scrollBar(10, 0, 20)).toEqual({ above: 0, thumb: 20, below: 0 })
   })
 
   test('트리 높이 어림: 세로는 합과 간격, 가로는 가장 높은 것, 높이·숨김·절대 위치, 글은 폭으로 접는다', KO, () => {

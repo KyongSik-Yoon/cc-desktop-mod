@@ -35,7 +35,7 @@ import type { SlackCall } from './slack'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
 import { renderMarkdown } from './shared/markdown'
-import { withJumps } from './shared/jumps'
+import { learnRows, withJumps } from './shared/jumps'
 
 const SLACK_PANE = 'desk-slack'
 // 답장 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -232,16 +232,20 @@ async function sendSlack($: EngineInterface, server: SlackServer, channel: strin
   await toSlackEnd($)
 }
 
+// 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아, 위치 막대(shared/jumps.tsx)가 옛 자리에 남는다.
 async function toSlackEnd($: EngineInterface) {
   await $.ui.scroll({ in: SLACK_PANE, to: 'end' }).catch(() => undefined)
+  $.ui.invalidate('ui.render')
 }
 
 // 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
 
 // 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
 function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
   return withJumps(els, tree, {
+    requestId: e.requestId,
+    offset: e.props.scroll?.offset ?? 0,
     bodyRows: e.props.scroll?.bodyRows ?? 0,
     columns: e.props.bodyColumns ?? 80,
     toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
@@ -363,6 +367,12 @@ export const register: Register = (on, options) => {
 
   // Slack 패널: 나에게 온 DM·그룹 DM 을 대화방으로(최근 방부터), 하나를 누르면 그 방의 최근 대화와 답장.
   // 마지막 글이 스레드 답글인 방은 그 스레드로 열린다. 방 안의 "답글 N개" 를 누르면 그 스레드, ← 는 방으로.
+  // 막대 손잡이 크기에 쓰는 트리 높이(shared/jumps.tsx): 엔진은 사람이 스크롤할 때만 알려 준다. 창은 엔진이 옮긴다.
+  on('ui.scroll', { component: 'Pane', requestId: SLACK_PANE }, ($, e, next) => {
+    learnRows(e.requestId, e.contentRows)
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: SLACK_PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)

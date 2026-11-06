@@ -4,7 +4,7 @@ import type { Elements, EngineInterface, Register } from 'claude-code'
 import type { DiffAt, ReviewItem, ReviewReport, Stage, Status } from '../types'
 import { counts, itemsOf, parseReport, reviewTool } from './review'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
-import { withJumps } from './shared/jumps'
+import { learnRows, withJumps } from './shared/jumps'
 
 // 엔진 테마 키(desk-look 의 COLORS 와 같은 역할). hex 를 박으면 터미널 테마와 어긋난다.
 const COLORS = {
@@ -116,11 +116,13 @@ async function pickLang($: EngineInterface) {
 }
 
 // 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
 
 // 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
 function paneJumps($: EngineInterface, els: Elements['terminal'], e: PaneSite, tree: unknown) {
   return withJumps(els, tree, {
+    requestId: e.requestId,
+    offset: e.props.scroll?.offset ?? 0,
     bodyRows: e.props.scroll?.bodyRows ?? 0,
     columns: e.props.bodyColumns ?? 80,
     toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
@@ -162,6 +164,12 @@ export const register: Register = (on, options) => {
     if ((await read($, report)) === null) return { text: T.noReport }
     await openPane($)
     return { text: T.opened }
+  })
+
+  // 막대 손잡이 크기에 쓰는 트리 높이(shared/jumps.tsx): 엔진은 사람이 스크롤할 때만 알려 준다. 창은 엔진이 옮긴다.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, ($, e, next) => {
+    learnRows(e.requestId, e.contentRows)
+    return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {

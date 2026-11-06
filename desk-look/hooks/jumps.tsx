@@ -1,22 +1,45 @@
 import type { Elements } from 'claude-code'
 
-// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로" 버튼을 둔다(사람의 End·Home 키와 같은 곳으로 간다).
+// 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로" 버튼을 두고(사람의 End·Home 키와 같은 곳으로 간다),
+// 오른쪽 끝 한 칸에 지금 보는 위치를 막대로 그린다(엔진은 패널 스크롤바를 그리지 않는다. 누를 수는 없다).
 // 원본은 desk-look/hooks/jumps.tsx 이고 scripts/sync-shared.sh 가 형제 플러그인의 hooks/shared/ 로 복사한다.
-// 순수 함수만 둔다: 스크롤하는 클로저($.ui.scroll)는 각 플러그인의 register.tsx 가 만들어 넘긴다.
+// $ 는 쓰지 않는다: 스크롤하는 클로저($.ui.scroll)는 각 플러그인의 register.tsx 가 만들어 넘긴다.
 
 type Els = Elements['terminal']
 
 export type Jump = { label: string; onPress: () => void }
 
-// 버튼을 보일지는 트리가 창보다 긴지로 정한다. 엔진은 트리 높이를 사람이 스크롤할 때(ui.scroll)만 알려 주므로
-// 그리기 전에 어림한다. 어림이 몇 줄 틀려도 창 높이 언저리에서 버튼이 보이고 말고가 바뀔 뿐이다.
-export function withJumps(els: Els, tree: unknown, at: { bodyRows: number; columns: number; toEnd: Jump; toStart: Jump }) {
-  const { Box, Button } = els
-  const isLong = at.bodyRows > 0 && treeRows(tree, at.columns) > at.bodyRows
-  // 버튼은 트리 뒤에 둔다: 입력칸 앞 요소가 생기거나 사라지면 입력칸이 포커스를 잃는다.
-  // "끝으로"는 위 여백 한 줄에 절대 위치로 올린다.
+// 사람이 스크롤할 때 엔진이 알려 준 트리 높이(ui.scroll 의 contentRows)를 그때 그린 트리의 어림과 함께 둔다.
+// 어림이 달라지면(내용이 바뀌면) 버리고 다시 어림한다. $.ui.scroll 은 ui.scroll 을 거치지 않는다(2.1.318).
+const heights = new Map<string, { estimate: number; contentRows?: number }>()
+
+// 각 플러그인의 ui.scroll 훅이 부른다.
+export function learnRows(requestId: string, contentRows: number) {
+  const known = heights.get(requestId)
+  if (known) known.contentRows = contentRows
+}
+
+// 버튼과 막대는 트리가 창보다 길 때만. 엔진은 트리 높이를 사람이 스크롤할 때만 알려 주므로 그리기 전에 어림한다.
+// 어림이 몇 줄 틀려도 창 높이 언저리에서 버튼이 보이고 말고가 바뀌거나 막대 손잡이가 조금 어긋날 뿐이다.
+// 렌더는 스크롤마다 새 창 위치(offset)로 다시 불리므로, 막대를 창 첫 줄에 절대 위치로 붙이면 창을 따라온다.
+export function withJumps(
+  els: Els,
+  tree: unknown,
+  at: { requestId: string; offset: number; bodyRows: number; columns: number; toEnd: Jump; toStart: Jump },
+) {
+  const { Box, Button, Text } = els
+  const rows = treeRows(tree, Math.max(1, at.columns - 1))
+  const isLong = at.bodyRows > 0 && rows > at.bodyRows
+  // 엔진이 세는 높이는 위 여백 줄과 "처음으로" 줄까지
+  const estimate = isLong ? rows + 2 : rows
+  const known = heights.get(at.requestId)
+  if (known?.estimate !== estimate) heights.set(at.requestId, { estimate })
+  const total = Math.max((known?.estimate === estimate ? known.contentRows : undefined) ?? estimate, at.offset + at.bodyRows)
+  const bar = scrollBar(total, at.offset, at.bodyRows)
+  // 버튼과 막대는 트리 뒤에 둔다: 입력칸 앞 요소가 생기거나 사라지면 입력칸이 포커스를 잃는다.
+  // "끝으로"는 위 여백 한 줄에, 막대는 오른쪽 여백 한 칸에 절대 위치로 올린다.
   return (
-    <Box flexDirection="column" paddingTop={isLong ? 1 : 0}>
+    <Box flexDirection="column" paddingTop={isLong ? 1 : 0} paddingRight={isLong ? 1 : 0}>
       {tree as never}
       {isLong && (
         <Box key="pane-jump-start-row" justifyContent="flex-end">
@@ -24,12 +47,27 @@ export function withJumps(els: Els, tree: unknown, at: { bodyRows: number; colum
         </Box>
       )}
       {isLong && (
-        <Box key="pane-jump-end-row" position="absolute" top={0} right={0}>
+        <Box key="pane-jump-end-row" position="absolute" top={0} right={1}>
           <Button key="pane-jump-end" plain dimColor label={at.toEnd.label} onPress={at.toEnd.onPress} />
+        </Box>
+      )}
+      {isLong && (
+        <Box key="pane-scroll-bar" position="absolute" top={at.offset} left={at.columns - 1} width={1} height={at.bodyRows} flexDirection="column">
+          {bar.above > 0 && <Text color="subtle">{Array(bar.above).fill('│').join('\n')}</Text>}
+          <Text color="inactive">{Array(bar.thumb).fill('█').join('\n')}</Text>
+          {bar.below > 0 && <Text color="subtle">{Array(bar.below).fill('│').join('\n')}</Text>}
         </Box>
       )}
     </Box>
   )
+}
+
+// 막대: 손잡이 길이는 창이 트리에서 차지하는 몫, 위치는 창이 내려간 몫. 끝에 닿으면 손잡이도 바닥에.
+export function scrollBar(total: number, offset: number, bodyRows: number): { above: number; thumb: number; below: number } {
+  const thumb = Math.max(1, Math.min(bodyRows, Math.round((bodyRows * bodyRows) / Math.max(1, total))))
+  const room = Math.max(0, bodyRows - thumb)
+  const above = Math.round(room * Math.min(1, Math.max(0, offset) / Math.max(1, total - bodyRows)))
+  return { above, thumb, below: room - above }
 }
 
 type Node = { type?: unknown; props?: Record<string, unknown>; children?: unknown }

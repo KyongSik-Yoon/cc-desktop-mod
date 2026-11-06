@@ -29,7 +29,7 @@ import type { MergeAction, MergeResult, Ran } from './pr'
 import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matchesPath, parseCommits, scopeLabel, scopeOf } from './gitview'
 import { T, currentLang, langFromConfig, langSetting, setLang, type Lang } from './i18n'
 import { previewHtml } from './preview-html'
-import { withJumps } from './jumps'
+import { learnRows, withJumps } from './jumps'
 import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
 
 export { cellWidth } from './markdown'
@@ -1254,6 +1254,7 @@ async function scrollToFile($: EngineInterface, id: string) {
     const moved = await $.ui.scroll({ to: { key: `file-${id}` }, in: PANE, block: 'start' }).catch(() => ({ deny: 'failed' }))
     if (!moved.deny) {
       diffCursor = id
+      $.ui.invalidate('ui.render')
       return
     }
     await $.clock.sleep(100).catch(() => undefined)
@@ -1335,6 +1336,8 @@ async function openDiff($: EngineInterface, scope?: DiffScope) {
   await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   // 맨 위에서 보여 준다. 다시 연 패널의 창과 적어 둔 위치(diffWindow)도 이 스크롤로 맞춰진다.
   await $.ui.scroll({ to: 'start', in: PANE }).catch(() => undefined)
+  // 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아 위치 막대(jumps.tsx)가 옛 자리에 남으므로 다시 그린다.
+  $.ui.invalidate('ui.render')
 }
 
 // 열린 패널이 있으면 접고(닫되 제목·스크롤을 적어 둔다), 없으면 접어 둔 패널을 다시 연다.
@@ -1390,6 +1393,7 @@ async function restoreScroll($: EngineInterface, id: string, offset: number) {
     }
   } finally {
     restoreOffsets.delete(id)
+    $.ui.invalidate('ui.render')
   }
 }
 
@@ -2261,11 +2265,13 @@ type Els = Elements['terminal']
 
 // 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만).
 // 테스트 하네스처럼 창을 모르는 곳(scroll 없음)에서는 버튼 없이 그대로 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
 
 // 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
 function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
   return withJumps(els, tree, {
+    requestId: e.requestId,
+    offset: e.props.scroll?.offset ?? 0,
     bodyRows: e.props.scroll?.bodyRows ?? 0,
     columns: e.props.bodyColumns ?? 80,
     toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
@@ -4732,6 +4738,8 @@ export const register: Register = (on, options) => {
   // 모든 패널의 위치도 적어 두고(/desk-fold 가 접을 때 가져간다), 다시 편 뒤 첫 스크롤은 적어 둔 위치로 바꾼다.
   on('ui.scroll', { component: 'Pane' }, async ($, e, next) => {
     if (!DESK_PANES.has(e.requestId)) return next(e)
+    // 막대 손잡이 크기에 쓰는 트리 높이(jumps.tsx): 엔진은 이때만 알려 준다.
+    learnRows(e.requestId, e.contentRows)
     // 머리를 고정해 그린 /desk-activity 는 창이 늘 꽉 차 엔진이 옮길 것이 없다: 몸통 첫 줄만 옮겨 그 패널만 다시 그린다.
     // 쪽 넘김(·Home/End)은 창 높이만큼 오므로 몸통 높이만큼 넘긴다.
     if (e.requestId === ACTIVITY_PANE && activityWindow.pinned) {

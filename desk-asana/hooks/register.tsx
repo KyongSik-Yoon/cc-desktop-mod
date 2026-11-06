@@ -40,7 +40,7 @@ import type { AsanaCall } from './asana'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 import { renderMarkdown } from './shared/markdown'
 import { COLORS, ago, cellWidth, clip, fillPrompt, rowButton, type Els } from './util'
-import { withJumps } from './shared/jumps'
+import { learnRows, withJumps } from './shared/jumps'
 
 const ASANA_PANE = 'desk-asana'
 // 댓글 입력칸이 자랄 수 있는 줄 수(desk-look 의 diff 줄 댓글 칸과 같다).
@@ -325,10 +325,11 @@ async function goToAsanaTask($: EngineInterface, server: AsanaServer, gid: strin
   await update($, asanaView, (): AsanaView => ({ gid, status: 'loading', task: null, trail }))
   await $.ui.scroll({ in: ASANA_PANE, to: 'start' }).catch(() => undefined)
   await loadAsanaTask($, server, gid)
-  if (from === null) return
+  // 누름 밖에서 옮긴 창은 엔진이 다시 그리지 않아 위치 막대(shared/jumps.tsx)가 옛 자리에 남으므로 다시 그린다.
+  if (from === null) return $.ui.invalidate('ui.render')
   for (let tries = 0; tries < 8 && round === asanaNavRound; tries++) {
     const moved = await $.ui.scroll({ in: ASANA_PANE, to: { key: `asana-sub-${from}` }, block: 'center' }).catch(() => ({ deny: 'failed' }))
-    if (!moved.deny) return
+    if (!moved.deny) return $.ui.invalidate('ui.render')
     await $.clock.sleep(100).catch(() => undefined)
   }
 }
@@ -576,11 +577,13 @@ async function pickLang($: EngineInterface) {
 }
 
 // 패널이 그리는 범위(ui.render 의 e 에서 쓰는 것만). 테스트 하네스처럼 창을 모르는 곳에서는 버튼 없이 그린다.
-type PaneSite = { requestId: string; props: { scroll?: { bodyRows: number }; bodyColumns?: number } }
+type PaneSite = { requestId: string; props: { scroll?: { offset: number; bodyRows: number }; bodyColumns?: number } }
 
 // 긴 패널의 맨 위에 "끝으로", 맨 아래에 "처음으로"(shared/jumps.tsx). 사람의 End·Home 과 같은 곳으로 창을 옮긴다.
 function paneJumps($: EngineInterface, els: Els, e: PaneSite, tree: unknown) {
   return withJumps(els, tree, {
+    requestId: e.requestId,
+    offset: e.props.scroll?.offset ?? 0,
     bodyRows: e.props.scroll?.bodyRows ?? 0,
     columns: e.props.bodyColumns ?? 80,
     toEnd: { label: T.jumpEnd, onPress: () => void $.ui.scroll({ in: e.requestId, to: 'end' }).catch(() => undefined) },
@@ -644,6 +647,12 @@ export const register: Register = (on, options) => {
   })
 
   // Asana 패널: 내 태스크를 프로젝트별로, 하나를 누르면 상세(상태·담당자·드롭다운 필드·설명·댓글)와 댓글 달기.
+  // 막대 손잡이 크기에 쓰는 트리 높이(shared/jumps.tsx): 엔진은 사람이 스크롤할 때만 알려 준다. 창은 엔진이 옮긴다.
+  on('ui.scroll', { component: 'Pane', requestId: ASANA_PANE }, ($, e, next) => {
+    learnRows(e.requestId, e.contentRows)
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: ASANA_PANE }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const els = $.ui.resolve(e)
