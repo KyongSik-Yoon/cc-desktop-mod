@@ -2934,6 +2934,40 @@ test('desk-review 가 diffAt 을 쓰면 diff 패널이 그 파일에서 열린�
   await pane.unmount()
 })
 
+test('diffAt 의 파일이 이미 커밋돼 있으면 그 파일을 마지막으로 바꾼 커밋을 커밋별 칸에 펼친다', { ...KO, plugins: [reviewStub] }, async ($, on) => {
+  const SHA = 'abc1234def'
+  const B_PATCH = 'diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-x\n+y\n'
+  const stdins: string[] = []
+  on('process.run', ($, e) => {
+    const argv = e.argv
+    const stdin = e.init?.stdin
+    if (stdin !== undefined) stdins.push(`${argv.slice(0, 2).join(' ')}|${stdin}`)
+    // 커밋 안 한 변경·브랜치 diff 는 없고(main), b.txt 를 바꾼 커밋 하나만 있다
+    const stdout = argv.includes('--show-toplevel')
+      ? '/repo\n'
+      : argv[1] === 'log' && argv.includes('--stdin')
+        ? [SHA, 'abc1234', '고침', 'sam', '1 hour ago', '1 hour ago', '0', '0'].join('\x1f') + '\n'
+        : argv[1] === 'show'
+          ? `\x1e${SHA}\n${B_PATCH}`
+          : argv.includes('--abbrev-ref')
+            ? 'main\n'
+            : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => (toasts.push(String((e as { text?: unknown }).text)), { value: undefined }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.now', () => ({ value: 0 }))
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
+  await $.tool.call({ tool: 'ReviewStub', diffAt: { path: '/repo/b.txt', n: 1 } } as never)
+  // 경로는 명령 인자가 아니라 stdin 으로 넘긴다
+  expect(stdins).toContain('git log|HEAD\n--\n/repo/b.txt\n')
+  expect(toasts).toEqual([])
+  expect(await pane.find({ type: 'Code' })).toMatchObject({ props: { path: 'b.txt' } })
+  expect(JSON.stringify(await pane.drawn())).toContain('고침')
+  await pane.unmount()
+})
+
 test('백그라운드 작업 끝남 알림 줄: 기록에 있는 작업이면 눌러서 /desk-tasks 상세(에이전트의 답)를 연다', KO, async ($, on) => {
   const opened: string[] = []
   on('process.run', gitStub as never)

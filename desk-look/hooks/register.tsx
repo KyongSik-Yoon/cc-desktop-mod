@@ -1125,7 +1125,8 @@ async function openDiffAt($: EngineInterface, path: string) {
   const inGit = matchDiffFile(await read($, diff), path)
   // git 이 모르는 파일(저장소 밖)은 세션 편집 기록에서 찾는다. 경로는 도구가 준 절대 경로다.
   const outside = inGit === null ? matchDiffFile(outsideEdits(sessionEditsOf(await read($, runs)), await read($, repo)), path) : null
-  const target = inGit ?? (outside === null ? null : `${OUTSIDE}${outside}`)
+  // 이미 커밋한 파일(리뷰 결과 패널 등): 브랜치 diff, 거기도 없으면 그 파일을 마지막으로 바꾼 커밋에서 찾는다.
+  const target = inGit ?? (outside === null ? await committedTarget($, path) : `${OUTSIDE}${outside}`)
   await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
   if (target === null) {
     $.ui.toast(T.notInDiff)
@@ -1134,6 +1135,33 @@ async function openDiffAt($: EngineInterface, path: string) {
   // git 밖 파일이면 묶음도 편다: 접힌 묶음 안의 파일 머리 띠는 그리지 않아 스크롤해 갈 곳이 없다.
   await update($, open, state => ({ ...onlyOpen(state, target), ...(inGit === null ? { [OUTSIDE_GROUP]: false } : {}) }))
   await scrollToFile($, target)
+}
+
+// 커밋 안 한 변경에 없는 파일을 찾을 diff 칸과 그 안의 파일 id. 브랜치 diff 에 있으면 브랜치 칸,
+// 아니면(main 처럼 브랜치 커밋이 없을 때도) 그 파일을 마지막으로 바꾼 커밋을 커밋별 칸에 펼친다. 못 찾으면 커밋 안 한 칸으로 되돌린다.
+async function committedTarget($: EngineInterface, path: string): Promise<string | null> {
+  await refreshDiffView($, 'branch')
+  const branch = matchDiffFile((await read($, diffView)).files, path)
+  if (branch !== null) return `b:${branch}`
+  // 경로는 stdin 으로 넘긴다(바뀌는 인자를 명령에 넣지 않는다). git log --stdin 은 -- 뒤 줄을 경로로 읽는다.
+  const last = await $.process.run(['git', 'log', LOG_FORMAT, '-n1', '--stdin'], { timeoutMs: 8000, stdin: `HEAD\n--\n${path}\n` }).catch(() => null)
+  const commit = last?.exitCode === 0 ? parseCommits(last.stdout)[0] : undefined
+  const files = commit ? await commitDiffs($, [commit.sha]) : {}
+  const file = commit ? matchDiffFile(files[commit.sha] ?? [], path) : null
+  if (!commit || file === null) {
+    await refreshDiffView($, 'uncommitted')
+    return null
+  }
+  await refreshDiffView($, 'commits')
+  await update($, diffView, previous =>
+    fitView({
+      ...previous,
+      // 브랜치 밖 커밋(main 의 지난 커밋)이면 목록 맨 앞에 끼운다
+      commits: previous.commits.some(row => row.sha === commit.sha) ? previous.commits : [commit, ...previous.commits],
+      commitFiles: { ...previous.commitFiles, ...files },
+    }),
+  )
+  return `c:${commit.short}:${file}`
 }
 
 // 창 맨 위 행이 속한 파일: 머리 띠가 그 행이거나 그 위에 있는 마지막 파일. 첫 머리 띠보다 위면 -1.

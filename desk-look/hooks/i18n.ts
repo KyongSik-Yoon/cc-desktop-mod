@@ -169,7 +169,7 @@ const ko = {
   scopeCommits: '커밋별',
   reverted: (path: string) => `${path} 을(를) 되돌렸어요`,
   revertFailed: (reason: string) => `되돌리지 못했어요: ${reason}`,
-  notInDiff: '이 파일은 지금 커밋되지 않은 변경에 없어요(커밋했거나 저장소 밖).',
+  notInDiff: '이 파일의 변경을 찾지 못했어요(git 이 모르는 파일이거나 저장소 밖).',
   // 미리보기 패널
   cmdPreview: '마크다운 문서를 대화와 같은 모양으로 옆 미리보기 패널에 펼친다 (파일을 안 주면 마지막에 본 문서)',
   cmdPreviewHint: '[파일]',
@@ -502,7 +502,7 @@ const en: Strings = {
   scopeCommits: 'Commits',
   reverted: path => `Reverted ${path}`,
   revertFailed: reason => `Couldn't revert: ${reason}`,
-  notInDiff: 'This file has no uncommitted changes now (committed, or outside the repository).',
+  notInDiff: 'No changes found for this file (git does not know it, or it is outside the repository).',
   cmdPreview: 'Lay a Markdown document out in the preview pane beside the conversation, drawn like the transcript (no file: the last one previewed)',
   cmdPreviewHint: '[file]',
   previewChip: '◫ preview',
