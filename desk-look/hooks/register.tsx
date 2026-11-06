@@ -4,7 +4,7 @@ import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurf
 import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, codeSource, parseBlocks, renderMarkdown } from './markdown'
-import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan } from './diffview'
+import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan, wrapRoom, wrappedHeights } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
 import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
 import type { LinePress } from './comments'
@@ -163,6 +163,8 @@ const diffView = atom({ plugin: 'desk-look', key: 'diffView' } as const, {
 } as DiffView)
 const diffGaps = atom({ plugin: 'desk-look', key: 'diffGaps' } as const, {} as Record<string, OpenedGaps>)
 const diffFilter = atom({ plugin: 'desk-look', key: 'diffFilter' } as const, { isOpen: false, query: '' } as DiffFilter)
+// diff 패널 줄바꿈(w): 켜면 패널 폭을 넘는 줄을 여러 행으로 나눠 그린다.
+const diffWrap = atom({ plugin: 'desk-look', key: 'diffWrap' } as const, false)
 // diff 패널이 마지막으로 그린 파일 머리 띠(위에서부터): 접기 id 와 첫 행. n·p 이동에 쓴다.
 let diffHeads: { id: string; top: number }[] = []
 // diff 패널 트리 위에 withJumps 가 더한 줄 수(jumpsTop). diffHeads·diffJumpTop 의 top 은 트리 안 위치라 창 위치와 견줄 때 더한다.
@@ -2817,6 +2819,7 @@ type VirtualDiff = {
   palette: DiffPalette
   window: { offset: number; bodyRows: number }
   columns: number
+  wrap: boolean
   head: unknown[]
   sections: DiffSection[]
   isFolded: (id: string) => boolean
@@ -2874,7 +2877,8 @@ function virtualDiff(v: VirtualDiff) {
   const rowItems = (patch: string, key: string, path: string, indent: number, scope: string, source?: GapSource) => {
     const { rows, blocks } = source ? withOpenedGaps(key, patch, v.gaps[key]) : patchBlocks(patch)
     const gap = source ? { Button: v.els.Button, onPress: (at: Gap) => v.onGap({ key, patch, path, source, gap: at }) } : undefined
-    const options = { path, gutter: gutterWidth(rows), columns: v.columns - indent, unmodified: T.unmodifiedLines, ...(gap ? { gap } : {}) }
+    const options = { path, gutter: gutterWidth(rows), columns: v.columns - indent, wrap: v.wrap, unmodified: T.unmodifiedLines, ...(gap ? { gap } : {}) }
+    const wrap = v.wrap ? wrapRoom(options.columns, options.gutter) : 0
     // 이 패치에 단 댓글과 쓰는 중인 댓글은 범위 끝 줄 뒤에 한 행씩 끼운다: 덩어리를 그 줄에서 나눈다.
     const pad = indent + 1 + options.gutter
     const draft = v.notes.draft?.patch === key ? v.notes.draft : null
@@ -2908,12 +2912,17 @@ function virtualDiff(v: VirtualDiff) {
       const rowKey = `${key}.${index}`
       const first = row
       row += block.kind === 'gap' ? 1 : block.lines.length
-      if (jump && jumpRow >= first && jumpRow < row) jumped.at = { seq: jump.seq, key: rowKey, inner: jumpRow - first }
+      // 덩어리 안 위치는 그린 행으로: 줄바꿈된 앞 줄들의 행 수를 더한다.
+      if (jump && jumpRow >= first && jumpRow < row) {
+        const inner = block.kind === 'lines' && wrap > 0 ? wrappedHeights(block.lines, wrap).slice(0, jumpRow - first).reduce((sum, n) => sum + n, 0) : jumpRow - first
+        jumped.at = { seq: jump.seq, key: rowKey, inner }
+      }
+      const height = blockHeight(block, wrap)
       items.push({
         key: rowKey,
-        height: blockHeight(block),
+        height,
         node: () => {
-          const blockOptions = block.kind === 'lines' && isOnScreen(rowKey, blockHeight(block)) ? { ...options, pick: { ...pick, first } } : options
+          const blockOptions = block.kind === 'lines' && isOnScreen(rowKey, height) ? { ...options, pick: { ...pick, first } } : options
           if (indent === 0) return diffBlock(v.els, v.palette, block, rowKey, blockOptions)
           return (
             <Box key={rowKey} paddingLeft={indent}>
@@ -4769,7 +4778,7 @@ export const register: Register = (on, options) => {
     // 이 패널은 /desk-diff 로만 열리고 터미널에서 그린다.
     const els = $.ui.resolve(e) as Els
     const { Box, Text, Button, Code, Input } = els
-    const [uncommitted, view, armed, info, edits, home, face, window, draft, comments, gaps, filter] = await Promise.all([
+    const [uncommitted, view, armed, info, edits, home, face, window, draft, comments, gaps, filter, isWrapped] = await Promise.all([
       read($, diff),
       read($, diffView),
       read($, open),
@@ -4782,6 +4791,7 @@ export const register: Register = (on, options) => {
       read($, lineComments),
       read($, diffGaps),
       read($, diffFilter),
+      read($, diffWrap),
     ])
     diffDrawnFolds = armed
     // 패널 몸통 폭: viewport.columns 는 패널 폭이 아니다(구분선을 끌면 어긋나 단어 강조 조각이 일찍 잘렸다).
@@ -4996,6 +5006,7 @@ export const register: Register = (on, options) => {
         {canStep && tool(<Button key="file-next" plain dimColor hotkey="n" label={T.nextFile} onPress={() => void stepFile($, 1)} />)}
         {(matchTotal > 1 || filter.isOpen) && tool(<Button key="filter" plain dimColor={!filter.isOpen} hotkey="f" label={T.filterFiles} onPress={() => void toggleFilter($)} />)}
         {foldCount > 1 && tool(<Button key="fold-all" plain dimColor hotkey="z" label={anyOpen ? T.foldAll : T.unfoldAll} onPress={() => void foldAll()} />)}
+        {face && diffColors && tool(<Button key="wrap" plain dimColor={!isWrapped} hotkey="w" label={T.wrapLines} onPress={() => void update($, diffWrap, isOn => !isOn)} />)}
       </Box>
     )
     // 거르기 줄: 입력칸, 걸러진 수, 닫기. Enter 는 걸러진 첫 파일을 편다.
@@ -5051,6 +5062,7 @@ export const register: Register = (on, options) => {
         palette: diffColors,
         window: shown,
         columns,
+        wrap: isWrapped === true,
         head,
         sections: [
           ...(view.scope !== 'commits' && shownCount === 0 ? [{ kind: 'note' as const, key: 'empty', text: empty }] : []),

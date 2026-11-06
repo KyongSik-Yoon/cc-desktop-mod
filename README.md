@@ -85,6 +85,7 @@ Per-file diffs in three scopes, like the desktop diff panel:
 - The pane opens as a folded list of files. Click a file's header row to unfold its diff and scroll to it; the file that was open folds, so one file is open at a time. Click it again to fold it. `z` unfolds or folds them all for reading every change in one scroll (in `Commits`, every commit and its files at once; several commits can stay open)
 - `r` reads the diff again
 - `n` / `p` go to the next or previous file: with one file open, they open that file (folding the current one); with several open (after `z`), they scroll to its header
+- `w` wraps lines: a line wider than the pane continues on the rows below (the line number only on the first, up to 10 rows a line). Press it again to cut lines at the edge. Needs a known theme
 - `f` opens a file filter above the list: type parts of a path (separated by spaces, all must match) to keep only matching files, and Enter opens the first. `✕` clears and closes it
 - In `Branch` and `Commits`, click `vs <base> ⌄` (`v`) to pick the base from the most recently committed local and remote branches, or `auto` to go back to the detected one (the PR's base, origin's default branch, then main, master or develop)
 - Click `N unmodified lines` to show those lines in place, read from the file as it is now (in `Commits`, from that commit)
