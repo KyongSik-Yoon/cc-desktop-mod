@@ -118,6 +118,9 @@ function hintTail(keys: string, isDraft: boolean): string {
   return `  ${T.bandToggle}${isDraft ? '' : ` · ${keys}`}`
 }
 
+// 고칠 점 칸이 그려졌는지: 힌트 줄이 읽는다.
+let planFieldDrawn = false
+
 async function planAskCard($: EngineInterface, els: Elements['terminal'], state: PlanAskState, columns: number, room: number) {
   const { Box, Text, Button, Input } = els
   const k = state.id
@@ -125,6 +128,7 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
   const width = Math.max(30, columns)
   const textRows = fitTextRows(planTextRows(state.text, planFieldColumns(width, T.planReviseLabel, T.planRevise)), room)
   const mode = planAskMode(room, textRows)
+  planFieldDrawn = mode === 'full'
   const setText = (value: string) => {
     return update($, planAsking, current => (current && current.id === state.id ? { ...current, text: value } : current))
   }
@@ -161,8 +165,9 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
       </Box>
       <Input
         key={`plan-text-${k}`}
+        autoFocus
         label={T.planReviseLabel}
-        placeholder={T.otherPlaceholder}
+        placeholder={T.revisePlaceholder}
         rows={textRows}
         value={state.text}
         submitLabel={T.planRevise}
@@ -249,6 +254,6 @@ export const register: Register = (on, options) => {
   // 힌트 줄: 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다. 띠를 접어 카드가 안 보일 때 펴는 키를 맨 앞에 둔다.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || (await read($, planAsking)) === null) return next(e)
-    return next({ ...e, props: { ...e.props, tail: hintTail(T.planHint, e.props.isDraft) } })
+    return next({ ...e, props: { ...e.props, tail: hintTail(planFieldDrawn ? T.planHint : T.planHintNoField, e.props.isDraft) } })
   })
 }
