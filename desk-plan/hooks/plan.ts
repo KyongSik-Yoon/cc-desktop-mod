@@ -39,15 +39,49 @@ export function isBridgedRecord(text: string, sessionId: string): boolean {
   return sessionId !== '' && text.includes(`"sessionId":"${sessionId}"`) && text.includes('"bridgeSessionId":"')
 }
 
-// 고칠 점 입력칸 높이: 두 줄에서 쓴 줄 수만큼 4줄까지 자란다. 한 줄 칸에서는 엔진이 \⏎ 도 제출로 받아 줄바꿈을 시작할 수 없다.
-export function planTextRows(text: string): number {
-  return Math.min(4, Math.max(2, text.split('\n').length))
+const isWide = (code: number) =>
+  (code >= 0x1100 && code <= 0x115f) ||
+  (code >= 0x2e80 && code <= 0xa4cf) ||
+  (code >= 0xac00 && code <= 0xd7a3) ||
+  (code >= 0xf900 && code <= 0xfaff) ||
+  (code >= 0xfe30 && code <= 0xfe6f) ||
+  (code >= 0xff00 && code <= 0xff60) ||
+  (code >= 0xffe0 && code <= 0xffe6) ||
+  (code >= 0x1f300 && code <= 0x1faff)
+
+function cells(text: string): number {
+  let total = 0
+  for (const char of text) total += isWide(char.codePointAt(0) ?? 0) ? 2 : 1
+  return total
 }
 
-// 띠 줄 수에 맞는 카드 모양. 다 들어가면 full: 테두리 2, 제목·물음 2, 버튼 줄과 그 위 빈 줄 2, 고칠 점 칸과 그 위 빈 줄,
-// 아래 버튼 줄 1. 모자라면 고칠 점 칸 없는 테두리 카드(compact, 4줄), 그것도 안 되면 테두리 없는 두 줄(inline).
+// 엔진이 입력칸 글을 접는 폭. 엔진은 칸이 놓인 띠의 폭에서 라벨과 끝의 Enter 안내를 빼서 정한다(2.1.319 InputField).
+// 이 폭은 칸을 감싼 테두리·여백을 모르므로 칸은 테두리 밖, 띠 폭 그대로 놓는다. 안에 넣으면 글이 칸을 넘어 잘린다.
+export function planFieldColumns(columns: number, label: string, submitLabel: string): number {
+  const room = columns - cells(`${label}: `)
+  const short = ` ⏎ ${submitLabel}`
+  const long = `${short} · \\⏎ new line`
+  return Math.max(12, room - cells(room - cells(long) >= columns / 2 ? long : short))
+}
+
+// 고칠 점 입력칸 높이: 접힌 줄까지 세어 두 줄에서 PLAN_TEXT_ROWS 까지 자란다. 넘치면 칸이 커서를 따라 스크롤한다.
+// 한 줄 칸에서는 엔진이 \⏎ 도 제출로 받아 줄바꿈을 시작할 수 없어 두 줄부터다.
+const PLAN_TEXT_ROWS = 8
+export function planTextRows(text: string, fieldColumns: number): number {
+  const rows = text.split('\n').reduce((total, line) => total + Math.max(1, Math.ceil(cells(line) / fieldColumns)), 0)
+  return Math.min(PLAN_TEXT_ROWS, Math.max(2, rows))
+}
+
+// 띠 줄 수에 맞는 카드 모양. 다 들어가면 full: 테두리 2, 제목·물음 2, 버튼 줄과 그 위 빈 줄 2, 고칠 점 칸, 아래 버튼 줄 1.
+// 모자라면 고칠 점 칸 없는 테두리 카드(compact, 4줄), 그것도 안 되면 테두리 없는 두 줄(inline).
 export type PlanMode = 'full' | 'compact' | 'inline'
+const PLAN_FULL_FRAME = 7
 export function planAskMode(room: number, textRows: number): PlanMode {
-  if (2 + 2 + 2 + 1 + textRows + 1 <= room) return 'full'
+  if (PLAN_FULL_FRAME + textRows <= room) return 'full'
   return 4 <= room ? 'compact' : 'inline'
+}
+
+// 칸이 띠에 들어가도록 줄인 높이. 카드 틀을 뺀 만큼까지, 두 줄 아래로는 줄이지 않는다.
+export function fitTextRows(textRows: number, room: number): number {
+  return Math.max(2, Math.min(textRows, room - PLAN_FULL_FRAME))
 }

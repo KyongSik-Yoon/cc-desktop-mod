@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { isMarkdown, planAskMode, planInput, planTextRows, planTitle, reviseReason } from '../hooks/plan'
+import { fitTextRows, isMarkdown, planAskMode, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from '../hooks/plan'
 
 const PLAN = ['# 빼기 추가', '', '- math.ts 에 subtract', '- 테스트 추가', '', '| 파일 | 변경 |', '|---|---|', '| math.ts | subtract |'].join('\n')
 const PATH = '/h/.claude/plans/p.md'
@@ -13,11 +13,20 @@ test('계획 카드: 계획 제목·입력 정리·고칠 점 사유·줄 수', 
   expect(planInput({ tool: 'ExitPlanMode', tool_use_id: 't1', plan: 'p', planFilePath: '/a.md' })).toEqual({ plan: 'p', planFilePath: '/a.md' })
   expect(reviseReason('  2단계를 나눠 줘 ')).toContain('\n\n2단계를 나눠 줘\n\n')
   expect(reviseReason('x')).toContain('call ExitPlanMode again')
-  expect(planAskMode(10, 2)).toBe('full')
-  expect(planAskMode(9, 2)).toBe('compact')
+  expect(planAskMode(9, 2)).toBe('full')
+  expect(planAskMode(8, 2)).toBe('compact')
   expect(planAskMode(3, 2)).toBe('inline')
-  expect(planTextRows('')).toBe(2)
-  expect(planTextRows('a\nb\nc\nd\ne')).toBe(4)
+  expect(planTextRows('', 40)).toBe(2)
+  expect(planTextRows('a\nb\nc\nd\ne', 40)).toBe(5)
+  // 칸 폭을 넘는 줄은 접힌 줄까지 세고, 한글은 두 칸이다
+  expect(planTextRows('x'.repeat(120), 40)).toBe(3)
+  expect(planTextRows('가'.repeat(40), 40)).toBe(2)
+  expect(planTextRows('x'.repeat(4000), 40)).toBe(8)
+  expect(fitTextRows(8, 12)).toBe(5)
+  expect(fitTextRows(8, 8)).toBe(2)
+  // 넓으면 긴 안내를 두고, 좁아 칸이 절반을 못 넘으면 짧은 안내로 칸을 넓힌다
+  expect(planFieldColumns(120, 'Changes', 'Ask for changes')).toBe(120 - 9 - 32)
+  expect(planFieldColumns(50, 'Changes', 'Ask for changes')).toBe(50 - 9 - 18)
   expect(isMarkdown(PATH)).toBe(true)
   expect(isMarkdown('/a.txt')).toBe(false)
 })

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { PlanAskState, PlanPreview } from '../types'
-import { CANCEL_REASON, DISMISS_REASON, isBridgedRecord, isMarkdown, planAskMode, planInput, planTextRows, planTitle, reviseReason } from './plan'
+import { CANCEL_REASON, DISMISS_REASON, fitTextRows, isBridgedRecord, isMarkdown, planAskMode, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from './plan'
 import type { PlanReply } from './plan'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 
@@ -122,8 +122,8 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
   const { Box, Text, Button, Input } = els
   const k = state.id
   const title = planTitle(state.plan)
-  const width = Math.max(30, Math.min(columns, 100))
-  const textRows = planTextRows(state.text)
+  const width = Math.max(30, columns)
+  const textRows = fitTextRows(planTextRows(state.text, planFieldColumns(width, T.planReviseLabel, T.planRevise)), room)
   const mode = planAskMode(room, textRows)
   const setText = (value: string) => {
     return update($, planAsking, current => (current && current.id === state.id ? { ...current, text: value } : current))
@@ -151,23 +151,24 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
       </Box>
     )
   }
+  // 칸은 테두리 밖에 띠 폭 그대로 둔다(plan.ts planFieldColumns).
   return (
-    <Box flexDirection="column" width={width} borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
-      {head}
-      <Text color={COLORS.muted}>{T.planAskQuestion}</Text>
-      <Box marginTop={1}>{actions}</Box>
-      <Box marginTop={1}>
-        <Input
-          key={`plan-text-${k}`}
-          label={T.planReviseLabel}
-          placeholder={T.otherPlaceholder}
-          rows={textRows}
-          value={state.text}
-          submitLabel={T.planRevise}
-          onInput={value => void setText(value)}
-          onSubmit={value => void revisePlan($, state, value)}
-        />
+    <Box flexDirection="column" width={width}>
+      <Box flexDirection="column" borderStyle="round" borderColor={COLORS.clay} paddingX={1}>
+        {head}
+        <Text color={COLORS.muted}>{T.planAskQuestion}</Text>
+        <Box marginTop={1}>{actions}</Box>
       </Box>
+      <Input
+        key={`plan-text-${k}`}
+        label={T.planReviseLabel}
+        placeholder={T.otherPlaceholder}
+        rows={textRows}
+        value={state.text}
+        submitLabel={T.planRevise}
+        onInput={value => void setText(value)}
+        onSubmit={value => void revisePlan($, state, value)}
+      />
       <Box columnGap={2}>
         <Button key={`plan-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyPlan($, state.dir, { kind: 'engine' })} />
         <Button key={`plan-close-${k}`} plain dimColor label={T.close} onPress={() => void replyPlan($, state.dir, { kind: 'dismiss' })} />
