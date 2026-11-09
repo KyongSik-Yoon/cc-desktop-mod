@@ -2253,6 +2253,10 @@ test('질문 카드: 도구 호출 → 입력창 위 카드 → 버튼 → 결�
   for (let tries = 0; tries < 50 && !(await band.find({ type: 'Text', text: '어느 쪽?' })); tries++) await wait(10)
   const drawn = JSON.stringify(await band.drawn())
   expect(await band.find({ type: 'Text', text: '어느 쪽?' })).toBeDefined()
+  // 사람이 카드를 읽는 동안에는 스피너(도는 점·경과 시간)를 그리지 않는다
+  const spinner = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never })
+  expect(JSON.stringify(await spinner.drawn())).not.toContain('●')
+  await spinner.unmount()
   const key = /"key":"(ask-[^"]+-1)"/.exec(drawn)?.[1]
   expect(key).toBeDefined()
   // 지우기: 직접 입력칸을 비운 칸을 새 키로 그린다
@@ -3540,9 +3544,17 @@ test('desk-plan 계획 카드가 떠 있으면 진행 띠·아래턱·질문 카
   now += 20_000
   // 카드가 없으면 스피너 아래 진행 띠와 아래턱(저장소 이름)이 있다
   expect(await draw('Spinner')).toContain('band-now')
+  expect(await draw('Spinner')).toContain('20s')
   expect(await draw('AbovePrompt')).toContain('repo')
+  // 사람이 카드를 읽는 시간은 작업 시간이 아니다: 카드가 떠 있으면 스피너와 경과 시간을 그리지 않는다
   await $.tool.call({ tool: 'PlanStub', card: PLAN_CARD } as never)
-  expect(await draw('Spinner')).not.toContain('band-now')
+  now += 30_000
+  const carded = await draw('Spinner')
+  expect(carded).not.toContain('band-now')
+  expect(carded).not.toContain('50s')
+  await $.tool.call({ tool: 'PlanStub', card: null } as never)
+  expect(await draw('Spinner')).toContain('50s')
+  await $.tool.call({ tool: 'PlanStub', card: PLAN_CARD } as never)
   // 입력창 위 띠는 받은 것(desk-plan 이 안쪽이면 그 카드)을 그대로 둔다
   const band = await draw('AbovePrompt')
   expect(band).toContain('engine-band')

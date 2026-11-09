@@ -4000,7 +4000,9 @@ export const register: Register = (on, options) => {
       read($, planAsking),
       read($, stepEffort),
     ])
-    const isCarded = asked !== null || planUp !== null
+    // 카드는 훅 안에서 답을 기다려서 엔진에겐 턴이 도는 중이다. 사람이 읽는 시간이 작업 시간처럼 오르지 않게 엔진 승인 창처럼
+    // 스피너를 비킨다. spinnerSeen 을 건드리지 않아 틱도 스스로 멈추고, 카드가 닫혀 atom 이 바뀌면 다시 그려 틱이 돈다.
+    if (asked !== null || planUp !== null) return <Box display="none" />
     if (now - spinnerSeen > 2 * SPINNER_TICK + 1000) spinnerFallbackStart = now
     spinnerSeen = now
     if (ticker === null) {
@@ -4031,8 +4033,7 @@ export const register: Register = (on, options) => {
     )
     // 진행 띠는 턴 동안 스피너 바로 아래에 그린다: 스피너는 어차피 초당 두 번 다시 그려지니, 띠의 시간을 가게 하려고
     // 입력창 위 띠 전체(아래턱·칩)를 다시 그리지 않아도 된다(명령어 수로 재면 그 다시 그리기가 턴 중 비용의 대부분이었다).
-    // 질문·계획 카드가 떠 있으면 카드가 자리를 차지하니 띠는 숨긴다.
-    const band = startedAt !== null && !isCarded ? activityBand(els, { list, state, agents: agentRecords, turnStartedAt: startedAt, now, columns: e.viewport?.columns ?? 80, onOpen: () => void openActivity($) }) : null
+    const band = startedAt !== null ? activityBand(els, { list, state, agents: agentRecords, turnStartedAt: startedAt, now, columns: e.viewport?.columns ?? 80, onOpen: () => void openActivity($) }) : null
     if (!band) return line
     return (
       <Box flexDirection="column">
