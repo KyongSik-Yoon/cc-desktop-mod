@@ -12,12 +12,14 @@ const ko = {
   planReviseLabel: '고칠 점',
   planRevise: '고쳐 달라고 하기',
   planReviseEmpty: '고칠 점을 적어 주세요',
-  planHint: '1 승인 · 2 계획 보기 · 9 기본 창 · Esc 취소',
+  planHint: '1 승인 · 2 계획 보기 · ctrl+x tab 고칠 점 쓰기 · 9 기본 창 · Esc 취소',
+  // 띠가 낮아 고칠 점 칸이 없을 때의 힌트
+  planHintNoField: '1 승인 · 2 계획 보기 · 9 기본 창 · Esc 취소',
   // 띠를 접어 카드가 안 보일 때 펴는 키(desk-look 의 질문 카드 힌트와 같다)
   bandToggle: '안 보이면 ctrl+x ctrl+a',
   toDefault: '기본 창으로',
   close: '닫기',
-  otherPlaceholder: '두 번 클릭해서 입력',
+  revisePlaceholder: '▸ 클릭하거나 ctrl+x tab 을 눌러 입력',
 }
 
 export type Strings = typeof ko
@@ -30,11 +32,12 @@ const en: Strings = {
   planReviseLabel: 'Changes',
   planRevise: 'Ask for changes',
   planReviseEmpty: 'Write what to change first',
-  planHint: '1 approve · 2 view plan · 9 default dialog · Esc cancel',
+  planHint: '1 approve · 2 view plan · ctrl+x tab write changes · 9 default dialog · Esc cancel',
+  planHintNoField: '1 approve · 2 view plan · 9 default dialog · Esc cancel',
   bandToggle: 'hidden? ctrl+x ctrl+a',
   toDefault: 'Default dialog',
   close: 'Close',
-  otherPlaceholder: 'double-click to type',
+  revisePlaceholder: '▸ click or press ctrl+x tab to write what to change',
 }
 
 export const T: Strings = { ...en }
