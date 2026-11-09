@@ -3241,7 +3241,7 @@ function planCard(els: Els, $: EngineInterface, call: RunCall, openState: Record
       : call.isErrored
         ? { label: T.planRejected, color: COLORS.danger }
         : { label: T.planApproved, color: COLORS.success }
-  const width = Math.max(30, Math.min(columns - 2, 100))
+  const width = Math.max(30, columns - 2)
   const { head, hidden } = splitPlan(plan, PLAN_ROWS)
   const empty = isWaiting ? T.planInDialog : T.planMissing
   return (
