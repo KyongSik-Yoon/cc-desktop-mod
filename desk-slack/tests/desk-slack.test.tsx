@@ -209,7 +209,7 @@ describe('Slack 패널', () => {
     expect(inboxCall(ME, 100).args).toMatchObject({ filters: 'to:<@U0ME>', channel_types: 'im,mpim', after: '100', sort: 'timestamp' })
   })
 
-  // 엔진 흉내: 도구 목록·판정·MCP 응답. rules 가 false 인 도구는 허용되지 않는다(desk-grant 가 낡았을 때).
+  // 엔진 흉내: 도구 목록·판정·MCP 응답. rules 가 false 인 도구는 세션 판정이 ask 다.
   // isClockMocked: 시계는 테스트가 mock.clock 으로 따로 돌린다.
   function slackEngine(on: On, inbox: () => string, options: { rules?: (tool: string) => boolean; surfaces?: () => RenderSurface[]; isClockMocked?: boolean; store?: Record<string, unknown> } = {}) {
     const { rules = () => true, surfaces = () => ['terminal'] } = options
@@ -253,19 +253,16 @@ describe('Slack 패널', () => {
     return { calls, notified }
   }
 
-  // desk-grant 가 낡으면 허용되지 않는 도구가 생긴다(없으면 엔진이 플러그인을 끈다). 스레드 도구도 다른 도구와 같다.
-  for (const missing of ['slack_send_message', 'slack_read_thread']) {
-    test(`${missing} 가 허용되지 않으면 Slack 을 부르지 않고 desk-grant 를 올리라고 안내한다`, KO, async ($, on) => {
-      const { calls } = slackEngine(on, () => search(), { rules: tool => !tool.endsWith(missing) })
-      await $.command.run({ command: 'desk-slack', args: '' } as never)
-      expect(calls).toEqual([])
-      const pane = await $.ui.mount({ plugin: 'desk-slack', surface: 'terminal', component: 'Pane', requestId: 'desk-slack', viewport: VIEWPORT, props: { title: 'Slack', isFocused: true, bodyColumns: 96 } as never })
-      const drawn = JSON.stringify(await pane.drawn())
-      expect(drawn).toContain('desk-grant 가 이 패널의')
-      expect(drawn).toContain('/desk-update 뒤 /reload-plugins')
-      await pane.unmount()
-    })
-  }
+  // 세션 판정이 ask 여도 플러그인의 $.mcp.call 은 창 없이 돈다(2.1.321 실측). 판정을 보고 멈추거나 안내하지 않는다.
+  test('도구 판정이 ask 여도 Slack 을 부르고 허용 안내를 띄우지 않는다', KO, async ($, on) => {
+    const { calls } = slackEngine(on, () => search(), { rules: () => false })
+    await $.command.run({ command: 'desk-slack', args: '' } as never)
+    expect(calls.map(call => call.tool)).toContain('slack_search_public_and_private')
+    const pane = await $.ui.mount({ plugin: 'desk-slack', surface: 'terminal', component: 'Pane', requestId: 'desk-slack', viewport: VIEWPORT, props: { title: 'Slack', isFocused: true, bodyColumns: 96 } as never })
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).not.toContain('desk-grant')
+    await pane.unmount()
+  })
 
   test('1분 확인: 맡은 세션이 3분 넘게 소식이 없으면 넘겨받되, 터미널이 없는 세션은 맡지 않는다', KO, async ($, on) => {
     let surfaces: RenderSurface[] = []

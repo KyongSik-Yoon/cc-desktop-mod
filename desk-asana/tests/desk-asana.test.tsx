@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, test, type TestBody } from 'claude-code/testing'
 
-import { asanaPrompt, commentCall, doneSince, dueChip, findAsanaServer, groupTasks, keyFieldNames, keySearchCalls, keyFieldGids, listCalls, mentionHtml, nextOffset, notesMarkdown, paneTools, projectTasksCall, searchCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
+import { asanaPrompt, commentCall, doneSince, dueChip, findAsanaServer, groupTasks, keyFieldNames, keySearchCalls, keyFieldGids, listCalls, mentionHtml, nextOffset, notesMarkdown, projectTasksCall, searchCall, storyPatch, storyView, textDiff, toDetail, toProjects, toStory, toTasks, updateCall, updateProblem } from '../hooks/asana'
 import { setLang } from '../hooks/i18n'
 import { parseBlocks, parseInline, plainText } from '../hooks/shared/markdown'
 
@@ -33,9 +33,6 @@ describe('Asana 패널', () => {
     expect(findAsanaServer(V1)).toEqual({ name: 'claude_ai_asana', dialect: 'v1' })
     expect(findAsanaServer(V2.filter(name => !name.endsWith('add_comment')))).toBeNull()
     expect(findAsanaServer(['mcp__other__get_my_tasks'])).toBeNull()
-    expect(paneTools({ name: 'asana-v2', dialect: 'v2' })).toEqual(V2)
-    // v1 은 목록과 검색이 같은 도구라 한 번만
-    expect(paneTools({ name: 'claude_ai_asana', dialect: 'v1' })).toEqual(V1)
   })
 
   test('상세는 v2 댓글과 v1 활동에서 댓글만 고르고, 드롭다운 필드만 바꿀 수 있게 둔다', () => {
@@ -159,7 +156,7 @@ describe('Asana 패널', () => {
       return { isFilled: true } as never
     })
     on('tool.list', () => ({ value: [...V1, ...V2].map(name => ({ name, description: '', mcp: true })) }))
-    // 댓글 달기만 허용되지 않는다(desk-grant 의 목록이 낡았을 때)
+    // 세션 판정은 ask 여도 플러그인의 $.mcp.call 은 창 없이 돈다(2.1.321). 판정으로 안내하지 않는다
     on('tool.check', ($, e) => ({ decision: e.tool === 'mcp__asana-v2__add_comment' ? 'ask' : 'allow' }) as never)
     on('mcp.call', ($, e) => {
       calls.push({ server: e.server, tool: e.tool, args: e.args })
@@ -202,8 +199,7 @@ describe('Asana 패널', () => {
     expect(drawn).toContain('Support')
     expect(drawn).toContain('프로젝트 없음')
     expect(drawn).toContain('10/10')
-    expect(drawn).toContain('desk-grant 가 이 패널의')
-    expect(drawn).toContain('/desk-update 뒤 /reload-plugins')
+    expect(drawn).not.toContain('desk-grant')
 
     await pane.press({ key: 'asana-task-1' })
     await wait(50)

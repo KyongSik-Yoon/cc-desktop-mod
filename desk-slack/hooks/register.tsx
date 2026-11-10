@@ -27,7 +27,6 @@ import {
   slackPrompt,
   threadCall,
   slackText,
-  slackTools,
   tsCompare,
   unreadCount,
 } from './slack'
@@ -102,14 +101,6 @@ async function findSlack($: EngineInterface): Promise<SlackServer | null> {
   return findSlackServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
 }
 
-// 허용되지 않는 Slack 도구(desk-grant 가 낡아 목록에 없다. desk-grant 가 아예 없으면 엔진이 이 플러그인을 끈다). 하나라도 있으면 Slack 을 부르지 않는다:
-// 받은 편지 확인은 타이머라 물어볼 사람이 없고, auto mode 분류기는 거절한다. $.tool.check 는 판정만 묻는다(창·분류기 없음).
-async function slackUnruled($: EngineInterface, server: SlackServer): Promise<string[]> {
-  const tools = slackTools(server)
-  const verdicts = await Promise.all(tools.map(tool => $.tool.check({ tool, input: {} }).catch(() => null)))
-  return tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
-}
-
 // $.store 는 떠 있는 세션끼리 같이 본다(2.1.302 실측). 모양이 다르면 빈 받은 편지.
 async function readInbox($: EngineInterface): Promise<SlackInbox> {
   const kept = (await $.store.get('slackInbox').catch(() => undefined)) as SlackInbox | undefined
@@ -118,7 +109,7 @@ async function readInbox($: EngineInterface): Promise<SlackInbox> {
 
 async function saveInbox($: EngineInterface, inbox: SlackInbox) {
   await $.store.set('slackInbox', inbox)
-  await setSlack($, (state): SlackState => ({ status: state?.status ?? 'ok', server: state?.server ?? null, unruled: state?.unruled ?? [], inbox, error: state?.error }))
+  await setSlack($, (state): SlackState => ({ status: state?.status ?? 'ok', server: state?.server ?? null, inbox, error: state?.error }))
 }
 
 // 내 Slack UID. 서버마다 한 번 읽어 둔다.
@@ -142,29 +133,27 @@ async function pollSlack($: EngineInterface, force: boolean) {
     const server = shown?.server ?? (await findSlack($))
     const kept = await readInbox($)
     const put = (state: Omit<SlackState, 'inbox'>, inbox = kept) => setSlack($, (): SlackState => ({ ...state, inbox }))
-    if (server === null) return void (await put({ status: 'none', server: null, unruled: [] }))
-    const unruled = await slackUnruled($, server)
-    if (unruled.length > 0) return void (await put({ status: 'ok', server, unruled }))
+    if (server === null) return void (await put({ status: 'none', server: null }))
     const [session, now, surfaces] = await Promise.all([$.session.id().catch(() => ''), $.clock.now(), $.session.surfaces().catch((): readonly RenderSurface[] => [])])
     const poller = (await $.store.get('slackPoller').catch(() => undefined)) as SlackPoller | undefined
     // 터미널이 없는 세션(SDK 등)은 알림을 띄울 곳이 없어 맡지 않는다: 맡으면 아무도 알리지 않게 된다
     const canWatch = surfaces.includes('terminal')
-    if (!force && (!canWatch || !holdsLease(poller ?? null, session, now))) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server, unruled }))
+    if (!force && (!canWatch || !holdsLease(poller ?? null, session, now))) return void (await put({ status: shown?.status === 'loading' ? 'ok' : (shown?.status ?? 'ok'), server }))
     await $.store.set('slackPoller', { session, at: now })
-    if (force) await put({ status: 'loading', server, unruled })
+    if (force) await put({ status: 'loading', server })
     const me = await slackMe($, server)
-    if (me === null) return void (await put({ status: 'failed', server, unruled, error: T.slackNoUser }))
+    if (me === null) return void (await put({ status: 'failed', server, error: T.slackNoUser }))
     const nowS = Math.floor(now / 1000)
     const afterS = kept.watermark === null ? nowS - FIRST_FILL_S : Number(kept.watermark.split('.')[0])
     const got = await callSlack($, server, inboxCall(me, afterS), 'results')
-    if (!got.ok) return void (await put({ status: 'failed', server, unruled, error: got.error }))
+    if (!got.ok) return void (await put({ status: 'failed', server, error: got.error }))
     // 그사이 다른 세션·패널이 방을 닫았을 수 있어 넣기 바로 앞에서 다시 읽는다
     const latest = await readInbox($)
     const merged = mergeInbox(latest, parseSearch(got.text), me, nowS)
     const fresh = merged.fresh.filter(message => latest.notified === null || tsCompare(message.ts, latest.notified) > 0)
     const inbox: SlackInbox = { ...merged.inbox, notified: fresh.length > 0 ? fresh[fresh.length - 1]!.ts : (latest.notified ?? merged.inbox.watermark) }
     await $.store.set('slackInbox', inbox)
-    await put({ status: 'ok', server, unruled }, inbox)
+    await put({ status: 'ok', server }, inbox)
     if (!slackNotify) return
     for (const notice of notices(fresh, inbox, T.slackMore)) {
       void $.ui.notify(notice.text, { title: notice.title }).catch(() => undefined)
@@ -266,7 +255,7 @@ function refreshSessionState($: EngineInterface) {
   void update($, ready, () => true).catch(() => undefined)
   // 받은 편지 칩은 store 에서 바로.
   void readInbox($)
-    .then(inbox => setSlack($, (state): SlackState => state ?? { status: 'loading', server: null, unruled: [], inbox }))
+    .then(inbox => setSlack($, (state): SlackState => state ?? { status: 'loading', server: null, inbox }))
     .catch(() => undefined)
 }
 
@@ -491,7 +480,6 @@ export const register: Register = (on, options) => {
         )}
       </Box>
     )
-    const unruled = (state?.unruled.length ?? 0) > 0 && <Text color={COLORS.warning}>{T.slackUnruled}</Text>
     const message =
       state?.status === 'none'
         ? T.slackNoServer
@@ -524,7 +512,6 @@ export const register: Register = (on, options) => {
     return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {head}
-        {unruled}
         {message !== null && <Text color={state?.status === 'failed' ? COLORS.danger : COLORS.muted}>{message}</Text>}
         {rows.length > 0 && <Box flexDirection="column">{rows}</Box>}
       </Box>

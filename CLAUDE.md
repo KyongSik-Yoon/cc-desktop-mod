@@ -10,12 +10,12 @@ mod API 는 EARLY ACCESS 라 버전마다 바뀌고, 분기는 코드와 테스�
 desk-look 의 `desk-look/.claude-plugin/plugin.json` 버전을 올리는 커밋에 그 버전의 릴리즈 노트 `.github/release-notes/vX.Y.Z.md` 를 함께 넣는다. 커밋이 main 에 들어오면 `.github/workflows/release.yml` 이 그 버전 커밋에 태그 `vX.Y.Z` 를 달고 GitHub 릴리즈를 만든다. 버전 하나에 릴리즈 하나이고, 여러 버전을 쌓았다가 묶어 올리지 않는다.
 클라우드 세션은 태그·릴리즈를 직접 만들 수 없어서(403) 이렇게 Actions 에 맡긴다. 노트 파일이 없으면 워크플로가 빨갛게 실패하니, 노트를 더해 main 에 넣으면 다시 돈다. 이미 있는 태그는 건드리지 않는다.
 
-같은 마켓의 `desk-asana`·`desk-slack`·`desk-plan`·`desk-review`·`desk-grant` 는 desk-look 과 같은 버전으로 함께 올린다(0.55.0 에서 Asana·Slack 패널을, 0.69.0 에서 계획 카드를 desk-look 에서 떼어 냄, 0.70.0 에서 desk-grant 를, 0.73.0 에서 desk-review 를 더함). 태그·릴리즈는 desk-look 버전 하나이고, 버전이 하나라도 다르면 워크플로가 실패한다.
+같은 마켓의 `desk-asana`·`desk-slack`·`desk-plan`·`desk-review` 는 desk-look 과 같은 버전으로 함께 올린다(0.55.0 에서 Asana·Slack 패널을, 0.69.0 에서 계획 카드를 desk-look 에서 떼어 냄, 0.73.0 에서 desk-review 를 더함). 태그·릴리즈는 desk-look 버전 하나이고, 버전이 하나라도 다르면 워크플로가 실패한다.
 따로 올리면 `/desk-update` 와 릴리즈 노트가 플러그인마다 갈라지고, 플러그인들이 서로의 상태(`desk-look.lang`·`folded`, `desk-slack.unread`, `desk-plan.planAsk`, `desk-review.diffAt` 등)를 읽어 함께 바뀌기 때문이다.
 Anthropic 플러그인 디렉터리에는 desk-look 만 제출한다. 권한 창에 대신 답하는 계획 카드(`classic.PreToolUse` allow)는 디렉터리가 막는 모양이라 desk-plan 으로 떼어 냈고, 디렉터리가 막거나 리뷰어에게 넘기는 코드는 desk-look 에 다시 넣지 않는다.
 desk-asana·desk-slack 은 desk-look 의 `markdown.tsx`·`diagram.ts`·`vendor/lovely-mermaid*` 를 각자의 `hooks/shared/` 에 복사해 쓴다(설치본은 플러그인 폴더만 받으므로 `../desk-look` 을 가져올 수 없다). 형제 공용 도우미 `desk-slack/hooks/util.tsx` 도 desk-asana 로 복사하고, 그 `cellWidth` 는 desk-look `markdown.tsx` 의 것과 같아야 한다. 원본을 고친 커밋에는 `scripts/sync-shared.sh` 로 복사본도 함께 넣는다. 어긋나면 워크플로의 `--check` 가 실패한다.
 
-desk-asana·desk-slack 의 `$.mcp.call` 은 사용자 allow 규칙이 아니라 desk-grant 가 허용한다(두 플러그인의 `dependencies`). 플러그인 자신의 `tool.check` 훅은 버튼·입력칸 클로저와 타이머의 호출에 돌지 않고 다른 플러그인의 훅은 돌기 때문이다(2.1.316 실측). desk-grant 는 `next.origin.plugin` 이 형제이고 도구가 그 형제의 목록에 있을 때만 allow 하며, 모델의 호출은 건드리지 않는다. `ASANA_TOOLS`·`SLACK_TOOLS` 에 도구를 더하면 `desk-grant/hooks/register.ts` 의 `GRANTS` 에도 더한다(`sync-shared.sh --check` 가 비교한다). desk-grant 가 없으면 엔진이 두 플러그인을 끄고(`/plugin` Errors), 업데이트로는 새 의존 플러그인이 깔리지 않는다. 그래서 기존 사용자에게는 노트·README 로 설치를 안내한다. desk-grant 는 디렉터리에 내지 않고, desk-look 은 desk-grant 를 설치하지 않는다(`/desk-update` 는 올리기만. 사용자 결정).
+플러그인 자신의 `$.mcp.call` 은 2.1.321 부터 허용 규칙 없이 창·분류기 없이 돈다(명령 훅·버튼 클로저·타이머, default·auto·dontAsk 모두 실측). deny 규칙은 도구를 세션에서 빼므로 그 호출만 실패한다. `$.tool.check` 는 그래도 `ask` 를 답하니, 그 판정으로 "허용 안 됨" 을 안내하지 않는다. 그 전에 형제 호출을 allow 하던 desk-grant 는 0.76.0 에서 마켓에서 뺐다(사용자 결정. 깔린 것은 노트로 지우라고만 안내).
 
 손으로 만들어야 할 때(Actions 가 막혔을 때):
 
@@ -50,7 +50,7 @@ gh release create vX.Y.Z --verify-tag --title "desk-look X.Y.Z" --notes-file .gi
   - `tool.check` 훅이 돌려줄 수 있는 것은 `return next(e)` 와 고정된 `'deny'`·`'ask'` 뿐이다. allow 는 어떤 모양이든 실패한다(0.29.0 Asana 자기 허용).
   - `const v = await next(e); …; return v` 처럼 판정을 엿보는 관찰 훅도 막힌다(MOD_PERMISSION_ANSWER_UNREAD, 0.67.2~0.68.5).
   - `classic.PreToolUse` 가 allow·`updatedInput` 을 돌려주는 것도 막힌다(0.68.6). 그래서 계획 카드를 desk-plan 으로 떼어 냈다.
-  - 권한 검사를 받는 호출(`$.mcp.call` 등)은 사용자의 `permissions.allow` 규칙을 전제로 한다. 빠진 규칙은 `$.tool.check` 로 찾아 안내한다.
+  - 플러그인의 `$.mcp.call`·`$.tool.call` 은 2.1.321 부터 허용 규칙 없이 돈다. `$.tool.check` 는 여전히 `ask` 를 답하니 그 판정으로 허용 규칙을 안내하지 않는다.
 - `f('*', …)` 꼴 호출은 모든 도구에 거는 훅 등록으로 읽힌다(0.54.0 `wrapInline('*', text)`). `'*'` 를 첫 인자로 두지 않는다.
 - 디렉터리가 모르는 이벤트에 훅을 걸면 엔진 타입에 있어도 막힌다(MOD_HOOKS_UNKNOWN_EVENT, `prompt.change`, 0.65.0 에서 뺌). 새 이벤트는 쓰기 전에 디렉터리가 아는지부터 본다. `state.set` 은 통과했다(0.69.1).
 

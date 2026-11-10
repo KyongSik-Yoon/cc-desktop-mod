@@ -76,12 +76,6 @@ export function findAsanaServer(names: readonly string[]): AsanaServer | null {
   return null
 }
 
-// 패널이 그 서버에서 부르는 도구의 전체 이름. 플러그인의 $.mcp.call 도 권한 검사를 받아(auto mode 분류기는 거절,
-// 기본 모드는 누를 때마다 창) desk-grant 플러그인이 이 호출들을 허용한다(desk-grant/hooks/register.ts 의 목록과 같아야 한다).
-export function paneTools(server: AsanaServer): string[] {
-  return [...new Set<string>(Object.values(ASANA_TOOLS[server.dialect]))].map(tool => `mcp__${server.name}__${tool}`)
-}
-
 export type AsanaCall = { tool: string; args: Record<string, unknown> }
 
 // 작업 유형에 따라 보류·배포 대기 같은 상태도 Asana 에선 완료라, 열린 태스크와 함께 이 날수 안에 완료된 태스크도 읽어
