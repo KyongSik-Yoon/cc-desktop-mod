@@ -19,7 +19,6 @@ import {
   meCall,
   myGid,
   nextOffset,
-  paneTools,
   projectsCall,
   projectTasksCall,
   resultData,
@@ -141,33 +140,26 @@ async function findAsana($: EngineInterface): Promise<AsanaServer | null> {
   return findAsanaServer(tools.filter(tool => tool.mcp).map(tool => tool.name))
 }
 
-// 패널 도구 중 허용되지 않는 것(desk-grant 가 낡아 목록에 없다. desk-grant 가 아예 없으면 엔진이 이 플러그인을 끈다). $.tool.check 는 판정만 묻는다(창도 분류기도 없다).
-async function findUnruled($: EngineInterface, server: AsanaServer) {
-  const tools = paneTools(server)
-  const verdicts = await Promise.all(tools.map(tool => $.tool.check({ tool, input: {} }).catch(() => null)))
-  return tools.filter((_, index) => verdicts[index]?.decision !== 'allow')
-}
-
 let asanaFetch: Promise<void> | null = null
 
 // 목록을 다시 읽는다. 읽는 동안은 전에 읽은 목록을 그대로 보인다(↻ 가 … 로).
 async function refreshAsana($: EngineInterface) {
   if (asanaFetch) return asanaFetch
   asanaFetch = (async () => {
-    await update($, asana, (state): AsanaState => ({ status: 'loading', server: state?.server ?? null, tasks: state?.tasks ?? [], unruled: state?.unruled ?? [] }))
+    await update($, asana, (state): AsanaState => ({ status: 'loading', server: state?.server ?? null, tasks: state?.tasks ?? [] }))
     const server = await findAsana($)
     if (server === null) {
-      await update($, asana, (): AsanaState => ({ status: 'none', server: null, tasks: [], unruled: [] }))
+      await update($, asana, (): AsanaState => ({ status: 'none', server: null, tasks: [] }))
       return
     }
     const since = doneSince(await $.clock.now())
-    const [unruled, ...gots] = await Promise.all([findUnruled($, server), ...listCalls(server, since, asanaKeyFields).map(call => readPages($, server, call, LIST_MAX))])
+    const gots = await Promise.all(listCalls(server, since, asanaKeyFields).map(call => readPages($, server, call, LIST_MAX)))
     const failed = gots.find(got => !got.ok)
     for (const got of gots) if (got.ok) keyFieldGids(got.data, asanaKeyFields).forEach(gid => asanaKeyGids.add(gid))
     await update($, asana, (): AsanaState =>
       failed && !failed.ok
-        ? { status: 'failed', server, tasks: [], unruled, error: failed.error }
-        : { status: 'ok', server, tasks: gots.flatMap(got => (got.ok ? toTasks(got.data, asanaKeyFields) : [])), unruled },
+        ? { status: 'failed', server, tasks: [], error: failed.error }
+        : { status: 'ok', server, tasks: gots.flatMap(got => (got.ok ? toTasks(got.data, asanaKeyFields) : [])) },
     )
   })().finally(() => {
     asanaFetch = null
@@ -951,7 +943,6 @@ export const register: Register = (on, options) => {
         ))}
       </Box>
     )
-    const unruled = (state?.unruled.length ?? 0) > 0 && <Text color={COLORS.warning}>{T.asanaUnruled}</Text>
     const isUnready = state === null || state.status === 'none' || (state.status === 'loading' && state.server === null)
 
     // 프로젝트 탭: 펼친 프로젝트가 있으면 그 열린 태스크를 섹션별로(담당자 누구든), 아니면 내가 멤버인 프로젝트.
@@ -977,7 +968,6 @@ export const register: Register = (on, options) => {
         return (
           <Box flexDirection="column" rowGap={1}>
             {tabs}
-            {unruled}
             <Box flexDirection="column">
               <Box columnGap={1}>
                 <Button key="asana-project-back" plain dimColor hotkey="b" label={T.asanaProjectsBack} onPress={() => void closeAsanaProject($)} />
@@ -1046,7 +1036,6 @@ export const register: Register = (on, options) => {
       return paneJumps($, els, e, (
         <Box flexDirection="column" rowGap={1}>
           {tabs}
-          {unruled}
           <Box columnGap={1}>
             <Text color={COLORS.text} weight="semibold">
               {T.asanaMyProjects(mine.length)}
@@ -1089,7 +1078,6 @@ export const register: Register = (on, options) => {
     return paneJumps($, els, e, (
       <Box flexDirection="column" rowGap={1}>
         {!isUnready && tabs}
-        {unruled}
         <Box columnGap={1}>
           <Text color={COLORS.text} weight="semibold" wrap="truncate-end">
             {search ? T.asanaFound(clip(search.query, Math.max(8, columns - 20)), tasks.length) : T.asanaMine(tasks.length)}

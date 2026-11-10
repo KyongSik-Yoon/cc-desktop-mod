@@ -21,9 +21,6 @@
   "supportUrl": "https://github.com/KyongSik-Yoon/cc-desktop-mod/issues",
   "homepage": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
   "repository": "https://github.com/KyongSik-Yoon/cc-desktop-mod",
-  "dependencies": [
-    "desk-grant"
-  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "language": {

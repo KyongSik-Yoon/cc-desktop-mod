@@ -42,8 +42,7 @@ export type AsanaDetail = {
 }
 export type AsanaSubtask = { gid: string; name: string; completed: boolean | null }
 // status: none 은 Asana 서버가 연결돼 있지 않음, failed 는 읽지 못함(error).
-// unruled: 패널이 부르는 도구 중 허용되지 않아 엔진이 물어보거나 막을 것(paneTools). desk-grant 가 낡았을 때 생긴다.
-export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; unruled: string[]; error?: string }
+export type AsanaState = { status: 'loading' | 'ok' | 'none' | 'failed'; server: AsanaServer | null; tasks: AsanaTask[]; error?: string }
 // trail: 하위·상위 태스크로 들어오기 전에 보던 태스크들(앞이 먼저). 뒤로는 끝의 것으로, 비었으면 목록으로. 0.72.0 전에 연 상세에는 없다.
 export type AsanaView = { gid: string; status: 'loading' | 'ok' | 'failed'; task: AsanaDetail | null; error?: string; trail?: string[] }
 export type AsanaUser = { gid: string; name: string; email: string | null }
