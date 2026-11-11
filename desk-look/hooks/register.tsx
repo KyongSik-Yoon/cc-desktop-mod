@@ -5321,9 +5321,9 @@ export const register: Register = (on, options) => {
   })
 }
 
-// 명령 출력이 마크다운인지: 표·제목·코드 블록·인용이 하나라도 있으면.
+// 명령 출력이 마크다운인지: 표·제목·펜스 코드 블록·인용이 하나라도 있으면. 들여 쓴 줄(git log 의 메시지 등)은 코드로 치지 않는다.
 export function looksLikeMarkdown(text: string): boolean {
-  return parseBlocks(text).some(block => block.kind === 'table' || block.kind === 'heading' || block.kind === 'code' || block.kind === 'quote')
+  return parseBlocks(text).some(block => block.kind === 'table' || block.kind === 'heading' || (block.kind === 'code' && !block.indented) || block.kind === 'quote')
 }
 
 export function hintTail(keys: string, isDraft: boolean): string {

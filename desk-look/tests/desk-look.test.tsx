@@ -242,6 +242,17 @@ describe('응답 렌더링', () => {
     expect(drawn).toContain('◦')
     expect(await listed.find({ type: 'Text', text: /```/ })).toBeUndefined()
     await listed.unmount()
+
+    // 빈 항목도 한 줄을 차지한다(글머리가 다음 항목 글머리와 겹치지 않게)
+    const empty = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '-\n- b', isFirstOfReply: true },
+    })
+    expect(JSON.stringify(await empty.drawn())).toContain('"children":[" "]')
+    await empty.unmount()
   })
 
   test('데스크톱 화면에서는 엔진 그림을 그대로 둔다', KO, async ($, on) => {
@@ -534,6 +545,15 @@ test('순수 함수', KO, async () => {
   // 할 일 항목은 [ ]·[x] 를 글 앞에 둔다
   expect(parseBlocks('- [ ] a\n- [x] b')).toEqual([
     { kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: '[ ] a' }] }, { marker: '', blocks: [{ kind: 'paragraph', text: '[x] b' }] }] },
+  ])
+  // 빈 줄이 낀 할 일 항목은 marked 가 이미 붙인 [ ] 를 다시 붙이지 않는다
+  expect(parseBlocks('- [ ] a\n\n  b')[0]).toEqual({ kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: '[ ] a' }, { kind: 'paragraph', text: 'b' }] }] })
+  // 표 칸: 백틱 안 | 에서는 나누지 않는다
+  expect(parseBlocks('| a | b |\n|---|---|\n| `x|y` | z |')[0]).toEqual({ kind: 'table', header: ['a', 'b'], align: ['left', 'left'], rows: [['`x|y`', 'z']] })
+  // 참조 정의는 글로 남긴다(인라인이 참조 링크를 모른다)
+  expect(parseBlocks('see [doc][1]\n\n[1]: https://x.y')).toEqual([
+    { kind: 'paragraph', text: 'see [doc][1]' },
+    { kind: 'paragraph', text: '[1]: https://x.y' },
   ])
   const numbered = blocks[4]
   expect(numbered?.kind === 'list' && numbered.items.map(item => item.marker)).toEqual(['1.'])
@@ -1999,6 +2019,9 @@ test('명령 출력 마크다운 판별과 질문 힌트', KO, async $ => {
   expect(looksLikeMarkdown('| a | b |\n|---|---|\n| 1 | 2 |')).toBe(true)
   expect(looksLikeMarkdown('# 제목\n본문')).toBe(true)
   expect(looksLikeMarkdown('Total cost: $0.12\nTotal duration: 3m')).toBe(false)
+  // 들여 쓴 줄(git log 메시지)은 코드 블록으로 치지 않는다. 펜스는 친다
+  expect(looksLikeMarkdown('commit abc\nAuthor: x\nDate: y\n\n    message')).toBe(false)
+  expect(looksLikeMarkdown('```\nx\n```')).toBe(true)
   expect(askHint({ kind: 'choice', multiSelect: true })).toContain('0 제출')
   // 엔진이 띠를 접으면 카드가 안 보여 힌트 줄(접혀도 보임)에 펴는 키를 둔다: tail 은 끝에서 잘리니 맨 앞에,
   // 입력칸에 글이 있으면 숫자 키가 버튼을 누르지 않으니 펴는 키만

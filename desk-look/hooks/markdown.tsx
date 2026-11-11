@@ -29,7 +29,8 @@ type Align = 'left' | 'center' | 'right'
 export type Block =
   | { kind: 'heading'; level: number; text: string }
   | { kind: 'paragraph'; text: string }
-  | { kind: 'code'; language?: string; source: string }
+  // indented: 펜스 없이 네 칸 들여 쓴 코드(명령 출력의 들여 쓴 줄도 이렇게 읽히니 마크다운 판정에는 넣지 않는다)
+  | { kind: 'code'; language?: string; source: string; indented?: true }
   | { kind: 'table'; header: string[]; align: Align[]; rows: string[][] }
   // marker 는 번호 목록일 때 쓴 그대로의 번호(1. 2) 등). 글머리 목록은 그리는 쪽이 깊이마다 고른다.
   | { kind: 'list'; ordered: boolean; items: { marker: string; blocks: Block[] }[] }
@@ -68,25 +69,56 @@ const BULLETS = ['•', '◦', '▪']
 // 블록 구조는 marked(엔진 바이너리에도 들어 있는 파서)의 Lexer 로 읽고, 인라인은 아래 parseInline 이 맡는다.
 // breaks 는 채팅 글용: 문단 안의 줄바꿈을 그대로 둔다(GFM 의 breaks). 아니면 CommonMark 처럼 한 칸으로 잇는다.
 // 목록이 많은 8 KB 글이 1.4ms 쯤 걸려 예전 손 파서(0.1ms)보다 느리다. 같은 글을 스크롤·다시 그리기마다 또 읽지 않게
-// 최근에 쓴 결과를 몇 개 둔다(꺼낼 때 맨 뒤로 옮겨, 스트리밍 중 새 글이 화면의 다른 글을 밀어내지 않게).
+// 최근에 쓴 결과를 둔다. 개수가 아니라 글 길이 합계로 자른다: 긴 대화 전체가 들어가고, 큰 미리보기 글 몇 개로 메모리가
+// 커지지 않게. 꺼낼 때 맨 뒤로 옮겨 스트리밍 중 새로 들어오는 앞부분 글들이 화면에 보이는 글을 밀어내지 않게 한다.
 // 블록은 그리는 쪽이 고치지 않으므로 나눠 써도 된다.
-const parsed = { prose: new Map<string, Block[]>(), chat: new Map<string, Block[]>() }
-const PARSED_KEEP = 32
+const parsed = new Map<string, { prose?: Block[]; chat?: Block[] }>()
+const PARSED_CHARS = 4_000_000
+const PARSED_KEEP = 1000
+let parsedChars = 0
 
 export function parseBlocks(markdown: string, breaks = false): Block[] {
-  const cache = breaks ? parsed.chat : parsed.prose
-  const known = cache.get(markdown)
-  cache.delete(markdown)
+  const entry = parsed.get(markdown) ?? {}
+  if (parsed.delete(markdown)) parsedChars -= markdown.length
   // 인라인 토큰은 쓰지 않으니 블록 단계만 돈다(lex() 는 인라인까지 만들어 두 배쯤 느리다).
-  const blocks = known ?? toBlocks(new Lexer({ gfm: true }).blockTokens(markdown.replace(/\r\n?/g, '\n')), breaks)
-  if (cache.size >= PARSED_KEEP) cache.delete(cache.keys().next().value ?? '')
-  cache.set(markdown, blocks)
+  const blocks = (entry[breaks ? 'chat' : 'prose'] ??= toBlocks(new Lexer({ gfm: true }).blockTokens(markdown.replace(/\r\n?/g, '\n')), breaks))
+  parsed.set(markdown, entry)
+  parsedChars += markdown.length
+  for (const key of parsed.keys()) {
+    if (parsed.size === 1 || (parsedChars <= PARSED_CHARS && parsed.size <= PARSED_KEEP)) break
+    parsed.delete(key)
+    parsedChars -= key.length
+  }
   return blocks
 }
 
 // 채팅 글은 펜스 없이 붙여 넣은 코드가 많아 breaks 면 줄 앞 들여쓰기를 남긴다.
 const joinLines = (text: string, breaks: boolean) =>
   breaks ? text.split('\n').map(line => line.trimEnd()).join('\n') : text.split('\n').map(line => line.trim()).join(' ')
+
+function splitRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+  const cells: string[] = []
+  let current = ''
+  let inCode = false
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]
+    if (ch === '\\' && trimmed[i + 1] === '|') {
+      current += '|'
+      i++
+    } else if (ch === '`') {
+      inCode = !inCode
+      current += ch
+    } else if (ch === '|' && !inCode) {
+      cells.push(current.trim())
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  cells.push(current.trim())
+  return cells
+}
 
 // 번호는 marked 가 다시 매기지 않고 글쓴이가 쓴 그대로 둔다.
 const numberOf = (raw: string) => /^\s*(\d+[.)])/.exec(raw)?.[1] ?? ''
@@ -96,7 +128,6 @@ function toBlocks(tokens: Token[], breaks: boolean): Block[] {
   for (const token of tokens) {
     switch (token.type) {
       case 'space':
-      case 'def':
       case 'checkbox':
         break
       case 'heading':
@@ -107,19 +138,22 @@ function toBlocks(tokens: Token[], breaks: boolean): Block[] {
         blocks.push({ kind: 'paragraph', text: joinLines(token.text ?? '', breaks) })
         break
       case 'code':
-        blocks.push({ kind: 'code', language: (token.lang ?? '').split(/\s/)[0] || undefined, source: token.text ?? '' })
+        blocks.push({
+          kind: 'code',
+          language: (token.lang ?? '').split(/\s/)[0] || undefined,
+          source: token.text ?? '',
+          ...(token.codeBlockStyle === 'indented' ? { indented: true as const } : {}),
+        })
         break
       case 'hr':
         blocks.push({ kind: 'rule' })
         break
-      case 'table':
-        blocks.push({
-          kind: 'table',
-          header: token.header.map((cell: Token) => cell.text),
-          align: token.align.map((align: Align | null) => align ?? 'left'),
-          rows: token.rows.map((row: Token[]) => row.map(cell => cell.text)),
-        })
+      case 'table': {
+        // 칸은 원문에서 다시 나눈다: marked 는 백틱 안 | 에서도 나눠(`a|b`) 코드가 갈리고 뒤 칸이 사라진다.
+        const [head = '', , ...rows] = token.raw.split('\n').filter((line: string) => line.trim() !== '')
+        blocks.push({ kind: 'table', header: splitRow(head), align: token.align.map((align: Align | null) => align ?? 'left'), rows: rows.map(splitRow) })
         break
+      }
       case 'blockquote':
         blocks.push({ kind: 'quote', blocks: toBlocks(token.tokens ?? [], breaks), raw: token.text ?? '' })
         break
@@ -129,15 +163,15 @@ function toBlocks(tokens: Token[], breaks: boolean): Block[] {
           ordered: token.ordered === true,
           items: token.items.map((item: Token) => {
             const inner = toBlocks(item.tokens ?? [], breaks)
-            // 할 일 항목은 예전처럼 [ ]·[x] 를 글 앞에 둔다.
+            // 할 일 항목은 예전처럼 [ ]·[x] 를 글 앞에 둔다. 빈 줄이 낀 항목은 marked 가 이미 문단 글에 붙여 준다.
             const first = inner[0]
-            if (item.task && first?.kind === 'paragraph') first.text = `[${item.checked ? 'x' : ' '}] ${first.text}`
+            if (item.tokens?.[0]?.type === 'checkbox' && first?.kind === 'paragraph') first.text = `${item.tokens[0].raw}${first.text}`
             return { marker: token.ordered ? numberOf(item.raw) : '', blocks: inner }
           }),
         })
         break
       default:
-        // html 블록 등: 원문을 문단으로(예전과 같다).
+        // html 블록·참조 정의([1]: 주소) 등: 원문을 문단으로(예전과 같다). 인라인이 참조 링크를 모르니 정의라도 보이게.
         if (token.raw.trim() !== '') blocks.push({ kind: 'paragraph', text: joinLines(token.raw.trim(), breaks) })
     }
   }
@@ -515,13 +549,14 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
               {block.items.map((item, n) => {
                 const marker = block.ordered ? item.marker : (BULLETS[depth % BULLETS.length] ?? '•')
                 const width = cellWidth(marker) + 1
-                // 글머리는 띄워 두고 본문은 왼쪽 여백만 준다. 가로 줄(row)에 넣으면 본문 칸이 패널 폭을 한 칸 넘는다.
+                // 글머리는 띄워 두고 본문은 왼쪽 여백만 준다(room 어림값에 기대지 않고 부모 폭을 그대로 쓴다).
+                // 빈 항목은 한 줄을 차지해야 글머리가 다음 항목 글머리와 겹치지 않는다.
                 return (
                   <Box flexDirection="column" paddingLeft={width}>
                     <Box position="absolute" top={0} left={0}>
                       <Text color={colors.muted}>{marker}</Text>
                     </Box>
-                    {blocks(item.blocks, `${k}.${n}`, room - width, tone, depth + 1)}
+                    {item.blocks.length === 0 ? <Text> </Text> : blocks(item.blocks, `${k}.${n}`, room - width, tone, depth + 1)}
                   </Box>
                 )
               })}
