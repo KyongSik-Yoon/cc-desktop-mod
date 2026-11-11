@@ -210,11 +210,11 @@ describe('응답 렌더링', () => {
     // breaks(채팅 글): 문단 줄바꿈과 줄 앞 들여쓰기, 목록 항목의 이어지는 줄을 그대로 둔다. 기본은 한 칸으로 잇는다
     expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1')).toEqual([
       { kind: 'paragraph', text: 'a b' },
-      { kind: 'list', items: [{ level: 0, marker: '•', text: 'x { "k": 1' }] },
+      { kind: 'list', items: [{ marker: '-', blocks: [{ kind: 'paragraph', text: 'x { "k": 1' }] }] },
     ])
     expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1', true)).toEqual([
       { kind: 'paragraph', text: 'a\n  b' },
-      { kind: 'list', items: [{ level: 0, marker: '•', text: 'x\n{\n  "k": 1' }] },
+      { kind: 'list', items: [{ marker: '-', blocks: [{ kind: 'paragraph', text: 'x\n{\n  "k": 1' }] }] },
     ])
 
     const reply = await $.ui.mount({
@@ -227,6 +227,21 @@ describe('응답 렌더링', () => {
     expect(await reply.find({ type: 'Text', text: /Warning/ })).toBeDefined()
     expect(await reply.find({ type: 'Text', text: /\[!WARNING\]/ })).toBeUndefined()
     await reply.unmount()
+
+    // 목록 항목 안의 펜스는 코드 블록으로, 하위 목록은 ◦ 로 그린다
+    const listed = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '- 고침\n  ```diff\n  -gone\n  ```\n  - 안쪽', isFirstOfReply: true },
+    })
+    const drawn = JSON.stringify(await listed.drawn())
+    expect(drawn).toContain('"language":"diff"')
+    expect(drawn).toContain('"source":"-gone"')
+    expect(drawn).toContain('◦')
+    expect(await listed.find({ type: 'Text', text: /```/ })).toBeUndefined()
+    await listed.unmount()
   })
 
   test('데스크톱 화면에서는 엔진 그림을 그대로 둔다', KO, async ($, on) => {
@@ -509,12 +524,26 @@ test('순수 함수', KO, async () => {
   expect(editHunk('1\n2\n3\nold\n4', '1\n2\n3\nnew\n4')).toBe('@@ -2,4 +2,4 @@\n 2\n 3\n-old\n+new\n 4')
 
   const blocks = parseBlocks(REPLY)
-  expect(blocks.map(block => block.kind)).toEqual(['heading', 'paragraph', 'table', 'list', 'quote', 'code'])
+  // 글머리 목록 바로 밑의 번호 목록은 다른 목록이다(CommonMark)
+  expect(blocks.map(block => block.kind)).toEqual(['heading', 'paragraph', 'table', 'list', 'list', 'quote', 'code'])
   const table = blocks[2]
   expect(table?.kind === 'table' && table.align).toEqual(['left', 'center'])
   expect(table?.kind === 'table' && table.rows[1]).toEqual(['표 `md`', '통과'])
   const list = blocks[3]
-  expect(list?.kind === 'list' && list.items.map(item => [item.level, item.marker])).toEqual([[0, '•'], [1, '◦'], [0, '1.']])
+  expect(list?.kind === 'list' && list.items.map(item => [item.marker, item.blocks.map(block => block.kind)])).toEqual([['-', ['paragraph', 'list']]])
+  const numbered = blocks[4]
+  expect(numbered?.kind === 'list' && numbered.items.map(item => item.marker)).toEqual(['1.'])
+  // 항목 안에 들여 쓴 펜스는 그 항목의 코드 블록이다. diff 의 - 줄이 하위 항목이 되지 않는다
+  const fenced = parseBlocks('- 고침 a.kt\n  ```diff\n   keep\n  -gone\n  +new\n  ```\n- 다음')
+  expect(fenced).toEqual([
+    {
+      kind: 'list',
+      items: [
+        { marker: '-', blocks: [{ kind: 'paragraph', text: '고침 a.kt' }, { kind: 'code', language: 'diff', source: ' keep\n-gone\n+new' }] },
+        { marker: '-', blocks: [{ kind: 'paragraph', text: '다음' }] },
+      ],
+    },
+  ])
   expect(plainText(parseInline('**굵게** `코드` [링크](https://x.y) 끝'))).toBe('굵게 코드 링크 끝')
   expect(columnWidths([5, 5], 40)).toEqual([5, 5])
   // fill: 남는 폭을 비율대로 나눠 꽉 채운다
@@ -4832,6 +4861,10 @@ describe('미리보기 패널', () => {
     expect(html).toContain('<p>와! <img src="docs/p.png" alt="패널 사진"></p>')
     expect(html).toContain('<td style="text-align:right">2</td>')
     expect(previewHtml('# 그림 없음', '/r/a.md')).not.toContain('<script')
+    // 목록 항목 안의 펜스는 그 항목의 <pre> 로, 그 안의 mermaid 도 스크립트를 싣는다
+    const listed = previewHtml('- 고침\n  ```diff\n  -gone\n  ```\n- 그림\n  ```mermaid\n  graph TD; A-->B\n  ```', '/r/a.md')
+    expect(listed).toContain('<ul><li><p>고침</p>\n<pre><code data-lang="diff">-gone</code></pre></li>')
+    expect(listed).toContain('mermaid@11.4.1')
   })
 
   test('o: 문서를 엔진 임시 폴더에 HTML 로 쓰고 xdg-open 으로, 없으면 open 으로 연다', KO, async ($, on) => {

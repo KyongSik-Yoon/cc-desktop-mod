@@ -1,9 +1,10 @@
 import type { Elements, UiPressArgument } from 'claude-code'
 
 import { renderDiagram } from './diagram'
+import { Lexer, type Token } from './vendor/marked.js'
 
 // 데스크톱 앱 산문 스타일로 마크다운을 Box/Text 트리로 그린다.
-// 엔진의 Markdown 요소는 표·인용·코드 블록 모양을 바꿀 수 없어서 직접 파싱한다.
+// 엔진의 Markdown 요소는 표·인용·코드 블록 모양을 바꿀 수 없어서 직접 그린다. 블록 나누기만 marked 에 맡긴다.
 
 export type Palette = {
   text: string
@@ -30,7 +31,7 @@ export type Block =
   | { kind: 'paragraph'; text: string }
   | { kind: 'code'; language?: string; source: string }
   | { kind: 'table'; header: string[]; align: Align[]; rows: string[][] }
-  | { kind: 'list'; items: { level: number; marker: string; text: string }[] }
+  | { kind: 'list'; items: { marker: string; blocks: Block[] }[] }
   | { kind: 'quote'; blocks: Block[]; raw: string }
   | { kind: 'rule' }
 
@@ -53,8 +54,6 @@ export function cellWidth(text: string): number {
   return width
 }
 
-// 여는 펜스 뒤 info string 은 첫 단어만 언어로 쓰고 나머지(title="…" 등)는 버린다.
-const FENCE = /^\s*(`{3,}|~{3,})\s*([^\s`]*)[^`]*$/
 const MARKDOWN_FENCE = /^(markdown|md)$/i
 
 // 엔진 Code 는 빈 줄을 높이 0 으로 그려 빼먹는다. 빈 줄을 공백 한 칸으로 넘긴다.
@@ -63,160 +62,83 @@ export function codeSource(source: string): string {
   const text = source.replace(/\r\n?/g, '\n')
   return text === '' ? ' ' : text.replace(/^$(?=\n)/gm, ' ')
 }
-const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/
-const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/
 const BULLETS = ['•', '◦', '▪']
-const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/
-const TABLE_SEPARATOR = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
 
-function splitRow(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
-  const cells: string[] = []
-  let current = ''
-  let inCode = false
-  for (let i = 0; i < trimmed.length; i++) {
-    const ch = trimmed[i]
-    if (ch === '\\' && trimmed[i + 1] === '|') {
-      current += '|'
-      i++
-    } else if (ch === '`') {
-      inCode = !inCode
-      current += ch
-    } else if (ch === '|' && !inCode) {
-      cells.push(current.trim())
-      current = ''
-    } else {
-      current += ch
-    }
-  }
-  cells.push(current.trim())
-  return cells
-}
-
-function isBlockStart(line: string, next: string | undefined): boolean {
-  return (
-    FENCE.test(line) ||
-    HEADING.test(line) ||
-    RULE.test(line) ||
-    LIST_ITEM.test(line) ||
-    /^\s*>/.test(line) ||
-    (line.includes('|') && next !== undefined && TABLE_SEPARATOR.test(next) && next.includes('-'))
-  )
-}
-
+// 블록 구조는 marked(엔진 바이너리에도 들어 있는 파서)의 Lexer 로 읽고, 인라인은 아래 parseInline 이 맡는다.
 // breaks 는 채팅 글용: 문단 안의 줄바꿈을 그대로 둔다(GFM 의 breaks). 아니면 CommonMark 처럼 한 칸으로 잇는다.
+// 목록이 많은 8 KB 글이 1.4ms 쯤 걸려 예전 손 파서(0.1ms)보다 느리다. 같은 글을 스크롤·다시 그리기마다 또 읽지 않게
+// 최근 결과를 몇 개 둔다. 블록은 그리는 쪽이 고치지 않으므로 나눠 써도 된다.
+const parsed = new Map<string, Block[]>()
+const PARSED_KEEP = 32
+
 export function parseBlocks(markdown: string, breaks = false): Block[] {
-  const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
+  const key = (breaks ? 'b' : 'p') + markdown
+  const known = parsed.get(key)
+  if (known) return known
+  // 인라인 토큰은 쓰지 않으니 블록 단계만 돈다(lex() 는 인라인까지 만들어 두 배쯤 느리다).
+  const blocks = toBlocks(new Lexer({ gfm: true }).blockTokens(markdown.replace(/\r\n?/g, '\n')), breaks)
+  if (parsed.size >= PARSED_KEEP) parsed.delete(parsed.keys().next().value ?? '')
+  parsed.set(key, blocks)
+  return blocks
+}
+
+// 채팅 글은 펜스 없이 붙여 넣은 코드가 많아 breaks 면 줄 앞 들여쓰기를 남긴다.
+const joinLines = (text: string, breaks: boolean) =>
+  breaks ? text.split('\n').map(line => line.trimEnd()).join('\n') : text.split('\n').map(line => line.trim()).join(' ')
+
+const markerOf = (raw: string, ordered: boolean) => {
+  const marker = /^\s*(\d+[.)]|[-*+])/.exec(raw)?.[1] ?? '-'
+  return ordered ? marker : '-'
+}
+
+function toBlocks(tokens: Token[], breaks: boolean): Block[] {
   const blocks: Block[] = []
-  let i = 0
-
-  while (i < lines.length) {
-    const line = lines[i] ?? ''
-    const next = lines[i + 1]
-
-    if (line.trim() === '') {
-      i++
-      continue
+  for (const token of tokens) {
+    switch (token.type) {
+      case 'space':
+      case 'def':
+        break
+      case 'heading':
+        blocks.push({ kind: 'heading', level: token.depth, text: token.text ?? '' })
+        break
+      case 'paragraph':
+      case 'text':
+        blocks.push({ kind: 'paragraph', text: joinLines(token.text ?? '', breaks) })
+        break
+      case 'code':
+        blocks.push({ kind: 'code', language: (token.lang ?? '').split(/\s/)[0] || undefined, source: token.text ?? '' })
+        break
+      case 'hr':
+        blocks.push({ kind: 'rule' })
+        break
+      case 'table':
+        blocks.push({
+          kind: 'table',
+          header: token.header.map((cell: Token) => cell.text),
+          align: token.align.map((align: Align | null) => align ?? 'left'),
+          rows: token.rows.map((row: Token[]) => row.map(cell => cell.text)),
+        })
+        break
+      case 'blockquote':
+        blocks.push({ kind: 'quote', blocks: toBlocks(token.tokens ?? [], breaks), raw: token.text ?? '' })
+        break
+      case 'list':
+        blocks.push({
+          kind: 'list',
+          items: token.items.map((item: Token) => {
+            const inner = toBlocks((item.tokens ?? []).filter((child: Token) => child.type !== 'checkbox'), breaks)
+            // 할 일 항목은 예전처럼 [ ]·[x] 를 글 앞에 둔다.
+            const first = inner[0]
+            if (item.task && first?.kind === 'paragraph') first.text = `[${item.checked ? 'x' : ' '}] ${first.text}`
+            return { marker: markerOf(item.raw, token.ordered), blocks: inner }
+          }),
+        })
+        break
+      default:
+        // html 블록 등: 원문을 문단으로(예전과 같다).
+        if (token.raw.trim() !== '') blocks.push({ kind: 'paragraph', text: joinLines(token.raw.trim(), breaks) })
     }
-
-    const fence = FENCE.exec(line)
-    if (fence) {
-      const marker = fence[1] ?? '```'
-      const body: string[] = []
-      i++
-      const closes = (candidate: string) => {
-        const trimmed = candidate.trim()
-        return trimmed.length >= marker.length && /^(`+|~+)$/.test(trimmed) && trimmed[0] === marker[0]
-      }
-      while (i < lines.length && !closes(lines[i] ?? '')) {
-        body.push(lines[i] ?? '')
-        i++
-      }
-      i++
-      blocks.push({ kind: 'code', language: fence[2] || undefined, source: body.join('\n') })
-      continue
-    }
-
-    const heading = HEADING.exec(line)
-    if (heading) {
-      blocks.push({ kind: 'heading', level: (heading[1] ?? '#').length, text: heading[2] ?? '' })
-      i++
-      continue
-    }
-
-    if (RULE.test(line) && !LIST_ITEM.test(line.replace(/\s+/g, ''))) {
-      blocks.push({ kind: 'rule' })
-      i++
-      continue
-    }
-
-    if (line.includes('|') && next !== undefined && TABLE_SEPARATOR.test(next) && next.includes('-')) {
-      const header = splitRow(line)
-      const align = splitRow(next).map((cell): Align => {
-        const left = cell.startsWith(':')
-        const right = cell.endsWith(':')
-        return left && right ? 'center' : right ? 'right' : 'left'
-      })
-      const rows: string[][] = []
-      i += 2
-      while (i < lines.length && (lines[i] ?? '').includes('|') && (lines[i] ?? '').trim() !== '') {
-        rows.push(splitRow(lines[i] ?? ''))
-        i++
-      }
-      blocks.push({ kind: 'table', header, align, rows })
-      continue
-    }
-
-    if (/^\s*>/.test(line)) {
-      const body: string[] = []
-      while (i < lines.length && /^\s*>/.test(lines[i] ?? '')) {
-        body.push((lines[i] ?? '').replace(/^\s*>\s?/, ''))
-        i++
-      }
-      blocks.push({ kind: 'quote', blocks: parseBlocks(body.join('\n'), breaks), raw: body.join('\n') })
-      continue
-    }
-
-    if (LIST_ITEM.test(line)) {
-      const items: { level: number; marker: string; text: string; column: number }[] = []
-      while (i < lines.length) {
-        const current = lines[i] ?? ''
-        const item = LIST_ITEM.exec(current)
-        if (item) {
-          const indent = (item[1] ?? '').replace(/\t/g, '    ').length
-          const marker = item[2] ?? '-'
-          items.push({
-            column: indent + marker.length + 1,
-            level: Math.min(4, Math.floor(indent / 2)),
-            marker: /\d/.test(marker) ? marker : (BULLETS[Math.min(4, Math.floor(indent / 2)) % BULLETS.length] ?? '•'),
-            text: item[3] ?? '',
-          })
-          i++
-        } else if (current.trim() !== '' && /^\s+/.test(current) && items.length > 0) {
-          // 들여쓴 이어지는 줄은 앞 항목에 붙인다. breaks 면 줄을 바꾸고 항목 글 칸보다 더 들인 만큼은 남긴다.
-          const last = items[items.length - 1]
-          if (last && breaks) last.text += '\n' + current.trimEnd().replace(new RegExp(`^ {0,${last.column}}`), '')
-          else if (last) last.text += ' ' + current.trim()
-          i++
-        } else {
-          break
-        }
-      }
-      blocks.push({ kind: 'list', items: items.map(({ column: _, ...item }) => item) })
-      continue
-    }
-
-    const paragraph: string[] = []
-    while (i < lines.length) {
-      const current = lines[i] ?? ''
-      if (current.trim() === '' || (paragraph.length > 0 && isBlockStart(current, lines[i + 1]))) break
-      // 채팅 글은 펜스 없이 붙여 넣은 코드가 많아 줄 앞 들여쓰기를 남긴다
-      paragraph.push(breaks ? current.trimEnd() : current.trim())
-      i++
-    }
-    blocks.push({ kind: 'paragraph', text: paragraph.join(breaks ? '\n' : ' ') })
   }
-
   return blocks
 }
 
@@ -482,7 +404,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
     )
   }
 
-  const blocks = (list: Block[], key: string, room: number, tone?: string): JSX.Element[] =>
+  const blocks = (list: Block[], key: string, room: number, tone?: string, depth = 0): JSX.Element[] =>
     list.map((block, index) => {
       const k = `${key}.${index}`
       const gap = index === 0 ? 0 : 1
@@ -583,19 +505,27 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
               {blocks(block.blocks, k, room - 2, colors.muted)}
             </Box>
           )
-        case 'list':
+        case 'list': {
+          // 하위 목록은 글 바로 밑에 붙인다(빈 줄 없이). 글머리는 깊이마다 •◦▪.
+          const tight = depth > 0 && list[index - 1]?.kind === 'paragraph'
           return (
-            <Box marginTop={gap} flexDirection="column">
-              {block.items.map((item, n) => (
-                <Box flexDirection="row" paddingLeft={item.level * 2}>
-                  <Box width={cellWidth(item.marker) + 1} flexShrink={0}>
-                    <Text color={colors.muted}>{item.marker}</Text>
+            <Box marginTop={tight ? 0 : gap} flexDirection="column">
+              {block.items.map((item, n) => {
+                const marker = item.marker === '-' ? (BULLETS[depth % BULLETS.length] ?? '•') : item.marker
+                const width = cellWidth(marker) + 1
+                // 글머리는 띄워 두고 본문은 왼쪽 여백만 준다. 가로 줄(row)에 넣으면 본문 칸이 패널 폭을 한 칸 넘는다.
+                return (
+                  <Box flexDirection="column" paddingLeft={width}>
+                    <Box position="absolute" top={0} left={0}>
+                      <Text color={colors.muted}>{marker}</Text>
+                    </Box>
+                    {blocks(item.blocks, `${k}.${n}`, room - width, tone, depth + 1)}
                   </Box>
-                  {prose(item.text, `${k}.${n}`, toned)}
-                </Box>
-              ))}
+                )
+              })}
             </Box>
           )
+        }
       }
     })
 
