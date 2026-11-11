@@ -210,11 +210,11 @@ describe('응답 렌더링', () => {
     // breaks(채팅 글): 문단 줄바꿈과 줄 앞 들여쓰기, 목록 항목의 이어지는 줄을 그대로 둔다. 기본은 한 칸으로 잇는다
     expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1')).toEqual([
       { kind: 'paragraph', text: 'a b' },
-      { kind: 'list', items: [{ level: 0, marker: '•', text: 'x { "k": 1' }] },
+      { kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: 'x { "k": 1' }] }] },
     ])
     expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1', true)).toEqual([
       { kind: 'paragraph', text: 'a\n  b' },
-      { kind: 'list', items: [{ level: 0, marker: '•', text: 'x\n{\n  "k": 1' }] },
+      { kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: 'x\n{\n  "k": 1' }] }] },
     ])
 
     const reply = await $.ui.mount({
@@ -227,6 +227,32 @@ describe('응답 렌더링', () => {
     expect(await reply.find({ type: 'Text', text: /Warning/ })).toBeDefined()
     expect(await reply.find({ type: 'Text', text: /\[!WARNING\]/ })).toBeUndefined()
     await reply.unmount()
+
+    // 목록 항목 안의 펜스는 코드 블록으로, 하위 목록은 ◦ 로 그린다
+    const listed = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '- 고침\n  ```diff\n  -gone\n  ```\n  - 안쪽', isFirstOfReply: true },
+    })
+    const drawn = JSON.stringify(await listed.drawn())
+    expect(drawn).toContain('"language":"diff"')
+    expect(drawn).toContain('"source":"-gone"')
+    expect(drawn).toContain('◦')
+    expect(await listed.find({ type: 'Text', text: /```/ })).toBeUndefined()
+    await listed.unmount()
+
+    // 빈 항목도 한 줄을 차지한다(글머리가 다음 항목 글머리와 겹치지 않게)
+    const empty = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEWPORT,
+      props: { text: '-\n- b', isFirstOfReply: true },
+    })
+    expect(JSON.stringify(await empty.drawn())).toContain('"children":[" "]')
+    await empty.unmount()
   })
 
   test('데스크톱 화면에서는 엔진 그림을 그대로 둔다', KO, async ($, on) => {
@@ -509,12 +535,40 @@ test('순수 함수', KO, async () => {
   expect(editHunk('1\n2\n3\nold\n4', '1\n2\n3\nnew\n4')).toBe('@@ -2,4 +2,4 @@\n 2\n 3\n-old\n+new\n 4')
 
   const blocks = parseBlocks(REPLY)
-  expect(blocks.map(block => block.kind)).toEqual(['heading', 'paragraph', 'table', 'list', 'quote', 'code'])
+  // 글머리 목록 바로 밑의 번호 목록은 다른 목록이다(CommonMark)
+  expect(blocks.map(block => block.kind)).toEqual(['heading', 'paragraph', 'table', 'list', 'list', 'quote', 'code'])
   const table = blocks[2]
   expect(table?.kind === 'table' && table.align).toEqual(['left', 'center'])
   expect(table?.kind === 'table' && table.rows[1]).toEqual(['표 `md`', '통과'])
   const list = blocks[3]
-  expect(list?.kind === 'list' && list.items.map(item => [item.level, item.marker])).toEqual([[0, '•'], [1, '◦'], [0, '1.']])
+  expect(list?.kind === 'list' && list.items.map(item => [item.marker, item.blocks.map(block => block.kind)])).toEqual([['', ['paragraph', 'list']]])
+  // 할 일 항목은 [ ]·[x] 를 글 앞에 둔다
+  expect(parseBlocks('- [ ] a\n- [x] b')).toEqual([
+    { kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: '[ ] a' }] }, { marker: '', blocks: [{ kind: 'paragraph', text: '[x] b' }] }] },
+  ])
+  // 빈 줄이 낀 할 일 항목은 marked 가 이미 붙인 [ ] 를 다시 붙이지 않는다
+  expect(parseBlocks('- [ ] a\n\n  b')[0]).toEqual({ kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: '[ ] a' }, { kind: 'paragraph', text: 'b' }] }] })
+  // 표 칸: 백틱 안 | 에서는 나누지 않는다
+  expect(parseBlocks('| a | b |\n|---|---|\n| `x|y` | z |')[0]).toEqual({ kind: 'table', header: ['a', 'b'], align: ['left', 'left'], rows: [['`x|y`', 'z']] })
+  // 참조 정의는 글로 남긴다(인라인이 참조 링크를 모른다)
+  expect(parseBlocks('see [doc][1]\n\n[1]: https://x.y')).toEqual([
+    { kind: 'paragraph', text: 'see [doc][1]' },
+    { kind: 'paragraph', text: '[1]: https://x.y' },
+  ])
+  const numbered = blocks[4]
+  expect(numbered?.kind === 'list' && numbered.items.map(item => item.marker)).toEqual(['1.'])
+  // 항목 안에 들여 쓴 펜스는 그 항목의 코드 블록이다. diff 의 - 줄이 하위 항목이 되지 않는다
+  const fenced = parseBlocks('- 고침 a.kt\n  ```diff\n   keep\n  -gone\n  +new\n  ```\n- 다음')
+  expect(fenced).toEqual([
+    {
+      kind: 'list',
+      ordered: false,
+      items: [
+        { marker: '', blocks: [{ kind: 'paragraph', text: '고침 a.kt' }, { kind: 'code', language: 'diff', source: ' keep\n-gone\n+new' }] },
+        { marker: '', blocks: [{ kind: 'paragraph', text: '다음' }] },
+      ],
+    },
+  ])
   expect(plainText(parseInline('**굵게** `코드` [링크](https://x.y) 끝'))).toBe('굵게 코드 링크 끝')
   expect(columnWidths([5, 5], 40)).toEqual([5, 5])
   // fill: 남는 폭을 비율대로 나눠 꽉 채운다
@@ -1965,6 +2019,9 @@ test('명령 출력 마크다운 판별과 질문 힌트', KO, async $ => {
   expect(looksLikeMarkdown('| a | b |\n|---|---|\n| 1 | 2 |')).toBe(true)
   expect(looksLikeMarkdown('# 제목\n본문')).toBe(true)
   expect(looksLikeMarkdown('Total cost: $0.12\nTotal duration: 3m')).toBe(false)
+  // 들여 쓴 줄(git log 메시지)은 코드 블록으로 치지 않는다. 펜스는 친다
+  expect(looksLikeMarkdown('commit abc\nAuthor: x\nDate: y\n\n    message')).toBe(false)
+  expect(looksLikeMarkdown('```\nx\n```')).toBe(true)
   expect(askHint({ kind: 'choice', multiSelect: true })).toContain('0 제출')
   // 엔진이 띠를 접으면 카드가 안 보여 힌트 줄(접혀도 보임)에 펴는 키를 둔다: tail 은 끝에서 잘리니 맨 앞에,
   // 입력칸에 글이 있으면 숫자 키가 버튼을 누르지 않으니 펴는 키만
@@ -4832,6 +4889,10 @@ describe('미리보기 패널', () => {
     expect(html).toContain('<p>와! <img src="docs/p.png" alt="패널 사진"></p>')
     expect(html).toContain('<td style="text-align:right">2</td>')
     expect(previewHtml('# 그림 없음', '/r/a.md')).not.toContain('<script')
+    // 목록 항목 안의 펜스는 그 항목의 <pre> 로, 그 안의 mermaid 도 스크립트를 싣는다
+    const listed = previewHtml('- 고침\n  ```diff\n  -gone\n  ```\n- 그림\n  ```mermaid\n  graph TD; A-->B\n  ```', '/r/a.md')
+    expect(listed).toContain('<ul><li><p>고침</p>\n<pre><code data-lang="diff">-gone</code></pre></li>')
+    expect(listed).toContain('mermaid@11.4.1')
   })
 
   test('o: 문서를 엔진 임시 폴더에 HTML 로 쓰고 xdg-open 으로, 없으면 open 으로 연다', KO, async ($, on) => {

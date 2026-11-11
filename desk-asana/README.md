@@ -49,7 +49,7 @@ Every hook below passes the event on with `next(e)` and only watches the result,
 - `state.set` on desk-look's `lang` and `folded`: after desk-look's own write goes through, follow its language and fold or unfold this plugin's pane with `/desk-fold`
 - `command.run`: handles `/desk-asana` only
 
-`hooks/shared/` is a copy of desk-look's Markdown renderer, used to draw task descriptions and comments, and of its long-pane helper (`jumps.tsx`: the top and bottom buttons and the position bar); `hooks/shared/vendor/lovely-mermaid.js` is [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 0.3.3 (Apache-2.0, `hooks/shared/vendor/LICENSE.lovely-mermaid`), bundled without minification. It runs no programs and makes no requests.
+`hooks/shared/` is a copy of desk-look's Markdown renderer, used to draw task descriptions and comments, and of its long-pane helper (`jumps.tsx`: the top and bottom buttons and the position bar); `hooks/shared/vendor/lovely-mermaid.js` is [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 0.3.3 (Apache-2.0, `hooks/shared/vendor/LICENSE.lovely-mermaid`), bundled without minification; `hooks/shared/vendor/marked.js` is the block lexer of [marked](https://github.com/markedjs/marked) 18.2.0 (MIT, `hooks/shared/vendor/LICENSE.marked`), bundled without minification from its TypeScript source. Neither runs programs or makes requests.
 
 ## Settings
 

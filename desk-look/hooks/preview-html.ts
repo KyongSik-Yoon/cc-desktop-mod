@@ -53,6 +53,13 @@ const prose = (text: string) => inline(parseInline(text))
 
 const ALERT_CLASS: Record<string, string> = { NOTE: 'note', TIP: 'tip', IMPORTANT: 'important', WARNING: 'warning', CAUTION: 'caution' }
 
+// 목록 항목·인용 안의 mermaid 도 찾는다.
+function hasMermaid(list: Block[]): boolean {
+  return list.some(block =>
+    block.kind === 'code' ? block.language === 'mermaid' : block.kind === 'quote' ? hasMermaid(block.blocks) : block.kind === 'list' && block.items.some(item => hasMermaid(item.blocks)),
+  )
+}
+
 function blocks(list: Block[]): string {
   return list
     .map(block => {
@@ -86,11 +93,12 @@ function blocks(list: Block[]): string {
           }
           return `<blockquote>${blocks(block.blocks)}</blockquote>`
         }
-        case 'list':
-          // 파서는 항목마다 깊이와 표시(번호·글머리)를 준다. 중첩 목록으로 다시 묶지 않고 그대로 들여 그린다.
-          return `<div class="list">${block.items
-            .map(item => `<div class="item" style="padding-left:${item.level * 1.5}em"><span class="marker">${escape(item.marker)}</span><span>${prose(item.text)}</span></div>`)
-            .join('')}</div>`
+        case 'list': {
+          const tag = block.ordered ? 'ol' : 'ul'
+          return `<${tag}>${block.items
+            .map(item => `<li${block.ordered ? ` value="${escape(item.marker.replace(/\D/g, ''))}"` : ''}>${blocks(item.blocks)}</li>`)
+            .join('')}</${tag}>`
+        }
       }
     })
     .join('\n')
@@ -123,9 +131,9 @@ blockquote{margin:1em 0;padding:0 1em;border-left:3px solid var(--border);color:
 .alert>*:not(.alert-title){color:var(--fg)}
 .alert-title{font-weight:600;margin:.4em 0}
 .note{color:var(--note)}.tip{color:var(--tip)}.important{color:var(--important)}.warning{color:var(--warning)}.caution{color:var(--caution)}
-.list{margin:.8em 0}
-.item{display:flex;gap:.5em}
-.marker{color:var(--muted);flex-shrink:0;min-width:1em}
+ul,ol{margin:.8em 0;padding-left:1.6em}
+li>p{margin:.25em 0}
+li::marker{color:var(--muted)}
 img{max-width:100%}
 hr{border:none;border-top:1px solid var(--border);margin:2em 0}
 .front{display:grid;grid-template-columns:auto 1fr;gap:2px 16px;border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:24px;width:fit-content;font-size:14px}
@@ -139,7 +147,7 @@ export function previewHtml(markdown: string, path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1)
   const front = fields.length > 0 ? `<dl class="front">${fields.map(([key, value]) => `<dt>${escape(key)}</dt><dd>${escape(value)}</dd>`).join('')}</dl>` : ''
   const parsed = parseBlocks(body)
-  const hasDiagram = parsed.some(block => block.kind === 'code' && block.language === 'mermaid')
+  const hasDiagram = hasMermaid(parsed)
   const mermaid = hasDiagram
     ? `<script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";mermaid.initialize({startOnLoad:true,theme:matchMedia("(prefers-color-scheme: dark)").matches?"dark":"default"})</script>`
     : ''
