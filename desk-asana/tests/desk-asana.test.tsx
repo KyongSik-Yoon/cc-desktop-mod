@@ -112,7 +112,7 @@ describe('Asana 패널', () => {
     expect(text(6)).toBe('- 줄 머리 대시')
     expect(text(7)).toBe('1. 번호 같은 글')
     const list = blocks[3]
-    const link = list?.kind === 'list' ? parseInline(list.items[0]?.text ?? '').find(node => node.kind === 'link') : undefined
+    const link = list?.kind === 'list' ? parseInline(list.items[0]?.blocks[0]?.kind === 'paragraph' ? list.items[0].blocks[0].text : '').find(node => node.kind === 'link') : undefined
     expect(link?.kind === 'link' ? [link.href, plainText(link.children)] : null).toEqual(['https://app.asana.com/0/0/1/f/', '[의견] 정리'])
     expect(toDetail({ data: { gid: '1', html_notes: '<body>a</body>' } })?.richNotes).toBe('a')
     expect(toDetail({ data: { gid: '1', notes: 'a' } })?.richNotes).toBeNull()
@@ -489,7 +489,8 @@ describe('Asana 패널', () => {
       })
     })
     on('http.fetch', ($, e) => {
-      fetched.push({ url: e.url, init: e.init })
+      // 이 플러그인은 글 본문만 보낸다(base64 본문은 없음)
+      fetched.push({ url: e.url, init: e.init && { ...e.init, body: typeof e.init.body === 'string' ? e.init.body : undefined } })
       const body = e.url.includes('/users/me')
         ? { data: { gid: tokenOwner } }
         : e.init?.method === 'PUT'
