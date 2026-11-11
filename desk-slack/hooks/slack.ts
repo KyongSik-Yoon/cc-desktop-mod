@@ -213,14 +213,24 @@ function slackLines(text: string, names: Readonly<Record<string, string>>, liter
       index = table.end - 1
       continue
     }
-    if (/^\s*[─━]{3,}\s*$/.test(line)) out.push('---')
+    // Slack 에는 제목 밑줄(글\n---)이 없다: 가로줄은 빈 줄을 띄워 넣고, 나머지 - = 만 있는 줄은 글자로
+    if (/^\s*(?:[─━]{3,}|-{3,})\s*$/.test(line)) out.push('', '---')
+    else if (/^\s*[-=]+\s*$/.test(line)) out.push(`\\${line.trim()}`)
     else if (/^\s*│\s/.test(line) && !line.slice(line.indexOf('│') + 1).includes('│')) out.push(`> ${inline(line.slice(line.indexOf('│') + 1).trim())}`)
     else {
       const bullet = /^(\s*)[•◦▪]\s+(.*)$/.exec(line)
-      out.push(bullet ? `${bullet[1]}- ${inline(bullet[2] ?? '')}` : inline(line))
+      out.push(bullet ? `${bullet[1]}- ${inline(bullet[2] ?? '')}` : keepIndent(inline(line)))
     }
   }
   return out.join('\n')
+}
+
+// Slack 은 줄 앞 공백을 그대로 보인다. 마크다운은 4칸 들여 쓴 줄을 코드 블록으로 읽으므로(펜스 없이 붙여 넣은
+// 코드의 빈 줄 뒤 줄 등), 목록 표시가 아닌 줄의 들여쓰기는 줄바꿈 없는 공백으로 바꿔 글로 남긴다.
+function keepIndent(line: string): string {
+  const indent = /^[ \t]*/.exec(line)![0].replace(/\t/g, '    ')
+  if (indent.length < 4 || /^[ \t]*(?:[-+]|\d+[.)])(?:\s|$)/.test(line)) return line
+  return ' '.repeat(indent.length) + line.trimStart()
 }
 
 // 터미널이 그린 상자 표: 머리 줄 → ─┼─ 줄 → 행. 칸은 │ 로 나뉘고, 첫 칸이 빈 줄은 위 행이 칸 폭에서 접혀 내려온 것.

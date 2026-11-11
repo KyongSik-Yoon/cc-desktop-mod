@@ -2,6 +2,7 @@ import type { On, RenderSurface } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { LEASE_MS, closeRoom, emptyInbox, findSlackServer, holdsLease, inboxCall, mergeInbox, notices, parseHistory, parseMe, parseSearch, parseThread, readRoom, resultText, roomList, sendCall, slackFiles, slackMarkdown, slackText, snippet, tsCompare, unreadCount } from '../hooks/slack'
+import { parseBlocks } from '../hooks/shared/markdown'
 
 const KO = { options: { language: 'ko' } }
 const VIEWPORT = { columns: 100, rows: 40 }
@@ -130,12 +131,20 @@ describe('Slack 패널', () => {
     // 줄 앞 • 는 목록
     // 굵게·기울임 안의 멘션은 ** 를 겹치지 않는다
     expect(slackMarkdown('*cc <@U1>* _to <!here>_', { U1: 'a' })).toBe('**cc @a** *to @here*')
+    // Slack 에는 제목 밑줄·들여쓴 코드가 없다: 글 바로 밑 --- 는 가로줄, === 는 글자, 4칸 들인 줄은 글로
+    const blocks = (text: string) => parseBlocks(slackMarkdown(text), true)
+    expect(blocks('돌려봤어\n---\n먼저 직답')).toEqual([{ kind: 'paragraph', text: '돌려봤어' }, { kind: 'rule' }, { kind: 'paragraph', text: '먼저 직답' }])
+    expect(blocks('  경로입니다.\n  ──────\n  그룹 1').map(block => block.kind)).toEqual(['paragraph', 'rule', 'paragraph'])
+    expect(blocks('글\n===\n본문')).toEqual([{ kind: 'paragraph', text: '글\n\\===\n본문' }])
+    expect(blocks('f() {\n    x;\n\n      // y\n    }')).toEqual([{ kind: 'paragraph', text: 'f() {\n\u00a0\u00a0\u00a0\u00a0x;' }, { kind: 'paragraph', text: '\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0// y\n\u00a0\u00a0\u00a0\u00a0}' }])
+    // 들여 쓴 목록 표시는 공백 그대로(중첩 목록)
+    expect(slackMarkdown('글\n    - b\n    2. c')).toBe('글\n    - b\n    2. c')
     // 목록 미리보기·알림은 평문: ``` 와 엔티티를 걷는다
     expect(snippet('```[ 0] a &gt; b```')).toBe('[ 0] a > b')
     // 줄 앞 • 는 목록, ─ 줄은 가로줄. 터미널에서 복사해 둘째 줄부터 같이 들인 칸은 걷는다
-    expect(slackMarkdown('개요\n  • 클러스터: jennifer\n    • 네임스페이스: orphan\n  ──────\n  다음')).toBe('개요\n- 클러스터: jennifer\n  - 네임스페이스: orphan\n---\n다음')
+    expect(slackMarkdown('개요\n  • 클러스터: jennifer\n    • 네임스페이스: orphan\n  ──────\n  다음')).toBe('개요\n- 클러스터: jennifer\n  - 네임스페이스: orphan\n\n---\n다음')
     // 펜스 없이 붙여 넣은 코드는 들여쓰기 그대로
-    expect(slackMarkdown('f() {\n    if (a) {\n      b()\n    }')).toBe('f() {\n    if (a) {\n      b()\n    }')
+    expect(slackMarkdown('f() {\n    if (a) {\n      b()\n    }')).toBe(`f() {\n${'\u00a0'.repeat(4)}if (a) {\n${'\u00a0'.repeat(6)}b()\n${'\u00a0'.repeat(4)}}`)
     // 펜스 안 상자 표(터미널 출력 붙여 넣기): 글로 그리고 표는 마크다운 표로. 접힌 행은 칸마다 잇되
     // 칸 폭을 꽉 채운 조각 뒤는 낱말 가운데서 접힌 것이라 붙인다. 줄 앞 │ 는 인용
     const BOX = [
