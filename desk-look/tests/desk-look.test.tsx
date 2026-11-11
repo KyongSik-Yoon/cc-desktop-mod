@@ -210,11 +210,11 @@ describe('응답 렌더링', () => {
     // breaks(채팅 글): 문단 줄바꿈과 줄 앞 들여쓰기, 목록 항목의 이어지는 줄을 그대로 둔다. 기본은 한 칸으로 잇는다
     expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1')).toEqual([
       { kind: 'paragraph', text: 'a b' },
-      { kind: 'list', items: [{ marker: '-', blocks: [{ kind: 'paragraph', text: 'x { "k": 1' }] }] },
+      { kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: 'x { "k": 1' }] }] },
     ])
     expect(parseBlocks('a\n  b\n- x\n  {\n    "k": 1', true)).toEqual([
       { kind: 'paragraph', text: 'a\n  b' },
-      { kind: 'list', items: [{ marker: '-', blocks: [{ kind: 'paragraph', text: 'x\n{\n  "k": 1' }] }] },
+      { kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: 'x\n{\n  "k": 1' }] }] },
     ])
 
     const reply = await $.ui.mount({
@@ -530,7 +530,11 @@ test('순수 함수', KO, async () => {
   expect(table?.kind === 'table' && table.align).toEqual(['left', 'center'])
   expect(table?.kind === 'table' && table.rows[1]).toEqual(['표 `md`', '통과'])
   const list = blocks[3]
-  expect(list?.kind === 'list' && list.items.map(item => [item.marker, item.blocks.map(block => block.kind)])).toEqual([['-', ['paragraph', 'list']]])
+  expect(list?.kind === 'list' && list.items.map(item => [item.marker, item.blocks.map(block => block.kind)])).toEqual([['', ['paragraph', 'list']]])
+  // 할 일 항목은 [ ]·[x] 를 글 앞에 둔다
+  expect(parseBlocks('- [ ] a\n- [x] b')).toEqual([
+    { kind: 'list', ordered: false, items: [{ marker: '', blocks: [{ kind: 'paragraph', text: '[ ] a' }] }, { marker: '', blocks: [{ kind: 'paragraph', text: '[x] b' }] }] },
+  ])
   const numbered = blocks[4]
   expect(numbered?.kind === 'list' && numbered.items.map(item => item.marker)).toEqual(['1.'])
   // 항목 안에 들여 쓴 펜스는 그 항목의 코드 블록이다. diff 의 - 줄이 하위 항목이 되지 않는다
@@ -538,9 +542,10 @@ test('순수 함수', KO, async () => {
   expect(fenced).toEqual([
     {
       kind: 'list',
+      ordered: false,
       items: [
-        { marker: '-', blocks: [{ kind: 'paragraph', text: '고침 a.kt' }, { kind: 'code', language: 'diff', source: ' keep\n-gone\n+new' }] },
-        { marker: '-', blocks: [{ kind: 'paragraph', text: '다음' }] },
+        { marker: '', blocks: [{ kind: 'paragraph', text: '고침 a.kt' }, { kind: 'code', language: 'diff', source: ' keep\n-gone\n+new' }] },
+        { marker: '', blocks: [{ kind: 'paragraph', text: '다음' }] },
       ],
     },
   ])

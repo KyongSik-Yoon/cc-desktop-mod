@@ -94,10 +94,9 @@ function blocks(list: Block[]): string {
           return `<blockquote>${blocks(block.blocks)}</blockquote>`
         }
         case 'list': {
-          const ordered = block.items.some(item => item.marker !== '-')
-          const tag = ordered ? 'ol' : 'ul'
+          const tag = block.ordered ? 'ol' : 'ul'
           return `<${tag}>${block.items
-            .map(item => `<li${ordered ? ` value="${escape(item.marker.replace(/\D/g, ''))}"` : ''}>${blocks(item.blocks)}</li>`)
+            .map(item => `<li${block.ordered ? ` value="${escape(item.marker.replace(/\D/g, ''))}"` : ''}>${blocks(item.blocks)}</li>`)
             .join('')}</${tag}>`
         }
       }

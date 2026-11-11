@@ -31,7 +31,8 @@ export type Block =
   | { kind: 'paragraph'; text: string }
   | { kind: 'code'; language?: string; source: string }
   | { kind: 'table'; header: string[]; align: Align[]; rows: string[][] }
-  | { kind: 'list'; items: { marker: string; blocks: Block[] }[] }
+  // marker 는 번호 목록일 때 쓴 그대로의 번호(1. 2) 등). 글머리 목록은 그리는 쪽이 깊이마다 고른다.
+  | { kind: 'list'; ordered: boolean; items: { marker: string; blocks: Block[] }[] }
   | { kind: 'quote'; blocks: Block[]; raw: string }
   | { kind: 'rule' }
 
@@ -67,18 +68,19 @@ const BULLETS = ['•', '◦', '▪']
 // 블록 구조는 marked(엔진 바이너리에도 들어 있는 파서)의 Lexer 로 읽고, 인라인은 아래 parseInline 이 맡는다.
 // breaks 는 채팅 글용: 문단 안의 줄바꿈을 그대로 둔다(GFM 의 breaks). 아니면 CommonMark 처럼 한 칸으로 잇는다.
 // 목록이 많은 8 KB 글이 1.4ms 쯤 걸려 예전 손 파서(0.1ms)보다 느리다. 같은 글을 스크롤·다시 그리기마다 또 읽지 않게
-// 최근 결과를 몇 개 둔다. 블록은 그리는 쪽이 고치지 않으므로 나눠 써도 된다.
-const parsed = new Map<string, Block[]>()
+// 최근에 쓴 결과를 몇 개 둔다(꺼낼 때 맨 뒤로 옮겨, 스트리밍 중 새 글이 화면의 다른 글을 밀어내지 않게).
+// 블록은 그리는 쪽이 고치지 않으므로 나눠 써도 된다.
+const parsed = { prose: new Map<string, Block[]>(), chat: new Map<string, Block[]>() }
 const PARSED_KEEP = 32
 
 export function parseBlocks(markdown: string, breaks = false): Block[] {
-  const key = (breaks ? 'b' : 'p') + markdown
-  const known = parsed.get(key)
-  if (known) return known
+  const cache = breaks ? parsed.chat : parsed.prose
+  const known = cache.get(markdown)
+  cache.delete(markdown)
   // 인라인 토큰은 쓰지 않으니 블록 단계만 돈다(lex() 는 인라인까지 만들어 두 배쯤 느리다).
-  const blocks = toBlocks(new Lexer({ gfm: true }).blockTokens(markdown.replace(/\r\n?/g, '\n')), breaks)
-  if (parsed.size >= PARSED_KEEP) parsed.delete(parsed.keys().next().value ?? '')
-  parsed.set(key, blocks)
+  const blocks = known ?? toBlocks(new Lexer({ gfm: true }).blockTokens(markdown.replace(/\r\n?/g, '\n')), breaks)
+  if (cache.size >= PARSED_KEEP) cache.delete(cache.keys().next().value ?? '')
+  cache.set(markdown, blocks)
   return blocks
 }
 
@@ -86,10 +88,8 @@ export function parseBlocks(markdown: string, breaks = false): Block[] {
 const joinLines = (text: string, breaks: boolean) =>
   breaks ? text.split('\n').map(line => line.trimEnd()).join('\n') : text.split('\n').map(line => line.trim()).join(' ')
 
-const markerOf = (raw: string, ordered: boolean) => {
-  const marker = /^\s*(\d+[.)]|[-*+])/.exec(raw)?.[1] ?? '-'
-  return ordered ? marker : '-'
-}
+// 번호는 marked 가 다시 매기지 않고 글쓴이가 쓴 그대로 둔다.
+const numberOf = (raw: string) => /^\s*(\d+[.)])/.exec(raw)?.[1] ?? ''
 
 function toBlocks(tokens: Token[], breaks: boolean): Block[] {
   const blocks: Block[] = []
@@ -97,6 +97,7 @@ function toBlocks(tokens: Token[], breaks: boolean): Block[] {
     switch (token.type) {
       case 'space':
       case 'def':
+      case 'checkbox':
         break
       case 'heading':
         blocks.push({ kind: 'heading', level: token.depth, text: token.text ?? '' })
@@ -125,12 +126,13 @@ function toBlocks(tokens: Token[], breaks: boolean): Block[] {
       case 'list':
         blocks.push({
           kind: 'list',
+          ordered: token.ordered === true,
           items: token.items.map((item: Token) => {
-            const inner = toBlocks((item.tokens ?? []).filter((child: Token) => child.type !== 'checkbox'), breaks)
+            const inner = toBlocks(item.tokens ?? [], breaks)
             // 할 일 항목은 예전처럼 [ ]·[x] 를 글 앞에 둔다.
             const first = inner[0]
             if (item.task && first?.kind === 'paragraph') first.text = `[${item.checked ? 'x' : ' '}] ${first.text}`
-            return { marker: markerOf(item.raw, token.ordered), blocks: inner }
+            return { marker: token.ordered ? numberOf(item.raw) : '', blocks: inner }
           }),
         })
         break
@@ -511,7 +513,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
           return (
             <Box marginTop={tight ? 0 : gap} flexDirection="column">
               {block.items.map((item, n) => {
-                const marker = item.marker === '-' ? (BULLETS[depth % BULLETS.length] ?? '•') : item.marker
+                const marker = block.ordered ? item.marker : (BULLETS[depth % BULLETS.length] ?? '•')
                 const width = cellWidth(marker) + 1
                 // 글머리는 띄워 두고 본문은 왼쪽 여백만 준다. 가로 줄(row)에 넣으면 본문 칸이 패널 폭을 한 칸 넘는다.
                 return (
