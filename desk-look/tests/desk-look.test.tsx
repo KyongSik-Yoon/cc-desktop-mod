@@ -927,6 +927,46 @@ test('바탕 면은 엔진 테마가 omarchy 와 엇갈리거나, auto 인데 he
   await bubble.unmount()
 })
 
+// 패널 바탕은 ui.open 때 정해지므로, 바탕 면이 바뀌면(테마를 바꾸거나 리로드 뒤 다시 가려서) 열린 패널을 같은 id 로 다시 열어 새로 준다.
+test('바탕 면이 바뀌면 열린 패널의 바탕도 다시 준다(포커스는 건드리지 않는다)', KO, async ($, on) => {
+  const env: Record<string, string> = { HOME: '/home/t', COLORTERM: 'truecolor', TERM: 'xterm-256color' }
+  let theme = 'light'
+  const opened: Array<Record<string, unknown>> = []
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    const path = String((e as { path?: string }).path ?? e)
+    if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
+    throw new Error('ENOENT')
+  })
+  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: theme, provider: { kind: 'engine' }, isLocked: false }] as never }))
+  on('ui.panes', () => ({ value: [{ id: 'desk-activity', title: '활동', isShown: true, isFocused: true, isPlaced: true }] as never }))
+  on('ui.open', ($, e) => {
+    opened.push({ ...(e as object) })
+    return { value: { isPlaced: true } } as never
+  })
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const gray = mix('#fafafa', '#000000', 0.055)
+  const last = async (count: number) => {
+    for (let tries = 0; tries < 50 && opened.filter(item => item.id === 'desk-activity').length < count; tries++) await wait(10)
+    return opened.filter(item => item.id === 'desk-activity').at(-1)
+  }
+  // 세션 시작에 면을 읽으면(리로드 전 패널이 남아 있어도) 그 바탕으로 다시 연다
+  expect(await last(1)).toEqual({ id: 'desk-activity', title: '활동', backgroundColor: gray })
+  // 엔진 테마가 omarchy 와 엇갈려 면이 꺼지면 바탕을 빼고 다시 열어 엔진 기본 그림으로
+  theme = 'dark'
+  await $.prompt.submit({ text: '다음', origin: { kind: 'composer' }, wait: false } as never)
+  expect(await last(2)).toEqual({ id: 'desk-activity', title: '활동' })
+  // 면이 그대로면 다시 열지 않는다
+  await $.prompt.submit({ text: '그다음', origin: { kind: 'composer' }, wait: false } as never)
+  await wait(50)
+  expect(opened.filter(item => item.id === 'desk-activity')).toHaveLength(2)
+})
+
 test('herdr-client.sock 연결을 못 읽으면(/proc 없음, 소켓 줄 없음) 프롬프트마다 pgrep 으로 원격 접속을 본다', KO, async ($, on) => {
   const env: Record<string, string> = { HOME: '/home/t', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1', CLAUDE_CODE_FORCE_TERMINAL_IMAGES: '1' }
   let table: string | null = null

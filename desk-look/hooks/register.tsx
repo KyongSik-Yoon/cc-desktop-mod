@@ -1736,7 +1736,13 @@ async function refreshSurface($: EngineInterface) {
   // 256색(tmux 안)에서는 말풍선 회색을 팔레트의 회색으로: 섞은 색은 엔진이 색 큐브로 줄여 어두운 테마에서 #5f5f5f 로 밝아진다.
   const next = trusted && !truecolor ? { ...trusted, bubble: gray256(trusted.bubble) } : trusted
   diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, truecolor) : null
-  if (!sameJson(await read($, surface), next)) await update($, surface, () => next)
+  if (!sameJson(await read($, surface), next)) {
+    await update($, surface, () => next)
+    // 패널 바탕은 ui.open 때 정해져 면이 바뀌어도(테마를 바꾸거나, 리로드 뒤 남은 옛 값을 다시 가려도) 따라오지 않는다.
+    // 열린 패널을 같은 id·제목으로 다시 열어 새 바탕을 준다. focus 를 주지 않아 앞에 선 패널과 키보드는 그대로다.
+    const look = await paneLook($)
+    for (const pane of await $.ui.panes().catch(() => [])) await $.ui.open({ ...look, id: pane.id, title: pane.title }).catch(() => undefined)
+  }
   // 엔진 테마가 밝기를 안 정했으면(auto) 면은 원격 판정을 따른다. 그림이 꺼져 원격을 보지 않던 세션이면 그렇게 바뀐 이번에 한 번 본다.
   const wasAsking = surfaceAsksRemote
   surfaceAsksRemote = parsed !== null && engine === null
