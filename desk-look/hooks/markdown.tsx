@@ -65,6 +65,8 @@ export function codeSource(source: string): string {
   return text === '' ? ' ' : text.replace(/^$(?=\n)/gm, ' ')
 }
 const BULLETS = ['•', '◦', '▪']
+// 코드 블록 최소 폭(테두리 포함). copy 버튼(" ⧉ copy ", 오른쪽 2칸 띄움)과 둥근 모서리가 들어가고, 한 줄 명령이 너무 납작해 보이지 않게.
+const CODE_MIN_WIDTH = 24
 
 // 블록 구조는 marked(엔진 바이너리에도 들어 있는 파서)의 Lexer 로 읽고, 인라인은 아래 parseInline 이 맡는다.
 // breaks 는 채팅 글용: 문단 안의 줄바꿈을 그대로 둔다(GFM 의 breaks). 아니면 CommonMark 처럼 한 칸으로 잇는다.
@@ -325,7 +327,7 @@ export function splitFrontMatter(markdown: string): { fields: [string, string][]
   return { fields, body: lines.slice(end + 1).join('\n') }
 }
 
-// onCopy 가 있으면 코드 블록 위 테두리 오른쪽에 마우스를 올렸을 때만 보이는 "⧉ copy" 버튼을 단다.
+// onCopy 가 있으면 코드 블록 위 테두리 오른쪽에 늘 흐린 "⧉ copy" 버튼을 단다(hover 는 포인터가 있어야 해서 키보드·폰에선 못 본다).
 // document 는 파일 한 편을 읽는 패널용: 제목 단계를 색·밑줄로 나누고 front matter 를 흐린 머리로 접는다.
 // breaks 는 채팅 글(Slack)용: 한 줄 바꿈도 줄을 바꾼다. cards 는 좁은 패널용: 낱말이 잘릴 만큼 칸이 좁아지는 표를 행마다 카드로.
 export type MarkdownOptions = { onCopy?: (source: string, press: UiPressArgument) => void; document?: boolean; breaks?: boolean; cards?: boolean }
@@ -342,9 +344,10 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
           return node.text
         case 'code': {
           // 백틱 안 주소도 누를 수 있게(엔진 Markdown 처럼).
+          // 바탕이 있으면 글자는 본문색(데스크톱의 조용한 인라인 코드). 바탕이 없으면 글과 가를 것이 색뿐이라 code 색.
           const text = isUrl(node.text) ? <Link href={node.text}>{urlLabel(node.text)}</Link> : node.text
           return colors.codeBg ? (
-            <Text color={colors.code} backgroundColor={colors.codeBg}>
+            <Text color={colors.text} backgroundColor={colors.codeBg}>
               {' '}
               {text}{' '}
             </Text>
@@ -443,7 +446,8 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
   const blocks = (list: Block[], key: string, room: number, tone?: string, depth = 0): JSX.Element[] =>
     list.map((block, index) => {
       const k = `${key}.${index}`
-      const gap = index === 0 ? 0 : 1
+      // 목록 항목 안에서 글 바로 뒤 코드 블록은 붙인다: 테두리가 이미 띄우고, 블록 뒤 다음 항목도 붙으니 위아래가 같아진다.
+      const gap = index === 0 || (depth > 0 && block.kind === 'code' && list[index - 1]?.kind === 'paragraph') ? 0 : 1
       const toned = tone ? { color: tone } : {}
       switch (block.kind) {
         case 'heading':
@@ -497,8 +501,12 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
           }
           {
             // markdown 펜스(이슈·MR 초안 등)는 올라갈 모습으로 그린다. 원문은 copy 로.
+            // 너비는 가장 긴 줄 + 테두리·여백 4칸, 화면 폭(room)에서 접는다(엔진 Box 는 maxWidth 를 받지 않는다). 한 줄짜리 명령도 copy 버튼 자리는 남게 최소 폭을 둔다.
+            // 내용 폭을 Yoga 에 맡기면(alignSelf 만) 엔진 Code 가 80칸쯤에서 접어 재므로 직접 센다.
+            const longest = Math.max(0, ...block.source.split('\n').map(cellWidth))
+            const fit = { alignSelf: 'flex-start', width: Math.min(room, Math.max(CODE_MIN_WIDTH, longest + 4)) } as const
             const code = (
-              <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1}>
+              <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1} {...fit}>
                 {MARKDOWN_FENCE.test(block.language ?? '') ? (
                   // 톤을 넘겨 인용 안이면 흐리게, 문서 모드여도 바깥 문서의 절 모양(강조색·밑줄)을 쓰지 않게 한다.
                   blocks(parseBlocks(block.source, options.breaks), k, room - 4, tone ?? colors.text)
@@ -510,9 +518,9 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
             const onCopy = options.onCopy
             if (!onCopy) return <Box marginTop={gap}>{code}</Box>
             return (
-              <Box key={`code${k}`} marginTop={gap} flexDirection="column">
+              <Box key={`code${k}`} marginTop={gap} flexDirection="column" {...fit}>
                 {code}
-                <Box position="absolute" top={0} right={2} display="none" hover={{ display: 'flex' }}>
+                <Box position="absolute" top={0} right={2}>
                   <Button key={`copy${k}`} plain dimColor label=" ⧉ copy " onPress={press => onCopy(block.source, press)} />
                 </Box>
               </Box>

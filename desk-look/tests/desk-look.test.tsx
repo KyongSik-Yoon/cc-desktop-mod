@@ -73,8 +73,9 @@ describe('응답 렌더링', () => {
     expect(drawn).toContain('"href":"https://example.com/doc"')
     expect(drawn).toContain('"borderStyle":"quote"')
     expect(await reply.find({ type: 'Code' })).toBeDefined()
-    // 코드 블록 복사 버튼: 평소엔 숨고 마우스를 올리면 보인다
-    expect(drawn).toContain('"hover":{"display":"flex"}')
+    // 코드 블록 복사 버튼: hover 없이 늘 흐리게 보이고, 블록은 내용 폭에 맞춘다
+    expect(drawn).not.toContain('"hover":{"display":"flex"}')
+    expect(drawn).toMatch(/"alignSelf":"flex-start","width":\d+/)
     const copyKey = /"key":"(copymd\.\d+)"/.exec(drawn)?.[1]
     expect(copyKey).toBeDefined()
     await reply.press({ key: copyKey ?? '' })
