@@ -217,7 +217,12 @@ h1 .bub {
 .seg button i { font-style: normal; color: var(--ink-3); margin-right: .7ch; }
 .seg button[aria-pressed="true"] { background: var(--sheet); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .1); }
 .seg button[aria-pressed="true"] i { color: var(--clay); }
-@media (max-width: 560px) { .winbar .path { display: none; } .winbar { justify-content: center; padding-left: 12px; } .seg button { padding: 8px 9px; } }
+@media (max-width: 560px) {
+  .winbar .path { display: none; } .winbar { justify-content: center; padding-left: 12px; }
+  /* Three labels must fit a phone: the row takes the full bar and the type scales with the viewport. */
+  .seg { display: flex; width: 100%; }
+  .seg button { flex: 1 1 auto; min-width: 0; padding: 8px 4px; font-size: min(.78rem, 3vw); }
+}
 
 .split { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0fr; transition: grid-template-columns .8s var(--ease); }
 .stage[data-step="2"] .split { grid-template-columns: minmax(0, 1fr) minmax(0, .92fr); }
@@ -234,6 +239,10 @@ h1 .bub {
   .split, .stage[data-step="2"] .split { grid-template-columns: minmax(0, 1fr); }
   .hpane { position: absolute; inset: 0 0 0 auto; width: 88%; transform: translateX(103%); transition: transform .7s var(--ease); box-shadow: -24px 0 40px -28px rgba(0, 0, 0, .5); }
   .stage[data-step="2"] .hpane { transform: none; }
+  /* The pane is narrower than its longest line here: wrap code under itself instead of cutting it. */
+  .hpane-in { width: 100%; font-size: min(11px, 2.9vw); }
+  .hpane .dl > :last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .hpane .dl { overflow: visible; }
   .tx { padding: 1.3em 1.2em 1.1em; }
 }
 
