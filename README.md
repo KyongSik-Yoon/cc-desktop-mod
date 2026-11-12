@@ -6,17 +6,13 @@
 
 **desk-look** makes the Claude Code terminal look and work like the Code tab of the Claude desktop app: prompt bubbles, cards, a status band and side panes you can click. It is a plugin, so the engine stays as it is and only the drawing changes.
 
-<img src="docs/demo-poster.jpg" alt="desk-look in the Claude Code terminal: a prompt bubble, tool calls folded into one line, the edited-files card, and the diff pane with a line comment beside the conversation" width="1280">
+<img src="docs/demo.gif" alt="desk-look in action, one feature at a time with a caption: tool calls folded into one line, the progress band, the edited-files card, the Markdown preview opening by itself, the diff pane with a line comment that goes to Claude with the next prompt, and the context pane" width="960">
 
 ```
 /plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod
 ```
 
 Run it at the prompt of a Claude Code terminal session, answer `y` to add the marketplace, and pick the user scope. That is the whole setup.
-
-## See it work
-
-<img src="docs/demo.gif" alt="desk-look in action: the progress band while Claude works, tool calls folded into one line, the edited-files card, the Markdown preview opening by itself when the turn ends, a line comment in the diff pane sent with the next prompt, and the context pane" width="1280">
 
 ## What you get
 

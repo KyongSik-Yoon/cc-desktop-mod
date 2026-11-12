@@ -6,17 +6,13 @@
 
 **desk-look** 은 Claude Code 터미널을 Claude 데스크톱 앱 Code 탭처럼 보이고 동작하게 만듭니다. 프롬프트 말풍선, 카드, 상태 띠, 눌러서 여는 오른쪽 패널이 생깁니다. 플러그인이라 엔진은 그대로 두고 화면에 그리는 방식만 바꿉니다.
 
-<img src="docs/demo-poster.jpg" alt="Claude Code 터미널의 desk-look: 프롬프트 말풍선, 한 줄로 접힌 도구 호출, 고친 파일 카드, 대화 옆에 열린 diff 패널과 줄 댓글" width="1280">
+<img src="docs/demo.gif" alt="기능마다 자막과 함께 보여 주는 desk-look: 한 줄로 접힌 도구 호출, 진행 띠, 고친 파일 카드, 저절로 열리는 마크다운 미리보기, 다음 프롬프트와 함께 Claude 에게 가는 diff 줄 댓글, 컨텍스트 패널" width="960">
 
 ```
 /plugin install desk-look --marketplace KyongSik-Yoon/cc-desktop-mod
 ```
 
 Claude Code 터미널 세션의 프롬프트에서 실행하고, 마켓플레이스 추가를 물으면 `y`, 범위는 user 를 고르면 됩니다. 설치는 이것으로 끝입니다.
-
-## 동작하는 모습
-
-<img src="docs/demo.gif" alt="동작 중인 desk-look: Claude 가 일하는 동안의 진행 띠, 한 줄로 접힌 도구 호출, 고친 파일 카드, 턴이 끝나면 저절로 열리는 마크다운 미리보기, 다음 프롬프트와 함께 가는 diff 줄 댓글, 컨텍스트 패널" width="1280">
 
 ## 무엇이 달라지나
 
