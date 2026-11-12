@@ -120,7 +120,7 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` 는 지난 점검 이후의 Claude Code 릴리즈 노트와 플러그인 API diff 를 모아, desk-look 이 쓰거나 걷어낼 거리를 찾습니다. 저장소 관례(최신 Claude Code 만 지원, 버전마다 GitHub 릴리즈)는 `CLAUDE.md` 에 있습니다.
 
-`desk-asana`·`desk-slack`·`desk-plan`·`desk-review` 에서도 같은 명령을 씁니다. desk-asana 는 댓글을 desk-look 의 마크다운 렌더러로 그리는데, 플러그인은 자기 폴더만 설치되므로 `desk-asana/hooks/shared/` 에 복사해 둡니다. `desk-look/hooks/markdown.tsx`·`diagram.ts` 를 고쳤으면 `scripts/sync-shared.sh` 를 돌려 함께 커밋합니다. 복사본이 어긋나면 릴리즈 워크플로가 실패합니다(`scripts/sync-shared.sh --check`).
+`desk-asana`·`desk-slack`·`desk-plan`·`desk-review` 에서도 같은 명령을 씁니다. 플러그인은 자기 폴더만 설치되므로 같이 쓰는 코드는 `scripts/sync-shared.sh` 가 복사해 둡니다. desk-look 의 마크다운 렌더러(`hooks/markdown.tsx`·`diagram.ts` 와 `hooks/vendor/` 의 lovely-mermaid·marked 파일)는 `desk-asana/hooks/shared/`·`desk-slack/hooks/shared/` 로, desk-look 의 `hooks/jumps.tsx` 는 desk-asana·desk-slack·desk-review 의 `hooks/shared/` 로, `desk-slack/hooks/util.tsx` 는 `desk-asana/hooks/util.tsx` 로 갑니다. 원본을 고쳤으면 스크립트를 돌려 복사본도 함께 커밋합니다. 복사본이 어긋나면 릴리즈 워크플로가 실패하고(`scripts/sync-shared.sh --check`), 이 검사는 `cellWidth`·`scrollPane` 이 desk-look 의 것과 같은지도 보므로 그 둘은 손으로 맞춥니다.
 
 `desk-look/.claude-plugin/types/` 는 엔진이 mod 를 로드할 때마다 다시 까는 타입 정의라 커밋하지 않습니다.
 
