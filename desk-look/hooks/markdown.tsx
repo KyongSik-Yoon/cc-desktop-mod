@@ -501,10 +501,11 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
           }
           {
             // markdown 펜스(이슈·MR 초안 등)는 올라갈 모습으로 그린다. 원문은 copy 로.
-            // 너비는 가장 긴 줄 + 테두리·여백 4칸, 화면 폭(room)에서 접는다(엔진 Box 는 maxWidth 를 받지 않는다). 한 줄짜리 명령도 copy 버튼 자리는 남게 최소 폭을 둔다.
-            // 내용 폭을 Yoga 에 맡기면(alignSelf 만) 엔진 Code 가 80칸쯤에서 접어 재므로 직접 센다.
-            const longest = Math.max(0, ...block.source.split('\n').map(cellWidth))
-            const fit = { alignSelf: 'flex-start', width: Math.min(room, Math.max(CODE_MIN_WIDTH, longest + 4)) } as const
+            // 너비는 가장 긴 줄 + 테두리·여백 4칸. 한 줄짜리 명령도 copy 버튼 자리는 남게 최소 폭을 둔다.
+            // 내용 폭을 Yoga 에 맡기면(alignSelf 만) 엔진 Code 가 80칸쯤에서 접어 재므로 직접 센다. 엔진 Box 는 maxWidth 를 받지 않아,
+            // room 에 닿는 블록과 markdown 펜스(그린 모양이 원문 폭과 다름)는 예전처럼 부모 폭으로 늘린다(room 은 어림값이라 넘치지 않게).
+            const width = Math.max(CODE_MIN_WIDTH, Math.max(0, ...block.source.split('\n').map(cellWidth)) + 4)
+            const fit = MARKDOWN_FENCE.test(block.language ?? '') || width >= room ? {} : ({ alignSelf: 'flex-start', width } as const)
             const code = (
               <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1} {...fit}>
                 {MARKDOWN_FENCE.test(block.language ?? '') ? (
