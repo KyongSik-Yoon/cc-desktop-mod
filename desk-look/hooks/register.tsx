@@ -3414,6 +3414,16 @@ async function isDenied($: EngineInterface, tool: string, e: object): Promise<bo
   return verdict?.decision === 'deny'
 }
 
+
+// 띠의 줄을 쌓을 순서: 카드를 띄운 플러그인이 있으면 그 줄만, 아니면 desk-look 줄을 맨 위에. 카드 줄이 없으면 그대로.
+export function bandRows<Row extends { plugin: string }>(rows: readonly Row[], card: string | null): readonly Row[] {
+  if (card !== null) {
+    const only = rows.filter(row => row.plugin === card)
+    return only.length > 0 ? only : rows
+  }
+  return [...rows.filter(row => row.plugin === 'desk-look'), ...rows.filter(row => row.plugin !== 'desk-look')]
+}
+
 export const register: Register = (on, options) => {
   const side = bubbleSide(options)
   const edge = side === 'right' ? 'flex-end' : 'flex-start'
@@ -4113,7 +4123,8 @@ export const register: Register = (on, options) => {
     return next({ ...e, props: { ...e.props, tail: hintTail(askHint(question), e.props.isDraft) } })
   })
 
-  // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. 다른 플러그인의 밴드는 그 아래, 입력창 바로 위에 둔다.
+  // 입력창 위: 할 일 카드, 질문 카드, "저장소  브랜치  +63 −29" 아래턱. desk-look 의 줄이다. 다른 플러그인의 줄은 엔진이 따로 묻고
+  // 아래 AbovePromptList 훅이 desk-look 줄 아래, 입력창 바로 위에 둔다.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) {
       return next(e)
@@ -4128,7 +4139,7 @@ export const register: Register = (on, options) => {
       read($, bandDoneAt),
       read($, planAsking),
     ])
-    // desk-plan 의 계획 카드가 떠 있으면 그 카드가 띠를 차지한다: desk-plan 이 안쪽이면 below 가 그 카드다.
+    // desk-plan 의 계획 카드가 떠 있으면 그 카드가 띠를 차지한다(AbovePromptList 훅이 desk-plan 줄만 남긴다).
     if (planUp !== null) return below
     const els = $.ui.resolve(e)
     // 턴 동안 진행 띠는 스피너가 그린다. 턴 밖에서는 끝난 띠를 남겨 둔 동안(bandAfterTurn) 그 단계 줄을, 아니면 남은 할 일이 있을 때만
@@ -4164,7 +4175,8 @@ export const register: Register = (on, options) => {
           {extras.map(chip => chip.node) as never}
         </els.Box>
       )
-    // 질문 중에는 질문이 띠를 차지한다(엔진 설문처럼): 다른 밴드·할 일 카드는 숨기고, 남는 줄이 있을 때만 아래턱.
+    // 질문 중에는 질문이 띠를 차지한다(엔진 설문처럼): 할 일 카드는 숨기고(다른 플러그인 줄은 AbovePromptList 훅이),
+    // 남는 줄이 있을 때만 아래턱.
     if (asked) {
       return (
         <els.Box flexDirection="column">
@@ -4183,6 +4195,16 @@ export const register: Register = (on, options) => {
         {below}
       </els.Box>
     )
+  })
+
+  // 띠의 줄 순서(2.1.323): 엔진은 AbovePrompt 를 플러그인마다 따로 묻고 그 줄을 체인 순서로 쌓는다. desk-look 줄(할 일·아래턱)을
+  // 맨 위에 두어 다른 플러그인 줄이 입력창 바로 위에 오게 하고(위 AbovePrompt 주석의 collie), 질문 카드는 desk-look 줄만,
+  // desk-plan 의 계획 카드는 그 줄만 남겨 카드가 띠를 차지하게 한다(엔진 설문처럼).
+  on('ui.render', { component: 'AbovePromptList' }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || e.props.hasSurvey) return next(e)
+    const [state, planUp] = await Promise.all([read($, asking), read($, planAsking)])
+    const card = planUp !== null ? 'desk-plan' : state?.questions[state.step] ? 'desk-look' : null
+    return next({ ...e, props: { ...e.props, rows: bandRows(e.props.rows, card) } })
   })
 
   // 턴 끝 카드: 데스크톱의 "Edited N files +51 −37" 상자. 편집이 없던 턴은 원래 줄만 둔다.

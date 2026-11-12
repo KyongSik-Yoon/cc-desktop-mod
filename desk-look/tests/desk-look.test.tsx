@@ -513,6 +513,47 @@ describe('도구 활동', () => {
     expect(await band.find({ type: 'Text', text: 'other-band' })).toBeDefined()
     await band.unmount()
   })
+
+  // 2.1.323: AbovePrompt 는 플러그인마다 따로 묻고 AbovePromptList 가 체인 순서로 쌓는다. desk-look 줄을 맨 위에,
+  // 다른 플러그인 줄은 입력창 바로 위에 둔다. 질문 카드가 뜨면 desk-look 줄만, 계획 카드가 뜨면 desk-plan 줄만.
+  test('띠의 줄은 desk-look 이 맨 위, 질문·계획 카드는 띠를 차지한다', KO, async ($, on) => {
+    on('ui.render', { component: 'AbovePromptList' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>{`rows=${e.props.rows.map(row => row.plugin).join(',')}`}</Text>
+    })
+    let ask: unknown = null
+    let plan: unknown = null
+    on('state.get', { plugin: 'desk-look', key: 'ask' }, () => ({ value: { value: ask, version: ask === null ? 0 : 1 } }) as never)
+    on('state.get', { plugin: 'desk-plan', key: 'planAsk' }, () => ({ value: { value: plan, version: plan === null ? 0 : 1 } }) as never)
+    const row = (plugin: string) => ({ plugin, tree: { type: 'Text', props: {}, children: [plugin] } })
+    const stack = async () => {
+      const list = await $.ui.mount({
+        plugin: 'desk-look',
+        surface: 'terminal',
+        component: 'AbovePromptList',
+        viewport: VIEWPORT,
+        props: {
+          rows: [row('other'), row('desk-look'), row('desk-plan')],
+          hasSurvey: false,
+          isCollapsed: false,
+          isWorking: false,
+          maxRows: 10,
+          bodyColumns: 98,
+          scroll: { top: 0, height: 0, viewport: 0 },
+          view: { mode: 'normal' },
+        } as never,
+      })
+      const drawn = JSON.stringify(await list.drawn())
+      await list.unmount()
+      return drawn
+    }
+    expect(await stack()).toContain('rows=desk-look,other,desk-plan')
+    ask = { id: 'q', dir: '/r', questions: [{ question: '어느 쪽?', header: '고르기', options: [{ label: 'A' }], multiSelect: false }], step: 0, picks: [[]], texts: [''], shownAt: 0 }
+    expect(await stack()).toContain('rows=desk-look"')
+    ask = null
+    plan = { id: 'p' }
+    expect(await stack()).toContain('rows=desk-plan"')
+  })
 })
 
 test('순수 함수', KO, async () => {
