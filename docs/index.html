@@ -382,6 +382,13 @@ h1 .bub {
 /* ── Line comments, demo ─────────────────────────────── */
 .shot { border: 1px solid var(--rule); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); background: #F1F1F0; }
 .shot img, .shot video { width: 100%; height: auto; }
+/* Shown only when the browser refuses to start the recording by itself. */
+.shot.vid { position: relative; }
+.shot .play { position: absolute; inset: 0; display: grid; place-items: center; border: 0; padding: 0; background: rgba(30, 29, 26, .18); cursor: pointer; }
+.shot .play[hidden] { display: none; }
+.shot .play i { width: 76px; height: 76px; border-radius: 50%; background: rgba(38, 38, 36, .82); display: grid; place-items: center; box-shadow: 0 6px 24px rgba(0, 0, 0, .3); }
+.shot .play i::before { content: ""; margin-left: 7px; border-style: solid; border-width: 15px 0 15px 25px; border-color: transparent transparent transparent #F5F4EF; }
+.shot .play:focus-visible i { outline: 3px solid var(--clay); outline-offset: 3px; }
 @media (max-width: 760px) { .shot.peek { height: 320px; } .shot.peek img { width: 170%; max-width: none; } }
 .steps { display: grid; gap: 20px; counter-reset: step; }
 .steps li { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 14px; color: var(--ink-2); }
@@ -872,7 +879,7 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
       <h2><span lang="en">Watch one session run</span><span lang="ko">한 세션이 돌아가는 모습</span></h2>
     </div>
     <figure class="rv">
-      <div class="shot"><video id="demo-video" src="demo.mp4" poster="demo-poster.jpg" width="1600" height="872" autoplay muted loop playsinline preload="metadata" aria-label="desk-look in action: the progress band while Claude works, tool calls folded into one line, the edited-files card, the Markdown preview opening by itself, a line comment in the diff pane sent with the next prompt, and the context pane"></video></div>
+      <div class="shot vid"><video id="demo-video" src="demo.mp4" poster="demo-poster.jpg" width="1600" height="872" autoplay muted loop playsinline preload="metadata" aria-label="desk-look in action: the progress band while Claude works, tool calls folded into one line, the edited-files card, the Markdown preview opening by itself, a line comment in the diff pane sent with the next prompt, and the context pane"></video><button type="button" class="play" hidden><i></i><span class="sr" lang="en">Play the recording</span><span class="sr" lang="ko">녹화 재생</span></button></div>
       <figcaption lang="en">The progress band while Claude works, tool calls folding into one line, the edited-files card, the Markdown preview opening by itself, a line comment in the diff pane that goes with the next prompt, and the context pane. Model work runs at 4× speed.</figcaption>
       <figcaption lang="ko">Claude 가 일하는 동안의 진행 띠, 한 줄로 접히는 도구 호출, 고친 파일 카드, 저절로 열리는 마크다운 미리보기, 다음 프롬프트와 함께 가는 diff 줄 댓글, 컨텍스트 패널. 모델이 일하는 구간은 4배속입니다.</figcaption>
     </figure>
@@ -1122,6 +1129,26 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
   // The recorded session plays by itself, unless the reader asked for less motion.
   var video = document.getElementById('demo-video')
   if (video && reduce) { video.removeAttribute('autoplay'); video.pause(); video.controls = true }
+  // A browser setting can refuse even muted autoplay
+  // without an error, which leaves a poster frame with no way to start it. Once the video is in view,
+  // ask it to play; if that is refused too, put a play button over it.
+  var playBtn = video && video.parentElement.querySelector('.play')
+  var inView = !('IntersectionObserver' in window), started = false
+  function offerPlay() {
+    // Still fetching, so autoplay may yet start by itself; canplay or suspend brings us back.
+    if (started || !inView || !video.paused || (video.readyState < 3 && video.networkState === 2)) return
+    var p = video.play()
+    if (p && p.catch) p.catch(function () { playBtn.hidden = false })
+  }
+  function later() { setTimeout(offerPlay, 500) }
+  if (video && !reduce) {
+    playBtn.addEventListener('click', function () { video.play() })
+    video.addEventListener('playing', function () { started = true; playBtn.hidden = true })
+    video.addEventListener('canplay', later)
+    video.addEventListener('suspend', later)
+    if (!inView) new IntersectionObserver(function (es) { inView = es[0].isIntersecting; if (inView) later() }).observe(video)
+    else later()
+  }
 
   setLang(root.dataset.lang === 'ko' ? 'ko' : 'en')
 })()
