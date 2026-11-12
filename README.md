@@ -126,7 +126,8 @@ The same commands work in `desk-asana`, `desk-slack`, `desk-plan` and `desk-revi
 
 ## Third party
 
-- `desk-look/hooks/vendor/lovely-mermaid.js`: a bundle of [lovely-mermaid](https://github.com/xl0/lovely-mermaid), Apache-2.0 (`LICENSE.lovely-mermaid`), copied into `desk-asana/hooks/shared/vendor/` too
+- `desk-look/hooks/vendor/lovely-mermaid.js`: a bundle of [lovely-mermaid](https://github.com/xl0/lovely-mermaid), Apache-2.0 (`LICENSE.lovely-mermaid`), copied into `desk-asana/hooks/shared/vendor/` and `desk-slack/hooks/shared/vendor/` too
+- `desk-look/hooks/vendor/marked.js`: the block lexer of [marked](https://github.com/markedjs/marked) 18.2.0, bundled without minification from its TypeScript source, MIT with the original Markdown's BSD notice (`LICENSE.marked`), used to split Markdown into blocks, copied into `desk-asana/hooks/shared/vendor/` and `desk-slack/hooks/shared/vendor/` too
 
 ## License
 

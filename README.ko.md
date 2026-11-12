@@ -126,7 +126,8 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 ## 서드파티
 
-- `desk-look/hooks/vendor/lovely-mermaid.js` — [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 를 묶은 파일, Apache-2.0 (`LICENSE.lovely-mermaid`). `desk-asana/hooks/shared/vendor/` 에도 복사해 둠
+- `desk-look/hooks/vendor/lovely-mermaid.js` — [lovely-mermaid](https://github.com/xl0/lovely-mermaid) 를 묶은 파일, Apache-2.0 (`LICENSE.lovely-mermaid`). `desk-asana/hooks/shared/vendor/`·`desk-slack/hooks/shared/vendor/` 에도 복사해 둠
+- `desk-look/hooks/vendor/marked.js` — [marked](https://github.com/markedjs/marked) 18.2.0 의 block lexer 를 TypeScript 소스에서 압축 없이 묶은 파일, MIT 에 원래 Markdown 의 BSD 고지 포함 (`LICENSE.marked`). 마크다운을 블록으로 나누는 데 씀. `desk-asana/hooks/shared/vendor/`·`desk-slack/hooks/shared/vendor/` 에도 복사해 둠
 
 ## 라이선스
 
