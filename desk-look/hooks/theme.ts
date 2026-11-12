@@ -47,3 +47,19 @@ export function parseSurface(toml: string): Surface | null {
     bubble: mix(background, mode === 'light' ? '#000000' : '#ffffff', mode === 'light' ? 0.055 : 0.08),
   }
 }
+
+// 엔진 /theme 설정이 정한 밝기: dark·light 와 그 변형(-daltonized, -ansi). auto·사용자 테마(custom:)·못 읽음은 모른다.
+// 엔진은 auto 를 터미널에 OSC 11 로 물어 풀지만, 그 값은 플러그인에 오지 않는다($.config.list 는 설정 그대로).
+export function engineThemeMode(setting: unknown): 'light' | 'dark' | null {
+  if (typeof setting !== 'string') return null
+  return /^dark(-|$)/.test(setting) ? 'dark' : /^light(-|$)/.test(setting) ? 'light' : null
+}
+
+// omarchy 파일은 이 기계 터미널의 바탕이다. 보는 터미널이 그것과 다르다고 알 수 있으면 면을 끄고 엔진 기본 그림으로 둔다.
+// 엔진 테마가 밝기를 정했는데 omarchy 와 다르면, 엔진 글자색이 면에 묻힌다(어두운 터미널에 엔진 dark 면 흰 글자가 밝은 면 위에).
+// 밝기를 모르면(auto) herdr 원격 클라이언트가 붙었을 때만 끈다: 그 터미널의 바탕은 알 수 없고, 로컬과 동시에 보면 맞는 색이 하나도 없다.
+export function trustSurface(face: Surface | null, engine: 'light' | 'dark' | null, remote: boolean): Surface | null {
+  if (!face) return null
+  if (engine) return engine === face.mode ? face : null
+  return remote ? null : face
+}
