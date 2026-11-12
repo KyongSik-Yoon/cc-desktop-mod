@@ -120,13 +120,14 @@ claude plugin marketplace add ~/dev/git-repo/cc-desktop-mod
 
 `.claude/skills/desk-release-check` gathers the Claude Code release notes and the plugin API diff since the last check, to find what desk-look can use or drop. `CLAUDE.md` holds the repository's conventions (latest Claude Code only, a GitHub release for every version).
 
-The same commands work in `desk-asana`, `desk-slack`, `desk-plan` and `desk-review`. desk-asana draws comments with desk-look's Markdown renderer, copied into `desk-asana/hooks/shared/` (a plugin is installed from its own folder only): after changing `desk-look/hooks/markdown.tsx` or `diagram.ts`, run `scripts/sync-shared.sh` and commit both. The release workflow fails while the copy differs (`scripts/sync-shared.sh --check`).
+The same commands work in `desk-asana`, `desk-slack`, `desk-plan` and `desk-review`. A plugin is installed from its own folder only, so `scripts/sync-shared.sh` copies shared code between them: desk-look's Markdown renderer (`hooks/markdown.tsx`, `diagram.ts` and `hooks/vendor/`'s lovely-mermaid and marked files) into `desk-asana/hooks/shared/` and `desk-slack/hooks/shared/`, desk-look's `hooks/jumps.tsx` into the `hooks/shared/` of desk-asana, desk-slack and desk-review, and `desk-slack/hooks/util.tsx` to `desk-asana/hooks/util.tsx`. After changing any of the originals, run the script and commit the copies with them. The release workflow fails while a copy differs (`scripts/sync-shared.sh --check`), and that check also wants `cellWidth` and `scrollPane` to match desk-look's, which you copy by hand.
 
 `desk-look/.claude-plugin/types/` holds type definitions the engine lays down again every time it loads the mod, so it isn't committed.
 
 ## Third party
 
-- `desk-look/hooks/vendor/lovely-mermaid.js`: a bundle of [lovely-mermaid](https://github.com/xl0/lovely-mermaid), Apache-2.0 (`LICENSE.lovely-mermaid`), copied into `desk-asana/hooks/shared/vendor/` too
+- `desk-look/hooks/vendor/lovely-mermaid.js`: a bundle of [lovely-mermaid](https://github.com/xl0/lovely-mermaid), Apache-2.0 (`LICENSE.lovely-mermaid`), copied into `desk-asana/hooks/shared/vendor/` and `desk-slack/hooks/shared/vendor/` too
+- `desk-look/hooks/vendor/marked.js`: the block lexer of [marked](https://github.com/markedjs/marked) 18.2.0, bundled without minification from its TypeScript source, MIT with the original Markdown's BSD notice (`LICENSE.marked`), used to split Markdown into blocks, copied into `desk-asana/hooks/shared/vendor/` and `desk-slack/hooks/shared/vendor/` too
 
 ## License
 
