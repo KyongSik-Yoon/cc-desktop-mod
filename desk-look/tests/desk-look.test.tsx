@@ -806,6 +806,8 @@ test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없�
     if (path === '/proc/net/unix') return { value: unixTable(bridge ? ['62751', '70001'] : ['62751']) } as never
     throw new Error('ENOENT')
   })
+  // 엔진 테마가 omarchy 와 같은 dark 로 정해져 있으면 원격이어도 면은 칠한다(auto 면 원격일 때 면을 끈다: 아래 테스트)
+  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: 'dark', provider: { kind: 'engine' }, isLocked: false }] as never }))
   on('fs.list', ($, e) => {
     const path = (e as { path?: string }).path
     if (path === '/tmp/claude-501') return { value: [{ name: '-repo', kind: 'dir', size: 0, mtimeMs: 1 }] } as never
@@ -859,6 +861,69 @@ test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없�
   expect(drawn).toContain('"rgba"')
   expect(drawn).toContain('"file"')
   expect(drawn).not.toContain('\u{1FB41}')
+  await bubble.unmount()
+})
+
+// 바탕 면(말풍선·아래턱·코드·패널·diff)은 호스트 omarchy 파일에서 나온다. 보는 터미널이 그 파일과 다르다고 알 수 있으면 끄고 엔진 기본 그림으로 둔다.
+test('바탕 면은 엔진 테마가 omarchy 와 엇갈리거나, auto 인데 herdr 원격이 붙어 있으면 끈다', KO, async ($, on) => {
+  // 그림 출력이 꺼진 herdr 에서도 원격을 본다(그림과 상관없이 바탕 면이 원격 판정을 쓴다).
+  const env: Record<string, string> = { HOME: '/home/t', COLORTERM: 'truecolor', TERM: 'xterm-256color', TERM_PROGRAM: 'herdr', HERDR_ENV: '1' }
+  let theme = 'dark'
+  let bridge = false
+  on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
+  on('fs.read', ($, e) => {
+    const path = String((e as { path?: string }).path ?? e)
+    if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
+    if (path === '/proc/net/unix') return { value: unixTable(bridge ? ['62751', '70001'] : ['62751']) } as never
+    throw new Error('ENOENT')
+  })
+  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: theme, provider: { kind: 'engine' }, isLocked: false }] as never }))
+  on('process.run', ($, e) => {
+    const exitCode = e.argv[0] === 'pgrep' && !bridge ? 1 : 0
+    return { value: { exitCode, stdout: e.argv[0] === 'id' ? '501\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('command.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', ($, e) => e as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const bubble = await $.ui.mount({
+    plugin: 'desk-look',
+    surface: 'terminal',
+    component: 'UserMessage',
+    viewport: VIEWPORT,
+    props: { text: '안녕', origin: { kind: 'composer' }, isExpanded: false },
+  } as never)
+  const gray = mix('#fafafa', '#000000', 0.055)
+  const painted = async (want: boolean) => {
+    let drawn = ''
+    for (let tries = 0; tries < 50; tries++) {
+      await wait(10)
+      drawn = JSON.stringify(await bubble.drawn())
+      if (drawn.includes(gray) === want) break
+    }
+    return drawn.includes(gray)
+  }
+  // 엔진 dark 인데 omarchy 는 light: 어느 쪽이 터미널이든 한쪽 글자가 면에 묻힌다
+  expect(await painted(false)).toBe(false)
+  // 엔진 테마를 omarchy 와 같게 바꾸면 다음 프롬프트에서 다시 칠한다
+  theme = 'light-daltonized'
+  await $.prompt.submit({ text: '다음', origin: { kind: 'composer' }, wait: false } as never)
+  expect(await painted(true)).toBe(true)
+  // auto 는 엔진이 푼 값을 읽을 수 없으니 로컬이면 omarchy 를 믿는다
+  theme = 'auto'
+  await $.prompt.submit({ text: '그다음', origin: { kind: 'composer' }, wait: false } as never)
+  expect(await painted(true)).toBe(true)
+  // 원격 클라이언트가 붙으면(그 터미널의 바탕은 모른다) 끈다
+  bridge = true
+  await $.turn.start({ text: '원격', turnId: 't2' } as never)
+  expect(await painted(false)).toBe(false)
+  // 사용자 테마도 밝기를 모르니 auto 와 같다
+  theme = 'custom:mine'
+  bridge = false
+  await $.turn.start({ text: '로컬', turnId: 't3' } as never)
+  expect(await painted(true)).toBe(true)
   await bubble.unmount()
 })
 

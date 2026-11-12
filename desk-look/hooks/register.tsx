@@ -19,7 +19,7 @@ import { computeTasks } from './tasks'
 import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
 import type { AdvisorCall, FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
-import { OMARCHY_COLORS, gray256, parseSurface } from './theme'
+import { OMARCHY_COLORS, engineThemeMode, gray256, parseSurface, trustSurface } from './theme'
 import { CHART_CELLS, DOT_MS, MONITOR_DEPTH, MONITOR_POINTS, MONITOR_TICK, advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, formatCpu, memTop, orderSessions, procStatOf, sessionFileOf } from './monitor'
 import type { MonitorSeries, MonitorSession, TreeSample } from './monitor'
 import { limitName, contextChipMode, meterLevel, resetIn, ring, showsChip, toBreakdown, toUsage, barRuns, cacheShares, chartColumns, chartRows, chartTop, columnOf, compactionPoints, hhmm, sparkline, splitOf, sumSplits, turnCosts } from './usage'
@@ -1723,14 +1723,28 @@ async function refreshSurface($: EngineInterface) {
   const home = await $.env.get('HOME')
   const toml = home ? await $.fs.read(`${home}/${OMARCHY_COLORS}`).catch(() => null) : null
   const parsed = toml === null ? null : parseSurface(toml)
-  const [colorterm, tmux] = await Promise.all([$.env.get('COLORTERM').catch(() => undefined), $.env.get('TMUX').catch(() => undefined)])
+  const [colorterm, tmux, rows, remote] = await Promise.all([
+    $.env.get('COLORTERM').catch(() => undefined),
+    $.env.get('TMUX').catch(() => undefined),
+    $.config.list().catch(() => []),
+    read($, herdrRemote),
+  ])
   const truecolor = isTruecolor({ COLORTERM: colorterm, TMUX: tmux })
+  const engine = engineThemeMode(rows.find(row => row.key === 'theme')?.value)
+  // 말풍선·아래턱·코드 바탕·모드 알약·패널 바탕·diff 색이 모두 이 값을 쓰므로, 터미널과 어긋나는지 여기서 한 번 가린다.
+  const trusted = trustSurface(parsed, engine, remote)
   // 256색(tmux 안)에서는 말풍선 회색을 팔레트의 회색으로: 섞은 색은 엔진이 색 큐브로 줄여 어두운 테마에서 #5f5f5f 로 밝아진다.
-  // 말풍선·코드 바탕·파일 줄·패널 바탕·모서리 그림이 모두 이 값을 쓰므로 여기서 한 번 바꾼다.
-  const next = parsed && !truecolor ? { ...parsed, bubble: gray256(parsed.bubble) } : parsed
+  const next = trusted && !truecolor ? { ...trusted, bubble: gray256(trusted.bubble) } : trusted
   diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, truecolor) : null
   if (!sameJson(await read($, surface), next)) await update($, surface, () => next)
+  // 엔진 테마가 밝기를 안 정했으면(auto) 면은 원격 판정을 따른다. 그림이 꺼져 원격을 보지 않던 세션이면 그렇게 바뀐 이번에 한 번 본다.
+  const wasAsking = surfaceAsksRemote
+  surfaceAsksRemote = parsed !== null && engine === null
+  if (surfaceAsksRemote && !wasAsking) await refreshHerdrRemote($)
 }
+
+// 바탕 면이 herdr 원격 판정을 쓰는가(omarchy 면이 있고 엔진 테마가 auto 같은 것). 그림이 꺼져 있어도 이때는 원격을 본다.
+let surfaceAsksRemote = false
 
 // diff 색: 터미널 바탕(Omarchy 테마)을 알 때만. 모르면 엔진 diff 그대로(말풍선 등과 같은 규칙).
 // 대화 속 편집 행(callDetail)은 비동기 읽기 없이 그려서 테마를 읽을 때 같이 맞춰 둔다.
@@ -1762,13 +1776,13 @@ let inHerdr = false
 let herdrSeen: { clients: string; remote: boolean } | null = null
 
 // 원격 클라이언트는 이 기계의 bridge 프로세스(`herdr remote-client-bridge`, 이름 있는 세션은 `herdr --session <이름> remote-client-bridge`)로 붙는다. pgrep 은 한 번에 CPU 60~110ms 라
-// 타이머로 훑지 않고 세션을 열 때와 프롬프트를 보낼 때만 보며, herdr 밖이거나 어차피 그림을 안 그리면 보지 않는다. 그래서 원격으로 막 붙었으면 첫 프롬프트를 보낼 때까지는
+// 타이머로 훑지 않고 세션을 열 때와 프롬프트를 보낼 때만 보며, herdr 밖이거나 판정을 쓸 곳이 없으면(그림도 안 그리고 바탕 면도 묻지 않으면) 보지 않는다. 그래서 원격으로 막 붙었으면 첫 프롬프트를 보낼 때까지는
 // 전의 모습이고, 보낸 말풍선도 판정이 올 때까지 잠깐 전의 모습으로 그려졌다가 다시 그려진다.
 // bridge 도 로컬 클라이언트처럼 herdr-client.sock 에 붙으므로, 그 연결이 지난 판정 때 그대로면 붙거나 떨어진 클라이언트가 없어
 // pgrep 없이 넘어간다(/proc/net/unix 읽기는 CPU 2ms). 못 읽거나(/proc 없는 macOS) 소켓 줄이 없으면 늘 pgrep 으로 본다.
 // /clear·/resume 은 atom 만 기본값으로 비우므로 지난 판정이 지금 atom 과 같은지도 본다.
 async function refreshHerdrRemote($: EngineInterface) {
-  if (!inHerdr || (await read($, graphics)) === null) return
+  if (!inHerdr || ((await read($, graphics)) === null && !surfaceAsksRemote)) return
   const clients = herdrClientsOf(await $.fs.read('/proc/net/unix').catch(() => ''))
   if (clients && herdrSeen?.clients === clients && herdrSeen.remote === (await read($, herdrRemote))) return
   const ran = await $.process.run(['pgrep', '-f', '^\\S*herdr( --session \\S+)? remote-client-bridge'], { timeoutMs: 3000 }).catch(() => null)
@@ -1776,7 +1790,10 @@ async function refreshHerdrRemote($: EngineInterface) {
   if (!ran || (ran.exitCode !== 0 && ran.exitCode !== 1)) return
   const remote = ran.exitCode === 0
   herdrSeen = clients ? { clients, remote } : null
-  if ((await read($, herdrRemote)) !== remote) await update($, herdrRemote, () => remote)
+  if ((await read($, herdrRemote)) === remote) return
+  await update($, herdrRemote, () => remote)
+  // 원격이 붙거나 떨어지면 바탕 면도 다시 가린다.
+  await refreshSurface($)
 }
 
 // /proc/net/unix 한 줄은 `Num RefCount Protocol Flags Type St Inode Path` 이고, 서버가 받아 준 연결도 듣는 소켓의 경로를 달고 나온다.
