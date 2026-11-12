@@ -67,6 +67,7 @@ export function codeSource(source: string): string {
 const BULLETS = ['•', '◦', '▪']
 // 코드 블록 최소 폭(테두리 포함). copy 버튼(" ⧉ copy ", 오른쪽 2칸 띄움)과 둥근 모서리가 들어가고, 한 줄 명령이 너무 납작해 보이지 않게.
 const CODE_MIN_WIDTH = 24
+const COPY_LABEL = ' ⧉ copy '
 
 // 블록 구조는 marked(엔진 바이너리에도 들어 있는 파서)의 Lexer 로 읽고, 인라인은 아래 parseInline 이 맡는다.
 // breaks 는 채팅 글용: 문단 안의 줄바꿈을 그대로 둔다(GFM 의 breaks). 아니면 CommonMark 처럼 한 칸으로 잇는다.
@@ -327,7 +328,7 @@ export function splitFrontMatter(markdown: string): { fields: [string, string][]
   return { fields, body: lines.slice(end + 1).join('\n') }
 }
 
-// onCopy 가 있으면 코드 블록 위 테두리 오른쪽에 늘 흐린 "⧉ copy" 버튼을 단다(hover 는 포인터가 있어야 해서 키보드·폰에선 못 본다).
+// onCopy 가 있으면 코드 블록 오른쪽 위 모서리 옆에 늘 흐린 "⧉ copy" 버튼을 단다(hover 는 포인터가 있어야 해서 키보드·폰에선 못 본다).
 // document 는 파일 한 편을 읽는 패널용: 제목 단계를 색·밑줄로 나누고 front matter 를 흐린 머리로 접는다.
 // breaks 는 채팅 글(Slack)용: 한 줄 바꿈도 줄을 바꾼다. cards 는 좁은 패널용: 낱말이 잘릴 만큼 칸이 좁아지는 표를 행마다 카드로.
 export type MarkdownOptions = { onCopy?: (source: string, press: UiPressArgument) => void; document?: boolean; breaks?: boolean; cards?: boolean }
@@ -501,29 +502,34 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
           }
           {
             // markdown 펜스(이슈·MR 초안 등)는 올라갈 모습으로 그린다. 원문은 copy 로.
-            // 너비는 가장 긴 줄 + 테두리·여백 4칸. 한 줄짜리 명령도 copy 버튼 자리는 남게 최소 폭을 둔다.
-            // 내용 폭을 Yoga 에 맡기면(alignSelf 만) 엔진 Code 가 80칸쯤에서 접어 재므로 직접 센다. 엔진 Box 는 maxWidth 를 받지 않아,
-            // room 에 닿는 블록과 markdown 펜스(그린 모양이 원문 폭과 다름)는 예전처럼 부모 폭으로 늘린다(room 은 어림값이라 넘치지 않게).
-            const width = Math.max(CODE_MIN_WIDTH, Math.max(0, ...block.source.split('\n').map(cellWidth)) + 4)
-            const fit = MARKDOWN_FENCE.test(block.language ?? '') || width >= room ? {} : ({ alignSelf: 'flex-start', width } as const)
+            // 데스크톱처럼 내용 폭에 맞춘다: 가장 긴 줄 + 테두리·여백 4칸, 최소 폭, 화면 폭(복사 버튼 자리를 뺀)이 상한.
+            // 내용 폭을 Yoga 에 맡기면(alignSelf 만) 엔진 Code 가 80칸쯤에서 접어 재므로 직접 센다(엔진 Box 는 maxWidth 를 받지 않는다).
+            // markdown 펜스는 그린 모양(표·안쪽 코드 블록 테두리)이 원문 줄 폭과 달라, 버튼과 나란할 때만 상한 폭으로 늘린다.
+            const onCopy = options.onCopy
+            const limit = room - (onCopy ? COPY_LABEL.length : 0)
+            const width = MARKDOWN_FENCE.test(block.language ?? '')
+              ? onCopy
+                ? limit
+                : undefined
+              : Math.min(limit, Math.max(CODE_MIN_WIDTH, Math.max(0, ...block.source.split('\n').map(cellWidth)) + 4))
+            const fit = width === undefined ? {} : ({ alignSelf: 'flex-start', width } as const)
             const code = (
               <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={1} {...fit}>
                 {MARKDOWN_FENCE.test(block.language ?? '') ? (
                   // 톤을 넘겨 인용 안이면 흐리게, 문서 모드여도 바깥 문서의 절 모양(강조색·밑줄)을 쓰지 않게 한다.
-                  blocks(parseBlocks(block.source, options.breaks), k, room - 4, tone ?? colors.text)
+                  blocks(parseBlocks(block.source, options.breaks), k, (width ?? room) - 4, tone ?? colors.text)
                 ) : (
                   <Code source={codeSource(block.source)} language={block.language} wrap="wrap" />
                 )}
               </Box>
             )
-            const onCopy = options.onCopy
             if (!onCopy) return <Box marginTop={gap}>{code}</Box>
+            // 버튼은 흐름 안, 상자 오른쪽 위 모서리 옆(데스크톱도 오른쪽에 버튼 자리를 비워 둔다). 위 테두리에 절대 위치로 얹으면
+            // 대화를 굴려 테두리가 화면 위로 나갈 때 엔진이 버튼을 첫 보이는 줄의 코드 위에 겹쳐 그린다(2.1.322 실측).
             return (
-              <Box key={`code${k}`} marginTop={gap} flexDirection="column" {...fit}>
+              <Box key={`code${k}`} marginTop={gap} flexDirection="row" alignItems="flex-start">
                 {code}
-                <Box position="absolute" top={0} right={2}>
-                  <Button key={`copy${k}`} plain dimColor label=" ⧉ copy " onPress={press => onCopy(block.source, press)} />
-                </Box>
+                <Button key={`copy${k}`} plain dimColor label={COPY_LABEL} onPress={press => onCopy(block.source, press)} />
               </Box>
             )
           }

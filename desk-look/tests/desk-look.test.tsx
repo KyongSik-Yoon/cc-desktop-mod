@@ -73,9 +73,15 @@ describe('응답 렌더링', () => {
     expect(drawn).toContain('"href":"https://example.com/doc"')
     expect(drawn).toContain('"borderStyle":"quote"')
     expect(await reply.find({ type: 'Code' })).toBeDefined()
-    // 코드 블록 복사 버튼: hover 없이 늘 흐리게 보이고, 블록은 내용 폭에 맞춘다
+    // 코드 블록 복사 버튼: hover 없이 늘 흐리게, 절대 위치가 아니라 상자 오른쪽 위 옆 흐름 안에(굴릴 때 코드 위에 겹치지 않게).
+    // 상자는 내용 폭(최소 24칸)에 맞추고 상한은 화면 폭에서 버튼 자리 8칸을 뺀 폭.
     expect(drawn).not.toContain('"hover":{"display":"flex"}')
-    expect(drawn).toMatch(/"alignSelf":"flex-start","width":\d+/)
+    expect(drawn).not.toContain('"position":"absolute","top":0,"right":2')
+    expect(drawn).toContain('"flexDirection":"row","alignItems":"flex-start"')
+    const widths = [...drawn.matchAll(/"alignSelf":"flex-start","width":(\d+)/g)].map(match => Number(match[1]))
+    expect(widths.length).toBeGreaterThan(0)
+    for (const width of widths) expect(width).toBeGreaterThanOrEqual(24)
+    for (const width of widths) expect(width).toBeLessThanOrEqual(VIEWPORT.columns - 8)
     const copyKey = /"key":"(copymd\.\d+)"/.exec(drawn)?.[1]
     expect(copyKey).toBeDefined()
     await reply.press({ key: copyKey ?? '' })
