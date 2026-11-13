@@ -4301,18 +4301,21 @@ export const register: Register = (on, options) => {
     const width = Math.max(30, Math.min((e.viewport?.columns ?? 80) - 4, 72))
     const name = (path: string) => path.split('/').pop() ?? path
     const els = $.ui.resolve(e)
-    // 파일 줄은 누르면 diff 패널의 그 파일로. 이름을 채워 칩을 오른쪽 끝에 맞춘다(테두리·여백 4칸).
+    // 파일 이름과 ± 칩은 누르면 diff 패널의 그 파일로. 그 사이 빈칸으로 칩을 오른쪽 끝에 맞춘다(테두리·여백 4칸).
+    // 빈칸은 버튼 밖에 둔다: 줄 전체가 버튼이면 대화를 고르거나 누르다 빈 곳을 건드려도 변경 사항 탭이 앞으로 온다.
     // 마크다운 문서 줄은 끝에 ◫(미리보기)를 더 둔다. 그 두 칸은 모든 줄이 비워 둬서 칩 열이 맞는다.
     const docSlot = card.files.some(file => isMarkdown(file.path)) ? 2 : 0
     const fileRow = (file: TurnEdit) => {
       const chips = ` +${file.added}  −${file.removed} `
       const room = Math.max(8, width - 4 - cellWidth(chips) - docSlot)
       const label = clipStart(name(file.path), room)
-      const row = rowButton(
-        els,
-        { key: `diffat-${card.durationMs}-${file.path}`, onPress: () => void openDiffAt($, file.path).catch(() => undefined) },
-        label + ' '.repeat(Math.max(0, room - cellWidth(label))),
-        diffChips(Text, file.added, file.removed),
+      const onPress = () => void openDiffAt($, file.path).catch(() => undefined)
+      const row = (
+        <Box>
+          {rowButton(els, { key: `diffat-${card.durationMs}-${file.path}`, onPress }, label)}
+          <Text>{' '.repeat(Math.max(0, room - cellWidth(label)))}</Text>
+          {rowButton(els, { key: `diffat-chips-${card.durationMs}-${file.path}`, onPress }, '', diffChips(Text, file.added, file.removed))}
+        </Box>
       )
       if (docSlot === 0) return row
       return (

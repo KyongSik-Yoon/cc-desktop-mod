@@ -3163,9 +3163,14 @@ test('턴 끝 카드의 파일 줄을 누르면 diff 패널이 그 파일에서 
   const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-diff', viewport: VIEWPORT, props: { title: '변경 사항', isFocused: true } as never })
   // 패널은 접힌 목록으로 열리고, 카드에서 누르면 그 파일을 펼쳐서 연다(그 파일로 스크롤은 실화면에서 확인: 테스트 도구는 key 스크롤을 풀지 못한다)
   expect(await pane.find({ type: 'Code' })).toBeUndefined()
+  // 이름 뒤 빈칸은 버튼 밖이다: 대화를 누르다 빈 곳을 건드려도 변경 사항 탭이 앞으로 오지 않는다.
+  expect((await row.find({ key: 'diffat-3000-/repo/a.txt' }))?.text).toBe('a.txt')
   await row.press({ key: 'diffat-3000-/repo/a.txt' })
   expect(opened).toEqual(['desk-diff'])
   expect(await pane.find({ type: 'Code' })).toBeDefined()
+  // ± 칩도 같은 곳으로 간다.
+  await row.press({ key: 'diffat-chips-3000-/repo/a.txt' })
+  expect(opened).toEqual(['desk-diff', 'desk-diff'])
   await pane.unmount()
   await row.unmount()
 })
