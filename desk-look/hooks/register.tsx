@@ -6,7 +6,7 @@ import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsO
 import { cellWidth, codeSource, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan, wrapRoom, wrappedHeights } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
-import { commentContext, draftKey, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
+import { commentContext, draftKey, isStale, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
 import type { LinePress } from './comments'
 import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withPredicted } from './runs'
 import type { PredictedCall, RunCursor } from './runs'
@@ -30,7 +30,7 @@ import { LOG_FORMAT, MAX_COMMITS, SCOPES, baseCandidates, branchChoices, matches
 import { T, currentLang, langFromConfig, langSetting, setLang, type Lang } from './i18n'
 import { previewHtml } from './preview-html'
 import { jumpsTop, learnRows, withJumps, type PaneSite } from './jumps'
-import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isMarkdown, isPrivate, previewOf, previewTool } from './preview'
+import { PREVIEW_PANE, PREVIEW_ROOM, PREVIEW_TOOL, fileName, isDocComment, isMarkdown, isPrivate, previewOf, previewPatchKey, previewTool, sourceLines, sourcePatch } from './preview'
 
 export { cellWidth } from './markdown'
 
@@ -82,6 +82,8 @@ const turnCards = atom({ plugin: 'desk-look', key: 'turnCards' } as const, [] as
 const diffWindow = atom({ plugin: 'desk-look', key: 'diffWindow' } as const, { offset: 0, bodyRows: 0 })
 // 미리보기 패널에 열린 문서, 그리고 이번 턴에 Write 로 쓴 문서(마지막 것이 턴 끝에 열린다).
 const previewFile = atom({ plugin: 'desk-look', key: 'preview' } as const, null as PreviewFile | null)
+// 미리보기 패널의 원문 줄 보기(c, 줄 댓글을 단다). 다른 문서를 열면 그려진 보기로 돌아간다.
+const previewSource = atom({ plugin: 'desk-look', key: 'previewSource' } as const, false)
 const previewWritten = atom({ plugin: 'desk-look', key: 'previewWritten' } as const, null as string | null)
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
@@ -1110,6 +1112,8 @@ async function loadPreview($: EngineInterface, asked: string): Promise<PreviewFi
     text => ({ path, text }),
     (error: unknown) => ({ path, text: '', error: error instanceof Error ? error.message : String(error) }),
   )
+  const before = await read($, previewFile)
+  if (before?.path !== path) await update($, previewSource, () => false)
   await update($, previewFile, () => file)
   return file
 }
@@ -1476,8 +1480,7 @@ async function pickLine($: EngineInterface, at: LinePress) {
   if (!next || before?.patch !== next.patch) draftText = ''
   await update($, commentDraft, () => next)
   if (!next) return
-  await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
-  await $.ui.focus({ requestId: PANE, key: draftInputKey(next) }).catch(() => undefined)
+  await focusDraft($, next)
 }
 
 // 지우기: 범위는 두고 쓴 글만 비운 칸을 새로 그려 그리로 돌아간다.
@@ -1487,8 +1490,14 @@ async function clearComment($: EngineInterface) {
   const draft = await read($, commentDraft)
   await update($, commentDraft, current => (current ? { ...current } : current))
   if (!draft) return
-  await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
-  await $.ui.focus({ requestId: PANE, key: draftInputKey(draft) }).catch(() => undefined)
+  await focusDraft($, draft)
+}
+
+// 초안 입력칸이 있는 패널(diff 패널, 문서 줄이면 미리보기 패널)을 키를 가진 채 열고 칸으로 간다.
+async function focusDraft($: EngineInterface, draft: CommentDraft) {
+  const id = isDocComment(draft) ? PREVIEW_PANE : PANE
+  await $.ui.open({ ...(await paneLook($)), id, title: id === PANE ? T.paneChanges : fileName(draft.path), focus: true })
+  await $.ui.focus({ requestId: id, key: draftInputKey(draft) }).catch(() => undefined)
 }
 
 async function cancelComment($: EngineInterface) {
@@ -1502,8 +1511,11 @@ async function saveComment($: EngineInterface, draft: CommentDraft, lines: DiffL
   await cancelComment($)
   if (body === '' || lines.length === 0) return
   const end = lines[lines.length - 1] as DiffLine
-  const id = String(++commentSeq)
-  await update($, lineComments, list => [...list, { id, patch: draft.patch, path: draft.path, scope: draft.scope, end: lineRef(end), lines, body }])
+  // 댓글은 리로드 뒤에도 남는데 commentSeq 는 0 으로 돌아가므로, 남은 것보다 큰 번호를 준다(형제가 id 로 지운다).
+  await update($, lineComments, list => {
+    commentSeq = Math.max(commentSeq, ...list.map(item => Number(item.id) || 0)) + 1
+    return [...list, { id: String(commentSeq), patch: draft.patch, path: draft.path, scope: draft.scope, end: lineRef(end), lines, body }]
+  })
 }
 
 // 2.1.311 $.prompt.paint: 입력창의 인용 줄(> …)을 대화 기록의 인용처럼. 표시는 흐리게, 글은 기울여 흐린 색.
@@ -2766,20 +2778,117 @@ function slackChip(els: Els, $: EngineInterface, count: number) {
   }
 }
 
-// 아래턱의 "✎ 2": 다음 프롬프트에 같이 갈 줄 댓글 수(데스크톱 입력창의 Comment 카드). 누르면 diff 패널.
+// 아래턱의 "✎ 2": 다음 프롬프트에 같이 갈 줄 댓글 수(데스크톱 입력창의 Comment 카드). 누르면 diff 패널,
+// 댓글이 모두 한 문서의 줄 댓글이면 그 문서를 미리보기 패널의 원문 줄 보기로.
 function commentsChip(els: Els, $: EngineInterface, list: LineComment[]) {
   if (list.length === 0) return null
   const { Text, Button } = els
   const label = String(list.length)
+  const doc = list.every(item => isDocComment(item) && item.path === list[0]?.path) ? list[0]?.path : undefined
   return {
     width: 2 + cellWidth(label),
     node: (
-      <Button key="comments-chip" plain dimColor onPress={() => void openDiff($).catch(() => undefined)}>
+      <Button key="comments-chip" plain dimColor onPress={() => void (doc ? openDocComments($, doc) : openDiff($)).catch(() => undefined)}>
         <Text color={COLORS.link}>✎</Text>
         {` ${label}`}
       </Button>
     ),
   }
+}
+
+async function openDocComments($: EngineInterface, path: string) {
+  await openPreview($, path, true)
+  await update($, previewSource, () => true)
+}
+
+// 줄 댓글 초안: 고른 범위 끝 줄 밑의 여러 줄 입력칸과 지우기·취소(diff 패널·미리보기 패널 공용).
+function commentDraftRow($: EngineInterface, els: Els, key: string, picked: CommentDraft, lines: DiffLine[], pad: number) {
+  const { Box, Button, Input } = els
+  return (
+    <Box key={key} height={COMMENT_ROWS} paddingLeft={pad} columnGap={1}>
+      <Box flexGrow={1} flexShrink={1} overflow="hidden">
+        <Input
+          key={draftInputKey(picked)}
+          label={T.commentLabel(rangeLabel(lines))}
+          placeholder={T.commentPlaceholder}
+          rows={COMMENT_ROWS}
+          value={draftText}
+          submitLabel={T.commentSave}
+          onInput={value => (draftText = value)}
+          onSubmit={value => void saveComment($, picked, lines, value).catch(() => undefined)}
+        />
+      </Box>
+      <Button key="comment-clear" plain dimColor label={T.inputClear} onPress={() => void clearComment($)} />
+      <Button key="comment-cancel" plain dimColor label={T.cancel} onPress={() => void cancelComment($)} />
+    </Box>
+  )
+}
+
+// 단 댓글 한 행: ✎ 줄 범위와 글(줄바꿈은 ↵), 끝에 ✕. stale 이면 그 줄이 바뀌었다고 흐리게 알린다.
+function commentNoteRow($: EngineInterface, els: Els, key: string, comment: LineComment, pad: number, stale = false) {
+  const { Box, Text, Button } = els
+  return (
+    <Box key={key} height={1} paddingLeft={pad} columnGap={1}>
+      <Box flexGrow={1} flexShrink={1} overflow="hidden">
+        <Text wrap="truncate-end" dimColor={stale}>
+          <Text color={stale ? COLORS.muted : COLORS.link}>{`✎ ${rangeLabel(comment.lines)}`}</Text>
+          {stale ? <Text color={COLORS.muted}>{` ${T.commentStale}`}</Text> : null}
+          {`  ${comment.body.replaceAll('\n', ' ↵ ')}`}
+        </Text>
+      </Box>
+      <Button key={`comment-del-${comment.id}`} plain dimColor label="✕" onPress={() => void update($, lineComments, list => list.filter(item => item.id !== comment.id))} />
+    </Box>
+  )
+}
+
+// 문서를 테마를 모를 때도 그리게: 원문 줄은 안 바뀐 줄뿐이라 팔레트에서 muted(번호 색)만 쓴다.
+const plainPalette: DiffPalette = { addBg: COLORS.muted, delBg: COLORS.muted, addStrong: COLORS.muted, delStrong: COLORS.muted, addBar: COLORS.muted, delBar: COLORS.muted, muted: COLORS.muted }
+
+// 미리보기 패널의 원문 줄 보기: 번호 붙은 줄(번호를 누르면 줄·범위 댓글), 범위 끝 줄 밑에 초안 칸·단 댓글.
+// 문서가 바뀌어 짚은 줄 글이 달라진 댓글은 본문 끝에 "줄이 바뀜"으로 모은다(지우지 않는다: 보낼 때 적어 둔 원문이 같이 간다).
+function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text: string, columns: number, draft: CommentDraft | null, comments: LineComment[]) {
+  const { Box } = els
+  const key = previewPatchKey(file.path)
+  const { rows } = patchBlocks(sourcePatch(text))
+  const now = sourceLines(text)
+  const mine = comments.filter(comment => comment.patch === key)
+  const stale = mine.filter(comment => isStale(comment, now))
+  const placed = mine.filter(comment => !stale.includes(comment))
+  const picking = draft?.patch === key ? draft : null
+  const picked = picking ? rangeOf(rows, picking.anchor, picking.end) : null
+  const gutter = gutterWidth(rows)
+  const pad = 1 + gutter
+  const after = new Map<number, JSX.Element[]>()
+  const insert = (row: number, node: JSX.Element) => after.set(row, [...(after.get(row) ?? []), node])
+  for (const comment of placed) {
+    const row = rowOf(rows, comment.end)
+    if (row !== -1) insert(row, commentNoteRow($, els, `pc-${comment.id}`, comment, pad))
+  }
+  if (picking && picked) insert(picked[1], commentDraftRow($, els, 'pc-draft', picking, linesIn(rows, picked), pad))
+  const cuts = [...after.keys()].sort((a, b) => a - b)
+  const pieces = [...cuts, rows.length - 1].map((cut, index) => ({ from: index === 0 ? 0 : (cuts[index - 1] ?? 0) + 1, to: cut }))
+  const options = { path: file.path, gutter, columns, wrap: true, unmodified: T.unmodifiedLines }
+  const pick = {
+    Button: els.Button,
+    mark: COLORS.link,
+    isPicked: (row: number) => picked !== null && row >= picked[0] && row <= picked[1],
+    onPress: (row: number) => {
+      const at = rows[row]
+      if (at?.kind === 'line') void pickLine($, { patch: key, path: file.path, scope: 'document', line: at.line }).catch(() => undefined)
+    },
+  }
+  const out: JSX.Element[] = []
+  for (const [index, piece] of pieces.entries()) {
+    if (piece.to < piece.from) continue
+    let first = piece.from
+    for (const [n, block] of diffBlocks(rows.slice(piece.from, piece.to + 1)).entries()) {
+      out.push(diffBlock(els, diffColors ?? plainPalette, block, `src.${index}.${n}`, { ...options, pick: { ...pick, first } }))
+      first += block.kind === 'gap' ? 1 : block.lines.length
+    }
+    out.push(...(after.get(piece.to) ?? []))
+  }
+  if (stale.length > 0) out.push(<Box key="pc-stale" height={1} />, ...stale.map(comment => commentNoteRow($, els, `pc-${comment.id}`, comment, 0, true)))
+  return <Box flexDirection="column">{out}</Box>
 }
 
 const AGENT_STATUS_COLOR: Record<string, string> = { completed: COLORS.success, failed: COLORS.danger }
@@ -4739,17 +4848,22 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
     if (file === null) return <Text color={COLORS.muted}>{T.previewNothing}</Text>
-    const face = await read($, surface)
+    const [face, isSource, draft, comments] = await Promise.all([read($, surface), read($, previewSource), read($, commentDraft), read($, lineComments)])
     const columns = (e.props as { bodyColumns?: number }).bodyColumns ?? e.viewport?.columns ?? 80
     const isCut = file.text.length > PREVIEW_ROOM
+    const text = isCut ? file.text.slice(0, PREVIEW_ROOM) : file.text
     const folder = file.path.slice(0, Math.max(0, file.path.length - fileName(file.path).length - 1))
+    const noted = comments.filter(comment => comment.patch === previewPatchKey(file.path)).length
+    const toggleSource = () => void update($, previewSource, isOn => !isOn).catch(() => undefined)
     return paneJumps($, els, e, (
       <Box flexDirection="column">
         <Box columnGap={2}>
-          <Box flexShrink={0}>
+          <Box flexShrink={0} columnGap={1}>
             <Text color={COLORS.text} weight="semibold">
               {fileName(file.path)}
             </Text>
+            {/* 이 문서에 단 줄 댓글 수: 다음 프롬프트(계획 카드가 떠 있으면 고쳐 달라는 답)에 같이 간다 */}
+            {noted > 0 && <Text color={COLORS.link}>{`✎ ${noted}`}</Text>}
           </Box>
           {/* 좁으면 폴더만 앞쪽부터 줄인다. 이름과 단축키는 늘 보인다. */}
           <Box flexGrow={1} flexShrink={1}>
@@ -4758,6 +4872,7 @@ export const register: Register = (on, options) => {
             </Text>
           </Box>
           <Box columnGap={2} flexShrink={0}>
+            {file.error === undefined && <Button key="preview-source" plain dimColor={!isSource} hotkey="c" label={isSource ? T.previewRendered : T.previewComment} onPress={toggleSource} />}
             <Button key="preview-reload" plain dimColor hotkey="r" label={T.previewReload} onPress={() => void loadPreview($, file.path).catch(() => undefined)} />
             <Button key="preview-changes" plain dimColor hotkey="d" label={T.previewChanges} onPress={() => void openDiffAt($, file.path).catch(() => undefined)} />
             {file.error === undefined && <Button key="preview-browser" plain dimColor hotkey="o" label={T.previewBrowser} onPress={() => void openPreviewInBrowser($, file).catch(() => undefined)} />}
@@ -4767,8 +4882,10 @@ export const register: Register = (on, options) => {
         <Box marginTop={1} flexDirection="column">
           {file.error !== undefined ? (
             <Text color={COLORS.danger}>{T.previewUnreadable(file.error)}</Text>
+          ) : isSource ? (
+            previewSourceView($, els, file, text, columns - 1, draft, comments)
           ) : (
-            renderMarkdown(isCut ? file.text.slice(0, PREVIEW_ROOM) : file.text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns - 1, {
+            renderMarkdown(text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns - 1, {
               document: true,
               onCopy: (source, press) => void copyText($, source, press, 'code'),
             })
@@ -5192,35 +5309,8 @@ export const register: Register = (on, options) => {
           comments,
           scopeOf: prefix => commentScope(prefix, view.base?.ref),
           onLine: at => void pickLine($, at).catch(() => undefined),
-          draftRow: (key, picked, lines, pad) => (
-            <Box key={key} height={COMMENT_ROWS} paddingLeft={pad} columnGap={1}>
-              <Box flexGrow={1} flexShrink={1} overflow="hidden">
-                <Input
-                  key={draftInputKey(picked)}
-                  label={T.commentLabel(rangeLabel(lines))}
-                  placeholder={T.commentPlaceholder}
-                  rows={COMMENT_ROWS}
-                  value={draftText}
-                  submitLabel={T.commentSave}
-                  onInput={value => (draftText = value)}
-                  onSubmit={value => void saveComment($, picked, lines, value).catch(() => undefined)}
-                />
-              </Box>
-              <Button key="comment-clear" plain dimColor label={T.inputClear} onPress={() => void clearComment($)} />
-              <Button key="comment-cancel" plain dimColor label={T.cancel} onPress={() => void cancelComment($)} />
-            </Box>
-          ),
-          commentRow: (key, comment, pad) => (
-            <Box key={key} height={1} paddingLeft={pad} columnGap={1}>
-              <Box flexGrow={1} flexShrink={1} overflow="hidden">
-                <Text wrap="truncate-end">
-                  <Text color={COLORS.link}>{`✎ ${rangeLabel(comment.lines)}`}</Text>
-                  {`  ${comment.body.replaceAll('\n', ' ↵ ')}`}
-                </Text>
-              </Box>
-              <Button key={`comment-del-${comment.id}`} plain dimColor label="✕" onPress={() => void update($, lineComments, list => list.filter(item => item.id !== comment.id))} />
-            </Box>
-          ),
+          draftRow: (key, picked, lines, pad) => commentDraftRow($, els, key, picked, lines, pad),
+          commentRow: (key, comment, pad) => commentNoteRow($, els, key, comment, pad),
         },
       })
       // 긴 패널은 withJumps 가 트리 위에 한 줄을 더해, 트리 안 파일 머리 위치가 창 위치보다 그만큼 앞선다.

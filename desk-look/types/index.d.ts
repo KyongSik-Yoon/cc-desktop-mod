@@ -312,6 +312,8 @@ declare module 'claude-code' {
       // 미리보기 패널에 열린 문서와, 이번 턴에 Write 로 쓴 문서(턴 끝에 연다). 없으면 null.
       preview: PreviewFile | null
       previewWritten: string | null
+      // 미리보기 패널의 원문 줄 보기(c). 켜면 번호 붙은 원문 줄에 줄 댓글을 단다(patch 키 p:경로).
+      previewSource: boolean
     }
     // 같은 마켓의 desk-asana·desk-slack 이 쓰는 값 가운데 desk-look 이 읽는 것(그쪽 types 와 같은 모양).
     // folded: /desk-fold 로 접어 둔 자기 패널, ready: 이 세션에 떠 있음, shown: 자기 패널이 열려 있음, unread: 안 읽은 Slack 메시지 수.

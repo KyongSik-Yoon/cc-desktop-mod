@@ -6,7 +6,8 @@ import { setLang } from '../hooks/i18n'
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
 import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, renderMarkdown, splitFrontMatter } from '../hooks/markdown'
-import { previewOf } from '../hooks/preview'
+import { previewOf, previewPatchKey, sourcePatch } from '../hooks/preview'
+import { commentContext, isStale } from '../hooks/comments'
 import { previewHtml } from '../hooks/preview-html'
 import { scrollBar, treeRows } from '../hooks/jumps'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan, WRAP_ROWS, wrapLine } from '../hooks/diffview'
@@ -5047,6 +5048,71 @@ describe('미리보기 패널', () => {
     await $.tool.call({ tool: 'Write', file_path: '/home/me/.claude/plans/p.md', content: '# plan' } as never)
     await $.turn.complete({ durationMs: 2000, reason: 'answer', answer: '썼어요', turnId: 't2' } as never)
     expect(opened).toHaveLength(2)
+    await pane.unmount()
+  })
+
+  test('순수 함수: 원문 줄 패치, 문서 줄 댓글 context, 바뀐 줄 알기', KO, async () => {
+    expect(sourcePatch('# 제목\n\n- 하나\n')).toBe('@@ -1,3 +1,3 @@\n # 제목\n \n - 하나')
+    const rows = diffRows(parseHunks(sourcePatch('a\r\nb\nc')))
+    expect(rows.map(row => (row.kind === 'line' ? `${row.line.kind}${row.line.newNo}${row.line.text}` : 'gap'))).toEqual([' 1a', ' 2b', ' 3c'])
+    const doc = { id: '1', patch: previewPatchKey('/r/PLAN.md'), path: '/r/PLAN.md', scope: 'document', end: { kind: ' ' as const, oldNo: 3, newNo: 3 }, lines: [2, 3].map(n => ({ kind: ' ' as const, oldNo: n, newNo: n, text: `줄${n}` })), body: '나눠 줘' }
+    const diff = { ...doc, id: '2', patch: 'src/a.ts', path: 'src/a.ts', scope: 'uncommitted changes', lines: [{ kind: '+' as const, oldNo: 0, newNo: 9, text: 'x' }] }
+    const both = commentContext([diff, doc])
+    expect(both).toContain('lines of a diff')
+    expect(both).toContain('src/a.ts:9 (uncommitted changes)\n```diff\n9 + x')
+    expect(both).toContain('lines of a document in the desk-look preview pane')
+    expect(both).toContain('/r/PLAN.md:2–3\n```\n2 줄2\n3 줄3\n```\n나눠 줘')
+    // 문서 댓글만이면 diff 머리 문장은 없다
+    expect(commentContext([doc])).not.toContain('lines of a diff')
+    expect(isStale(doc, ['줄1', '줄2', '줄3'])).toBe(false)
+    expect(isStale(doc, ['줄1', '바뀐 줄', '줄3'])).toBe(true)
+    expect(isStale(doc, ['줄1', '줄2'])).toBe(true)
+  })
+
+  test('원문 줄 보기(c): 번호를 눌러 줄·범위에 댓글, 다음 프롬프트에 문서 줄로 붙고, 줄이 바뀌면 알린다', KO, async ($, on) => {
+    const files: Record<string, string> = { '/repo/PLAN.md': ['# 계획', '', '1. 저장소를 Redis 로', '2. 만료 30분', '3. 테스트'].join('\n') }
+    const sent: { text: string; context?: readonly string[] }[] = []
+    docWorld(on, files)
+    on('prompt.submit', ($, e) => {
+      sent.push({ text: e.text, context: e.context })
+      return e as never
+    })
+    await $.tool.call({ tool: 'mcp__desk-look__preview', path: '/repo/PLAN.md' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-preview', viewport: VIEWPORT, props: { title: 'PLAN.md', isFocused: true, bodyColumns: 70 } as never })
+    // 그려진 보기에는 번호 버튼이 없다
+    expect(await pane.find({ type: 'Button', key: 'src.0.0.p0' })).toBeUndefined()
+    await pane.press({ key: 'preview-source' })
+    expect(await pane.find({ type: 'Button', text: '◫ 그려진 보기' })).toBeDefined()
+    expect(JSON.stringify(await pane.drawn())).toContain('2. 만료 30분')
+    // 4번 줄(행 3)을 누르고 5번 줄(행 4)로 범위를 넓힌다. 초안 칸이 4번 줄 밑에 끼어 덩어리가 그 줄에서 나뉜다.
+    await pane.press({ key: 'src.0.0.p3' })
+    expect(JSON.stringify(await pane.find({ type: 'Input' }))).toContain('4번 줄')
+    await pane.press({ key: 'src.1.0.p0' })
+    const input = (await pane.find({ type: 'Input' })) as { key?: string } | undefined
+    expect(JSON.stringify(input)).toContain('4–5번 줄')
+    await pane.input({ key: input?.key ?? '', text: '만료는 설정값으로' })
+    expect(await pane.find({ type: 'Input' })).toBeUndefined()
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('✎ 4–5')
+    // 머리에 이 문서의 댓글 수
+    expect(await pane.find({ type: 'Text', text: '✎ 1' })).toBeDefined()
+
+    // 문서가 바뀌어 짚은 줄 글이 달라지면 끝에 "줄이 바뀜"으로 모은다
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/PLAN.md', old_string: '만료 30분', new_string: '만료 1시간' } as never)
+    await pane.press({ key: 'preview-reload' })
+    expect(JSON.stringify(await pane.drawn())).toContain('(줄이 바뀜)')
+
+    // 다음 프롬프트에 문서 줄 블록으로 붙고(그 줄 원문은 적어 둔 그대로) 비워진다
+    await $.prompt.submit({ text: '고쳐줘', origin: { kind: 'composer' }, wait: false } as never)
+    const context = sent.at(-1)?.context?.join('\n') ?? ''
+    expect(context).toContain('lines of a document in the desk-look preview pane')
+    expect(context).toContain('/repo/PLAN.md:4–5\n```\n4 2. 만료 30분\n5 3. 테스트\n```\n만료는 설정값으로')
+    expect(JSON.stringify(await pane.drawn())).not.toContain('✎ 4–5')
+
+    // 다른 문서를 열면 그려진 보기로 돌아간다
+    files['/repo/B.md'] = '# B'
+    await $.tool.call({ tool: 'mcp__desk-look__preview', path: '/repo/B.md' } as never)
+    expect(await pane.find({ type: 'Button', text: '✎ 줄 댓글' })).toBeDefined()
     await pane.unmount()
   })
 
