@@ -196,8 +196,8 @@ h1 .bub {
 .k-card .chip { text-align: right; }
 .k-table { border-collapse: separate; border-spacing: 0; border: 1px solid var(--rule); border-radius: 6px; width: 100%; }
 .k-table th, .k-table td { text-align: left; padding: .2em 1ch; font-weight: 400; }
-.k-table th { background: var(--bubble); }
-.k-table td { border-top: 1px solid var(--rule); }
+.k-table th { font-weight: 600; }
+.k-table tbody tr:first-child td { border-top: 1px solid var(--rule); }
 .k-alert { border: 1.5px solid var(--note); border-radius: 6px; padding: .35em 1.5ch; }
 .k-alert b { color: var(--note); }
 .k-agent { border: 1px solid var(--rule); border-radius: 6px; padding: .4em 1.5ch; display: grid; grid-template-columns: minmax(0, 1fr) auto; }
@@ -254,11 +254,11 @@ h1 .bub {
 .raw-row.res { padding-left: 2ch; grid-template-columns: 3ch minmax(0, 1fr); color: var(--ink-3); }
 .raw-row .ok { color: var(--add); }
 /* Rows both drawings share change their dress in place. */
-.u { align-self: flex-start; max-width: 100%; padding: .35em 1.6ch; border-radius: .95em; background: var(--bubble); transition: background-color .6s ease, padding .7s var(--ease), color .6s ease; }
+.u { align-self: stretch; max-width: 100%; padding: .2em 1.6ch; background: color-mix(in srgb, var(--clay) 13%, transparent); box-shadow: inset 3px 0 var(--clay); transition: background-color .6s ease, box-shadow .6s ease, padding .7s var(--ease), color .6s ease; }
 .pre { display: inline-block; width: 0; opacity: 0; overflow: hidden; white-space: pre; vertical-align: bottom; transition: width .7s var(--ease), opacity .4s ease; }
 .tx code, .k-modepill { transition: background-color .6s ease, color .6s ease, padding .7s var(--ease); }
 .k-modepill { display: inline-block; background: var(--mode-bg); border-radius: 999px; padding: 0 1.2ch; }
-.stage[data-step="0"] .u { background: transparent; padding-inline: 0; color: var(--ink-2); }
+.stage[data-step="0"] .u { background: transparent; box-shadow: none; padding-inline: 0; color: var(--ink-2); }
 .stage[data-step="0"] .pre { width: 2ch; opacity: 1; }
 .stage[data-step="0"] .tx code { background: transparent; color: var(--note); padding: 0; }
 .stage[data-step="0"] .k-modepill { background: transparent; padding: 0; }
@@ -524,7 +524,7 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
       </div>
       <p class="cap" id="cap">
         <span data-at="0"><b>1 Claude Code</b> <span lang="en">A turn as Claude Code draws it: a row and a result block for every call.</span><span lang="ko">Claude Code 가 그리는 한 턴입니다. 호출마다 한 줄과 결과 블록이 붙습니다.</span></span>
-        <span data-at="1"><b>2 desk-look</b> <span lang="en">The same turn, the same engine. Your prompt is a bubble, the four calls fold into one line, and the turn ends with a card of the files it edited, above a band with the repo, the branch and <code>+N −M</code>.</span><span lang="ko">같은 턴, 같은 엔진입니다. 프롬프트는 말풍선이 되고, 호출 네 개는 한 줄로 접히고, 턴 끝에는 고친 파일 카드가, 그 아래 띠에는 저장소·브랜치·<code>+N −M</code> 이 놓입니다.</span></span>
+        <span data-at="1"><b>2 desk-look</b> <span lang="en">The same turn, the same engine. Your prompt is a band in the accent tint, the four calls fold into one line, and the turn ends with a card of the files it edited, above a band with the repo, the branch and <code>+N −M</code>.</span><span lang="ko">같은 턴, 같은 엔진입니다. 프롬프트는 강조색을 옅게 얹은 띠가 되고, 호출 네 개는 한 줄로 접히고, 턴 끝에는 고친 파일 카드가, 그 아래 띠에는 저장소·브랜치·<code>+N −M</code> 이 놓입니다.</span></span>
         <span data-at="2"><b>3 /desk-diff</b> <span lang="en">Click <code>+25 −4</code> on the band and the diff pane opens beside the conversation, without stopping the turn.</span><span lang="ko">띠의 <code>+25 −4</code> 를 누르면 턴을 멈추지 않고 대화 옆에 diff 패널이 열립니다.</span></span>
       </p>
     </div>
@@ -619,8 +619,8 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
         </div>
         <div class="say">
           <h3><span lang="en">Tables and alerts</span><span lang="ko">표와 알림 상자</span></h3>
-          <p lang="en"><span class="was">grid tables, blockquotes →</span>Full-width tables with a gray header and row separators, and <code>&gt; [!NOTE]</code> as a box with a border colored by alert type.</p>
-          <p lang="ko"><span class="was">격자 표, 인용문 →</span>회색 머리줄과 줄 구분선이 있는 폭을 채우는 표, 그리고 <code>&gt; [!NOTE]</code> 는 알림 종류 색 테두리 상자가 됩니다.</p>
+          <p lang="en"><span class="was">grid tables, blockquotes →</span>Full-width tables with a bold header and one rule under it (rows that wrap are split by a dotted line), and <code>&gt; [!NOTE]</code> as a box with a border colored by alert type.</p>
+          <p lang="ko"><span class="was">격자 표, 인용문 →</span>굵은 머리와 그 밑줄 하나뿐인 폭을 채우는 표(접히는 행이 있으면 점선으로 가름), 그리고 <code>&gt; [!NOTE]</code> 는 알림 종류 색 테두리 상자가 됩니다.</p>
         </div>
       </article>
 
@@ -801,7 +801,7 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
 
     <div class="dock">
       <div class="conv" aria-hidden="true"><i class="b"></i><i style="width:92%"></i><i style="width:78%"></i><i class="f" style="width:58%"></i><i class="s" style="width:88%"></i><i style="width:70%"></i><i style="width:82%"></i><i class="f" style="width:46%"></i><i class="b s" style="width:55%"></i><i style="width:90%"></i><i style="width:64%"></i><i class="ch"></i><i class="c"></i></div>
-      <div class="pane img" role="tabpanel" id="p-diff" aria-labelledby="t-diff" aria-describedby="d-diff"><img src="diff.png" width="1728" height="1650" alt="The /desk-diff pane in Branch scope: files folded or expanded, with syntax and word highlighting"></div>
+      <div class="pane img" role="tabpanel" id="p-diff" aria-labelledby="t-diff" aria-describedby="d-diff"><img src="diff.png" width="1632" height="1628" alt="The /desk-diff pane in Branch scope: files folded or expanded, with syntax and word highlighting"></div>
       <div class="pane rec" role="tabpanel" id="p-activity" aria-labelledby="t-activity" aria-describedby="d-activity" hidden><div class="term">
         <div><b>This turn</b> <span class="dim">· 4m 12s</span></div>
         <div class="bars sp"><span>main</span><span><span class="c-ex">░░░</span><span class="c-ed">▓▓▓▓</span><span class="c-te">▒▒</span><span class="c-cm">━━━━━━━━━</span><span class="c-re">──────</span><span class="c-ed">▓▓</span><span class="c-te">▒▒▒</span><span class="c-re">──</span></span><span>agent</span><span>     <span class="c-ag">━━━━━━━━━━━━━━</span></span><span>shells</span><span>          <span class="c-cm">━━━━━━━━━━━━━━━━━━</span></span></div>
@@ -811,7 +811,7 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
         <div class="sp"><b>Background</b></div>
         <div class="dim">npm run dev · listening on :8765</div>
       </div></div>
-      <div class="pane img" role="tabpanel" id="p-tasks" aria-labelledby="t-tasks" aria-describedby="d-tasks" hidden><img src="tasks.png" width="1520" height="1320" loading="lazy" alt="The /desk-tasks pane: a running agent, monitor and background shell, and a finished shell under Done"></div>
+      <div class="pane img" role="tabpanel" id="p-tasks" aria-labelledby="t-tasks" aria-describedby="d-tasks" hidden><img src="tasks.png" width="1224" height="925" loading="lazy" alt="The /desk-tasks pane: a running agent, monitor and background shell, and a finished shell under Done"></div>
       <div class="pane rec" role="tabpanel" id="p-pr" aria-labelledby="t-pr" aria-describedby="d-pr" hidden><div class="term">
         <div><b>#12 Retry with backoff</b>  <span class="st need">Open</span></div>
         <div class="dim">main ← feat/retry  <span class="chip a">+48</span><span class="chip d">−6</span></div>
@@ -825,8 +825,8 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
         <div style="padding-left:4ch;margin-top:.3em"><span class="btn-t">Hand to Claude</span></div>
         <div class="sp"><span class="btn-t dark">Merge when checks pass</span></div>
       </div></div>
-      <div class="pane img" role="tabpanel" id="p-preview" aria-labelledby="t-preview" aria-describedby="d-preview" hidden><img src="preview.png" width="2016" height="1850" loading="lazy" alt="The /desk-preview pane: a front matter box, a warning box, a table and a mermaid flowchart"></div>
-      <div class="pane img" role="tabpanel" id="p-context" aria-labelledby="t-context" aria-describedby="d-context" hidden><img src="context.png" width="1310" height="1530" loading="lazy" alt="The /desk-context pane: a context bar in category colors, per-category bars, what is loaded into the context, a graph of this session with a compaction marker, cache, cost and usage limits"></div>
+      <div class="pane img" role="tabpanel" id="p-preview" aria-labelledby="t-preview" aria-describedby="d-preview" hidden><img src="preview.png" width="1223" height="1591" loading="lazy" alt="The /desk-preview pane: a front matter box, a warning box, a table and a mermaid flowchart"></div>
+      <div class="pane img" role="tabpanel" id="p-context" aria-labelledby="t-context" aria-describedby="d-context" hidden><img src="context.png" width="1224" height="1406" loading="lazy" alt="The /desk-context pane: a context bar in category colors, per-category bars, what is loaded into the context, a graph of this session with a compaction marker, cache, cost and usage limits"></div>
       <div class="pane rec" role="tabpanel" id="p-sessions" aria-labelledby="t-sessions" aria-describedby="d-sessions" hidden><div class="term">
         <div class="search">⌕ Search sessions</div>
         <div class="sp"><b>⌄ weather-cli</b> <span class="dim">3</span></div>
@@ -867,14 +867,14 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
       <li><div><span lang="en">Click another line number in the same file for a range, type, and press Enter.</span><span lang="ko">같은 파일의 다른 줄 번호를 누르면 범위가 됩니다. 쓰고 Enter 를 누릅니다.</span></div></li>
       <li><div><span lang="en">Kept comments wait as <code>✎&#xFE0E; N</code> on the chin band, then go with your next prompt: the file and lines, the lines themselves, and your comment.</span><span lang="ko">담은 댓글은 아래턱 띠에 <code>✎&#xFE0E; N</code> 으로 남았다가 다음 프롬프트와 함께 갑니다: 파일·줄, 그 줄들, 댓글.</span></div></li>
     </ol>
-    <div class="shot peek rv" style="margin-top:clamp(24px,3vw,40px)"><img src="comments.png" width="2016" height="1380" loading="lazy" alt="Line comments in /desk-diff: a kept comment on lines 19–20, an open comment field on line 12, picked line numbers in blue"></div>
+    <div class="shot peek rv" style="margin-top:clamp(24px,3vw,40px)"><img src="comments.png" width="1632" height="1332" loading="lazy" alt="Line comments in /desk-diff: a kept comment on lines 19–20, an open comment field on line 12, picked line numbers in blue"></div>
   </div>
 </section>
 
 <!-- ═══ Demo ═══ -->
 <section class="sec" id="demo">
   <div class="wrap">
-    <div class="band rv"><i class="blk"></i><b>05</b><span lang="en">a session, recorded</span><span lang="ko">한 세션 녹화</span><span class="grow"></span><span class="dim">0:55</span></div>
+    <div class="band rv"><i class="blk"></i><b>05</b><span lang="en">a session, recorded</span><span lang="ko">한 세션 녹화</span><span class="grow"></span><span class="dim">0:53</span></div>
     <div class="head rv">
       <h2><span lang="en">Watch one session run</span><span lang="ko">한 세션이 돌아가는 모습</span></h2>
     </div>

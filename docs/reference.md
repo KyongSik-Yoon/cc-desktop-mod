@@ -29,16 +29,16 @@ The pane commands run at once even while Claude is working: they open the pane w
 
 ## The transcript
 
-![desk-look in the Claude Code terminal: a prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](screenshot.png)
+![desk-look in the Claude Code terminal: a prompt band, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](screenshot.png)
 
 Each item reads terminal default → desk-look.
 
 - **Your prompt**: A line starting with `>` → A full-width band tinted with the theme's accent color, with an accent bar at its left edge. When the theme has no accent color it is a gray bubble (a pill for one line, a box with rounded corners for several), left (default) or right. Pasted images show as thumbnails above it, and long pasted text as a one-line `❐ Pasted text · N lines` chip that unfolds when clicked
 - **Answers**: `●` bullet + engine markdown → A markdown renderer in the desktop prose style
-- **Tables**: Grid tables → Full-width tables with a gray header and row separators
+- **Tables**: Grid tables → Full-width tables in a rounded box with a bold header and one rule under it. Rows of one line sit directly under each other; when a row wraps, rows are split by a dotted line
 - **mermaid**: Code block → Box diagrams ([lovely-mermaid](https://github.com/xl0/lovely-mermaid)) with arrowheads that touch the boxes
 - **`> [!NOTE]` alerts**: Blockquote → A box with a border colored by alert type
-- **Code blocks**: No way to copy → Hover to see `⧉ copy` at the right of the top border; click to copy the same way `/copy` does
+- **Code blocks**: No way to copy → A box as wide as its longest line, with a dimmed `⧉ copy` button beside its top-right corner (always there, no hover); click to copy the same way `/copy` does
 - **Tool calls**: One row per call + a result block → Consecutive calls fold into one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click. Calls a permission rule or the permission mode blocked count as `· 2 not run`, not as failed (a call a PreToolUse hook blocked reads as failed). Expanded, edit diffs show right away (file line numbers, three lines of context), in the desktop diff style when the terminal theme is known. The ctrl+o transcript keeps the engine's full rows
 - **Subagents**: One `Ran an agent` line; notifications and messages only expand with ctrl+o → A card per agent (type and description; tool count, tokens, time and changed lines; click for the result). Background notifications read `✓ description completed · 5s ›`: click one for that task's details in `/desk-tasks` (an agent's final answer, such as what `/code-review` reported, or a shell's or monitor's output; tasks desk-look has no record of, like old ones in a resumed session, stay plain text); click an agent message `◆ name first line ›` to expand it in place. When a turn ends waiting on background agents, a row per agent under `Waiting for N background agents to finish`, `··· type description ›` (its status once it ends); click it for that agent in `/desk-tasks`
 - **Plan (ExitPlanMode)**: Folded into one line with other tools → A card of its own, `◇ Plan Approved` (it also shows waiting, rejected and interrupted), with the plan as markdown. A long plan shows its start and expands with `Show all`. The approval itself stays the engine's dialog; [desk-plan](../desk-plan/README.md) asks it in a card above the prompt instead, with the plan in desk-look's preview pane

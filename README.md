@@ -18,14 +18,14 @@ Run it at the prompt of a Claude Code terminal session, answer `y` to add the ma
 
 ### A transcript that reads like the desktop app
 
-<img src="docs/screenshot.png" alt="A prompt bubble, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card" width="720">
+<img src="docs/screenshot.png" alt="A prompt band, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card" width="720">
 
 Terminal default → desk-look:
 
 - **Your prompt**: a line starting with `>` → a band tinted with the theme's accent color, with pasted images as thumbnails
 - **Tool calls**: a row per call → one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click
 - **Markdown**: grid tables, mermaid as code, plain blockquotes → full-width tables, box diagrams, colored alert boxes
-- **Code blocks**: no way to copy → hover for `⧉ copy`
+- **Code blocks**: no way to copy → a box as wide as its code with an `⧉ copy` button beside it
 - **Subagents**: one `Ran an agent` line → a card per agent with its tokens, time and changed lines
 - **End of turn**: a duration line → a card of the files that turn edited, each row a button to its diff
 
