@@ -3977,8 +3977,11 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         {text !== '' &&
-          (face ? (
-            bubbleLines(Box, Text, canDraw ? Image : null, wrapText(text, Math.floor(columns * 0.85) - 6), face.mine ?? face.bubble)
+          (face?.mine ? (
+            // 강조색 면이 있으면 알약 대신 화면 폭 띠. 옅은 파랑 알약은 강조색 글자의 인라인 코드 칩과 한 무리로 읽혔다.
+            promptBand(Text, wrapText(text, columns - 5), face.mine, columns - 2)
+          ) : face ? (
+            bubbleLines(Box, Text, canDraw ? Image : null, wrapText(text, Math.floor(columns * 0.85) - 6), face.bubble)
           ) : (
             <Box width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
               <Text color={COLORS.text}>{text}</Text>
@@ -6328,6 +6331,24 @@ function bubbleLines(
           </Text>
         )
       })}
+    </>
+  )
+}
+
+// 내 말을 화면 폭 띠로: 줄마다 왼쪽 끝에 강조색 막대, 글 뒤는 띠 폭까지 면으로 채운다. 여러 줄이면 막대가 이어진다.
+function promptBand(Text: Elements['terminal']['Text'], lines: string[], fill: string, width: number) {
+  return (
+    <>
+      {lines.map(line => (
+        <Text>
+          <Text color={COLORS.accent} backgroundColor={fill}>
+            ▌
+          </Text>
+          <Text color={COLORS.text} backgroundColor={fill}>
+            {` ${line}${' '.repeat(Math.max(1, width - 2 - cellWidth(line)))}`}
+          </Text>
+        </Text>
+      ))}
     </>
   )
 }

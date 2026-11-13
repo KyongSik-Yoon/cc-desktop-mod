@@ -5305,7 +5305,7 @@ describe('데스크톱 모양 diff', () => {
     }
   })
 
-  test('내 말풍선은 테마 강조색을 옅게 얹은 면, tmux 안(256색)에서는 회색 말풍선', KO, async ($, on) => {
+  test('내 말은 테마 강조색을 옅게 얹은 화면 폭 띠, tmux 안(256색)에서는 회색 말풍선', KO, async ($, on) => {
     let tmux: string | undefined
     on('env.get', ($, e) => {
       const name = String((e as { name?: string }).name ?? e)
@@ -5330,8 +5330,18 @@ describe('데스크톱 모양 diff', () => {
         if (!drawn.includes(want)) await wait(10)
       }
       expect(drawn).toContain(want)
-      // 강조색 면일 때 회색 말풍선 색은 쓰이지 않는다
-      if (!where) expect(drawn).not.toContain(mix('#fafafa', '#000000', 0.055))
+      if (!where) {
+        // 강조색 면일 때 회색 말풍선 색은 쓰이지 않는다
+        expect(drawn).not.toContain(mix('#fafafa', '#000000', 0.055))
+        // 알약이 아니라 화면 폭 띠: 왼쪽 끝에 강조색 막대, 글 뒤는 화면 폭까지 면으로 채운다(인라인 코드 칩과 갈린다)
+        expect(drawn).toContain('{"type":"Text","props":{"color":"claude","backgroundColor":"#e2e8f8"},"children":["▌"]}')
+        expect(drawn).toContain(`" 나도 1번${' '.repeat(VIEWPORT.columns - 2 - 1 - 1 - cellWidth('나도 1번'))}"`)
+        expect(drawn).not.toContain('\ue0b6')
+      } else {
+        // 256색에서는 예전 그대로 회색 알약
+        expect(drawn).toContain('\ue0b6')
+        expect(drawn).not.toContain('▌')
+      }
     }
   })
 
