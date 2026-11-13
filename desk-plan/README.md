@@ -23,6 +23,7 @@ When Claude calls `ExitPlanMode` with a plan file (`~/.claude/plans/`), the card
 - `1` approves. Claude Code returns to the mode you were in before plan mode, as the dialog's first choice does
 - `2` opens the plan in the pane and moves the focus there
 - Click `Changes` or press `ctrl+x tab`, write what to change and press Enter: Claude stays in plan mode, revises the plan and asks again
+- Comment on plan lines: in the pane press `c` for numbered source lines, press a line number (another one for a range), write, Enter. `3` then sends the comments, each with its line numbers and the lines it points at, plus anything written in `Changes`. Comments left when you approve go with your next prompt instead
 - `9` hands it to the engine dialog, for its other choices (such as approving with manual edits). `Close` refuses the plan without changes; Esc stops the turn, which cancels it
 
 While the card is open it takes desk-look's band, the progress band under the spinner hides, and the hint line ends with the keys that answer it. A notification goes out when it opens (`notify`), because the engine sends none while the card stands in for its dialog.
