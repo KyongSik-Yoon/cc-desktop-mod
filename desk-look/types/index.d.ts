@@ -6,7 +6,7 @@ export type FileDiff = { path: string; added: number; removed: number; patch: st
 export type RepoInfo = { name: string; branch: string | null; isRepo: boolean; root?: string; ignored?: string[] }
 
 // 터미널 배경에서 계산한 데스크톱식 회색 면. omarchy 테마를 못 읽으면 null.
-export type Surface = { mode: 'light' | 'dark'; background: string; bubble: string }
+export type Surface = { mode: 'light' | 'dark'; background: string; bubble: string; pane?: string }
 
 export type RunCall = {
   tool_use_id: string

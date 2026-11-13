@@ -718,11 +718,12 @@ function refreshBreakdown($: EngineInterface): Promise<void> {
   return breakdownRun
 }
 
-// 2.1.311 Pane backgroundColor: omarchy 테마를 읽을 수 있으면 desk 패널 바탕을 말풍선 회색으로.
+// 2.1.311 Pane backgroundColor: omarchy 테마를 읽을 수 있으면 desk 패널 바탕을 말풍선보다 옅은 회색으로.
 // 엔진 테마 키에는 바탕용 키가 없어, 테마를 못 읽으면 기본 그림 그대로 둔다.
+// pane 이 없는 면은 리로드 전에 저장된 옛 atom 이다: 다음 면 갱신까지 말풍선 색을 쓴다.
 async function paneLook($: EngineInterface): Promise<{ backgroundColor?: string }> {
   const face = await read($, surface).catch(() => null)
-  return face ? { backgroundColor: face.bubble } : {}
+  return face ? { backgroundColor: face.pane ?? face.bubble } : {}
 }
 
 async function openContext($: EngineInterface) {
@@ -1761,8 +1762,8 @@ async function refreshSurface($: EngineInterface) {
   const engine = engineThemeMode(rows.find(row => row.key === 'theme')?.value)
   // 말풍선·아래턱·코드 바탕·모드 알약·패널 바탕·diff 색이 모두 이 값을 쓰므로, 터미널과 어긋나는지 여기서 한 번 가린다.
   const trusted = trustSurface(parsed, engine, remote)
-  // 256색(tmux 안)에서는 말풍선 회색을 팔레트의 회색으로: 섞은 색은 엔진이 색 큐브로 줄여 어두운 테마에서 #5f5f5f 로 밝아진다.
-  const next = trusted && !truecolor ? { ...trusted, bubble: gray256(trusted.bubble) } : trusted
+  // 256색(tmux 안)에서는 말풍선·패널 회색을 팔레트의 회색으로: 섞은 색은 엔진이 색 큐브로 줄여 어두운 테마에서 #5f5f5f 로 밝아진다.
+  const next = trusted && !truecolor ? { ...trusted, bubble: gray256(trusted.bubble), ...(trusted.pane ? { pane: gray256(trusted.pane) } : {}) } : trusted
   diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, truecolor) : null
   if (!sameJson(await read($, surface), next)) {
     await update($, surface, () => next)
