@@ -11,16 +11,16 @@ FONT=$(fc-match -f '%{file}' 'sans:bold')
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 SEGMENTS='
-28.6|1.6|1600:872:0:0|desk-look: the Claude desktop look for the Claude Code terminal
-4.5|3.0|1320:742:0:40|Tool calls fold into one line while Claude works
-8.5|2.5|960:252:0:620|A progress band shows the step, the command and its CPU
-12.1|2.2|878:523:0:190|Each turn ends with a card of the files it edited
-14.0|2.4|716:523:876:0|A document Claude wrote opens in the preview pane
-19.8|2.6|716:523:876:0|/desk-diff: review changes like the desktop diff panel
-23.5|4.6|716:523:876:200|Click a line number to leave a comment
-27.7|3.2|878:523:0:349|Comments go to Claude with your next prompt
-37.5|3.0|716:523:876:150|...and the fix lands in the diff
-46.5|3.5|716:523:876:0|/desk-context: what fills the context, cache, cost and limits
+30.0|1.6|1600:872:0:0|desk-look: the Claude desktop look for the Claude Code terminal
+5.2|3.0|1320:742:0:40|Tool calls fold into one line while Claude works
+10.2|2.4|960:252:0:620|A progress band shows the step, the command and its CPU
+12.9|2.2|878:523:0:190|Each turn ends with a card of the files it edited
+14.5|2.4|716:523:876:0|A document Claude wrote opens in the preview pane
+20.5|2.6|716:523:876:0|/desk-diff: review changes like the desktop diff panel
+24.2|4.6|716:523:876:200|Click a line number to leave a comment
+28.3|3.2|878:523:0:349|Comments go to Claude with your next prompt
+40.0|3.0|716:523:876:150|...and the fix lands in the diff
+49.2|3.4|716:523:876:0|/desk-context: what fills the context, cache, cost and limits
 '
 i=0; : > "$TMP/list.txt"
 while IFS='|' read -r ss dur crop text; do
