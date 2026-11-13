@@ -13,7 +13,7 @@ export const COLORS = {
   clay: 'claude',
   accent: 'claude',
   link: 'suggestion',
-  code: 'error',
+  code: 'claude',
   success: 'success',
   danger: 'error',
   warning: 'warning',

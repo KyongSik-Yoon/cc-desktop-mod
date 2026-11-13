@@ -5,7 +5,7 @@ import { setLang } from '../hooks/i18n'
 
 import { bubbleEdges, bubbleRows, cardFor, chinLabel, describeCalls, formatElapsed, spinnerDots, spinnerWord, lineChange, mergeEdit, diffStat, editHunk, patchOf, askAnswer, parseDiff, planRow, summarize, wrapText } from '../hooks/register'
 import { agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from '../hooks/agents'
-import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, splitFrontMatter } from '../hooks/markdown'
+import { cellWidth, codeSource, columnWidths, inlineWidth, parseBlocks, parseInline, plainText, renderMarkdown, splitFrontMatter } from '../hooks/markdown'
 import { previewOf } from '../hooks/preview'
 import { previewHtml } from '../hooks/preview-html'
 import { scrollBar, treeRows } from '../hooks/jumps'
@@ -120,7 +120,15 @@ describe('응답 렌더링', () => {
     // 줄이 넘어가면 엔진 Link 는 첫 줄에만 걸리므로 긴 주소는 한 줄에 드는 문구로, href 는 그대로
     expect(drawn.split(`"href":"${long}"},"children":["example.com/docs/plugins…tab=api&lang=ko"]`).length).toBe(3)
     expect(drawn.match(/"href"/g)?.length).toBe(3)
+    // 인라인 코드는 테마 강조색(claude). error 색은 오류처럼 보인다.
+    expect(drawn).toContain('{"type":"Text","props":{"color":"claude"},"children":["npm run build"]}')
     await reply.unmount()
+  })
+
+  test('바탕을 깐 인라인 코드도 글자는 강조색', () => {
+    const els = { Box: 'Box', Text: 'Text', Code: 'Code', Link: 'Link', Button: 'Button' } as never
+    const tree = renderMarkdown('`npm run build` 을 돌린다', els, { text: 'text', muted: 'inactive', border: 'subtle', code: 'claude', link: 'suggestion', accent: 'claude', codeBg: '#ededed' }, 80)
+    expect(JSON.stringify(tree)).toMatch(/"color":"claude","backgroundColor":"#ededed"/)
   })
 
   test('따옴표·괄호 안의 외톨이 \\ 는 엔진처럼 남긴다', KO, async $ => {
