@@ -4885,14 +4885,33 @@ export const register: Register = (on, options) => {
       void Promise.all([update($, previewWindow, () => ({ offset: 0, bodyRows: 0 })), update($, previewSource, isOn => !isOn)]).catch(() => undefined)
     // 원문 줄 보기의 창: ui.scroll 이 적은 것, 없으면 엔진이 이번에 알려 준 창이나 적어 둔 위치(diff 패널과 같은 고르기).
     const seen = (e.props as { scroll?: { offset: number; bodyRows: number } }).scroll
+    // 머리 줄: 이름(·댓글 수)과 버튼이 한 줄에 안 들어가면 버튼을 다음 줄로. 버튼 묶음은 줄어들지 않아,
+    // 한 줄에 두면 마지막 버튼이 한 칸 폭으로 눌려 글자마다 세로로 접혔다(0.81.0).
+    const buttons = [
+      ...(file.error === undefined ? [isSource ? T.previewRendered : T.previewComment] : []),
+      T.previewReload,
+      T.previewChanges,
+      ...(file.error === undefined ? [T.previewBrowser] : []),
+    ]
+    const buttonsWidth = buttons.reduce((sum, label) => sum + 3 + cellWidth(label), 0) + 2 * (buttons.length - 1)
+    const nameWidth = cellWidth(fileName(file.path)) + (noted > 0 ? 1 + cellWidth(`✎ ${noted}`) : 0)
+    const isTwoRows = nameWidth + 2 + buttonsWidth > columns - 1
     const sourceWindow = async (): Promise<SourceWindow> => {
       const kept = await read($, previewWindow)
-      const top = jumpsTop(PREVIEW_PANE) + 3
+      const top = jumpsTop(PREVIEW_PANE) + 3 + (isTwoRows ? 1 : 0)
       if (seen && seen.bodyRows > 0 && (kept.bodyRows === 0 || seen.bodyRows !== kept.bodyRows || Math.abs(seen.offset - kept.offset) * 2 > seen.bodyRows)) return { ...seen, top }
       if (kept.bodyRows > 0) return { ...kept, top }
       return { offset: paneOffsets.get(PREVIEW_PANE) ?? 0, bodyRows: DIFF_BODY_GUESS, top }
     }
     const window = isSource ? await sourceWindow() : null
+    const buttonRow = (
+      <Box key="preview-buttons" columnGap={2} flexShrink={0}>
+        {file.error === undefined && <Button key="preview-source" plain dimColor={!isSource} hotkey="c" label={isSource ? T.previewRendered : T.previewComment} onPress={toggleSource} />}
+        <Button key="preview-reload" plain dimColor hotkey="r" label={T.previewReload} onPress={() => void loadPreview($, file.path).catch(() => undefined)} />
+        <Button key="preview-changes" plain dimColor hotkey="d" label={T.previewChanges} onPress={() => void openDiffAt($, file.path).catch(() => undefined)} />
+        {file.error === undefined && <Button key="preview-browser" plain dimColor hotkey="o" label={T.previewBrowser} onPress={() => void openPreviewInBrowser($, file).catch(() => undefined)} />}
+      </Box>
+    )
     return paneJumps($, els, e, (
       <Box flexDirection="column">
         <Box columnGap={2}>
@@ -4909,13 +4928,9 @@ export const register: Register = (on, options) => {
               {folder}
             </Text>
           </Box>
-          <Box columnGap={2} flexShrink={0}>
-            {file.error === undefined && <Button key="preview-source" plain dimColor={!isSource} hotkey="c" label={isSource ? T.previewRendered : T.previewComment} onPress={toggleSource} />}
-            <Button key="preview-reload" plain dimColor hotkey="r" label={T.previewReload} onPress={() => void loadPreview($, file.path).catch(() => undefined)} />
-            <Button key="preview-changes" plain dimColor hotkey="d" label={T.previewChanges} onPress={() => void openDiffAt($, file.path).catch(() => undefined)} />
-            {file.error === undefined && <Button key="preview-browser" plain dimColor hotkey="o" label={T.previewBrowser} onPress={() => void openPreviewInBrowser($, file).catch(() => undefined)} />}
-          </Box>
+          {!isTwoRows && buttonRow}
         </Box>
+        {isTwoRows && buttonRow}
         <Text color={COLORS.border}>{'─'.repeat(Math.max(4, columns - 1))}</Text>
         <Box marginTop={1} flexDirection="column">
           {file.error !== undefined ? (
