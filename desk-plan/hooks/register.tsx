@@ -129,15 +129,13 @@ function hintTail(keys: string, isDraft: boolean): string {
   return `  ${T.bandToggle}${isDraft ? '' : ` · ${keys}`}`
 }
 
-// 고칠 점 칸이 그려졌는지, 이 계획에 단 줄 댓글 수: 힌트 줄이 읽는다.
+// 고칠 점 칸이 그려졌는지: 힌트 줄이 읽는다.
 let planFieldDrawn = false
-let planNoted = 0
 
 async function planAskCard($: EngineInterface, els: Elements['terminal'], state: PlanAskState, columns: number, room: number) {
   const { Box, Text, Button, Input } = els
   const k = state.id
   const noted = (await notesOf($, state)).length
-  planNoted = noted
   const title = planTitle(state.plan)
   const width = Math.max(30, columns)
   const textRows = fitTextRows(planTextRows(state.text, planFieldColumns(width, T.planReviseLabel, T.planRevise)), room)
@@ -279,7 +277,10 @@ export const register: Register = (on, options) => {
 
   // 힌트 줄: 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다. 띠를 접어 카드가 안 보일 때 펴는 키를 맨 앞에 둔다.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || (await read($, planAsking)) === null) return next(e)
-    return next({ ...e, props: { ...e.props, tail: hintTail((planFieldDrawn ? T.planHint : T.planHintNoField)(planNoted), e.props.isDraft) } })
+    const state = e.surface === 'terminal' ? await read($, planAsking) : null
+    if (state === null) return next(e)
+    // 댓글 수는 atom 을 읽어 정한다: 패널에서 댓글을 달면 힌트도 다시 그려진다.
+    const noted = (await notesOf($, state)).length
+    return next({ ...e, props: { ...e.props, tail: hintTail((planFieldDrawn ? T.planHint : T.planHintNoField)(noted), e.props.isDraft) } })
   })
 }
