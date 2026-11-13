@@ -84,6 +84,8 @@ const diffWindow = atom({ plugin: 'desk-look', key: 'diffWindow' } as const, { o
 const previewFile = atom({ plugin: 'desk-look', key: 'preview' } as const, null as PreviewFile | null)
 // 미리보기 패널의 원문 줄 보기(c, 줄 댓글을 단다). 다른 문서를 열면 그려진 보기로 돌아간다.
 const previewSource = atom({ plugin: 'desk-look', key: 'previewSource' } as const, false)
+// 원문 줄 보기의 창(ui.scroll 이 적는다). 줄 번호 버튼은 이 창 둘레에만 단다(diffWindow 와 같은 방식).
+const previewWindow = atom({ plugin: 'desk-look', key: 'previewWindow' } as const, { offset: 0, bodyRows: 0 })
 const previewWritten = atom({ plugin: 'desk-look', key: 'previewWritten' } as const, null as string | null)
 const sessions = atom({ plugin: 'desk-look', key: 'sessions' } as const, [] as SessionEntry[])
 const sessionQuery = atom({ plugin: 'desk-look', key: 'sessionQuery' } as const, '')
@@ -1113,7 +1115,7 @@ async function loadPreview($: EngineInterface, asked: string): Promise<PreviewFi
     (error: unknown) => ({ path, text: '', error: error instanceof Error ? error.message : String(error) }),
   )
   const before = await read($, previewFile)
-  if (before?.path !== path) await update($, previewSource, () => false)
+  if (before?.path !== path) await Promise.all([update($, previewSource, () => false), update($, previewWindow, () => ({ offset: 0, bodyRows: 0 }))])
   await update($, previewFile, () => file)
   return file
 }
@@ -2846,7 +2848,11 @@ const plainPalette: DiffPalette = { addBg: COLORS.muted, delBg: COLORS.muted, ad
 
 // 미리보기 패널의 원문 줄 보기: 번호 붙은 줄(번호를 누르면 줄·범위 댓글), 범위 끝 줄 밑에 초안 칸·단 댓글.
 // 문서가 바뀌어 짚은 줄 글이 달라진 댓글은 본문 끝에 "줄이 바뀜"으로 모은다(지우지 않는다: 보낼 때 적어 둔 원문이 같이 간다).
-function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text: string, columns: number, draft: CommentDraft | null, comments: LineComment[]) {
+// 줄 번호 버튼은 줄마다 요소가 늘어 스크롤이 두 배쯤 무거워져(749줄 문서, 휠 한 칸 196M → 400M), 창 둘레에만 단다.
+// 창은 반 화면 넘게 움직여야 다시 적히므로(ui.scroll), 그 지연을 덮게 위아래로 반 화면씩 더 단다.
+// window 는 패널 트리 안의 창, top 은 본문 첫 줄의 트리 안 행.
+type SourceWindow = { offset: number; bodyRows: number; top: number }
+function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text: string, columns: number, draft: CommentDraft | null, comments: LineComment[], window: SourceWindow) {
   const { Box } = els
   const key = previewPatchKey(file.path)
   const { rows } = patchBlocks(sourcePatch(text))
@@ -2858,13 +2864,13 @@ function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text
   const picked = picking ? rangeOf(rows, picking.anchor, picking.end) : null
   const gutter = gutterWidth(rows)
   const pad = 1 + gutter
-  const after = new Map<number, JSX.Element[]>()
-  const insert = (row: number, node: JSX.Element) => after.set(row, [...(after.get(row) ?? []), node])
+  const after = new Map<number, { node: JSX.Element; height: number }[]>()
+  const insert = (row: number, node: JSX.Element, height = 1) => after.set(row, [...(after.get(row) ?? []), { node, height }])
   for (const comment of placed) {
     const row = rowOf(rows, comment.end)
     if (row !== -1) insert(row, commentNoteRow($, els, `pc-${comment.id}`, comment, pad))
   }
-  if (picking && picked) insert(picked[1], commentDraftRow($, els, 'pc-draft', picking, linesIn(rows, picked), pad))
+  if (picking && picked) insert(picked[1], commentDraftRow($, els, 'pc-draft', picking, linesIn(rows, picked), pad), COMMENT_ROWS)
   const cuts = [...after.keys()].sort((a, b) => a - b)
   const pieces = [...cuts, rows.length - 1].map((cut, index) => ({ from: index === 0 ? 0 : (cuts[index - 1] ?? 0) + 1, to: cut }))
   const options = { path: file.path, gutter, columns, wrap: true, unmodified: T.unmodifiedLines }
@@ -2877,15 +2883,25 @@ function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text
       if (at?.kind === 'line') void pickLine($, { patch: key, path: file.path, scope: 'document', line: at.line }).catch(() => undefined)
     },
   }
+  const wrap = wrapRoom(columns, gutter)
+  const half = Math.ceil(window.bodyRows / 2)
+  const [low, high] = [window.offset - half, window.offset + window.bodyRows + half]
   const out: JSX.Element[] = []
+  let at = window.top
   for (const [index, piece] of pieces.entries()) {
     if (piece.to < piece.from) continue
     let first = piece.from
     for (const [n, block] of diffBlocks(rows.slice(piece.from, piece.to + 1)).entries()) {
-      out.push(diffBlock(els, diffColors ?? plainPalette, block, `src.${index}.${n}`, { ...options, pick: { ...pick, first } }))
+      const height = blockHeight(block, wrap)
+      const isNear = at + height > low && at < high
+      out.push(diffBlock(els, diffColors ?? plainPalette, block, `src.${index}.${n}`, isNear ? { ...options, pick: { ...pick, first } } : options))
       first += block.kind === 'gap' ? 1 : block.lines.length
+      at += height
     }
-    out.push(...(after.get(piece.to) ?? []))
+    for (const note of after.get(piece.to) ?? []) {
+      out.push(note.node)
+      at += note.height
+    }
   }
   if (stale.length > 0) out.push(<Box key="pc-stale" height={1} />, ...stale.map(comment => commentNoteRow($, els, `pc-${comment.id}`, comment, 0, true)))
   return <Box flexDirection="column">{out}</Box>
@@ -4864,7 +4880,19 @@ export const register: Register = (on, options) => {
     const text = isCut ? file.text.slice(0, PREVIEW_ROOM) : file.text
     const folder = file.path.slice(0, Math.max(0, file.path.length - fileName(file.path).length - 1))
     const noted = comments.filter(comment => comment.patch === previewPatchKey(file.path)).length
-    const toggleSource = () => void update($, previewSource, isOn => !isOn).catch(() => undefined)
+    // 켤 때는 창을 비워, 적어 둔 패널 위치(paneOffsets)에서 다시 시작한다.
+    const toggleSource = () =>
+      void Promise.all([update($, previewWindow, () => ({ offset: 0, bodyRows: 0 })), update($, previewSource, isOn => !isOn)]).catch(() => undefined)
+    // 원문 줄 보기의 창: ui.scroll 이 적은 것, 없으면 엔진이 이번에 알려 준 창이나 적어 둔 위치(diff 패널과 같은 고르기).
+    const seen = (e.props as { scroll?: { offset: number; bodyRows: number } }).scroll
+    const sourceWindow = async (): Promise<SourceWindow> => {
+      const kept = await read($, previewWindow)
+      const top = jumpsTop(PREVIEW_PANE) + 3
+      if (seen && seen.bodyRows > 0 && (kept.bodyRows === 0 || seen.bodyRows !== kept.bodyRows || Math.abs(seen.offset - kept.offset) * 2 > seen.bodyRows)) return { ...seen, top }
+      if (kept.bodyRows > 0) return { ...kept, top }
+      return { offset: paneOffsets.get(PREVIEW_PANE) ?? 0, bodyRows: DIFF_BODY_GUESS, top }
+    }
+    const window = isSource ? await sourceWindow() : null
     return paneJumps($, els, e, (
       <Box flexDirection="column">
         <Box columnGap={2}>
@@ -4892,8 +4920,8 @@ export const register: Register = (on, options) => {
         <Box marginTop={1} flexDirection="column">
           {file.error !== undefined ? (
             <Text color={COLORS.danger}>{T.previewUnreadable(file.error)}</Text>
-          ) : isSource ? (
-            previewSourceView($, els, file, text, columns - 1, draft, comments)
+          ) : window ? (
+            previewSourceView($, els, file, text, columns - 1, draft, comments, window)
           ) : (
             renderMarkdown(text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns - 1, {
               document: true,
@@ -4978,11 +5006,12 @@ export const register: Register = (on, options) => {
     if (moved.deny !== undefined) return moved
     if (e.requestId === PANE && e.origin.kind === 'person' && asked.offset !== paneOffsets.get(PANE)) diffCursor = null
     paneOffsets.set(e.requestId, asked.offset)
-    if (e.requestId === PANE) {
-      void update($, diffWindow, w =>
-        w.bodyRows === e.bodyRows && Math.abs(w.offset - asked.offset) * 2 <= e.bodyRows ? w : { offset: asked.offset, bodyRows: e.bodyRows },
-      ).catch(() => undefined)
-    }
+    // 창이 반 화면 넘게 움직였을 때만 적어 다시 그린다(그 사이는 엔진이 옮긴다).
+    const follow = (w: { offset: number; bodyRows: number }) =>
+      w.bodyRows === e.bodyRows && Math.abs(w.offset - asked.offset) * 2 <= e.bodyRows ? w : { offset: asked.offset, bodyRows: e.bodyRows }
+    if (e.requestId === PANE) void update($, diffWindow, follow).catch(() => undefined)
+    // 미리보기는 원문 줄 보기일 때만: 그려진 보기에는 창을 쓰지 않아 다시 그릴 까닭이 없다.
+    if (e.requestId === PREVIEW_PANE && (await read($, previewSource))) void update($, previewWindow, follow).catch(() => undefined)
     return moved
   })
 

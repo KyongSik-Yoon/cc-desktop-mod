@@ -5149,6 +5149,33 @@ describe('미리보기 패널', () => {
     await pane.unmount()
   })
 
+  test('원문 줄 보기는 줄 번호 버튼을 창 둘레(위아래 반 화면 더)에만 단다', KO, async ($, on) => {
+    const files: Record<string, string> = { '/repo/LONG.md': Array.from({ length: 800 }, (_, i) => `줄 ${i + 1}`).join('\n') }
+    docWorld(on, files)
+    await $.tool.call({ tool: 'mcp__desk-look__preview', path: '/repo/LONG.md' } as never)
+    const pane = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'desk-preview',
+      viewport: VIEWPORT,
+      props: { title: 'LONG.md', isFocused: true, bodyColumns: 70, scroll: { offset: 400, bodyRows: 30 } } as never,
+    })
+    await pane.press({ key: 'preview-source' })
+    // 줄 번호는 모두 그리되(번호 글자), 버튼은 창 둘레 덩어리에만
+    const numbers = (await pane.findAll({ type: 'Button' }))
+      .map(button => /^src\.0\.(\d+)\.p(\d+)$/.exec(String((button as { key?: unknown }).key)))
+      .filter((match): match is RegExpExecArray => match !== null)
+      .map(match => Number(match[1]) * 16 + Number(match[2]) + 1)
+    expect(numbers.length).toBeGreaterThan(30)
+    expect(numbers.length).toBeLessThan(120)
+    expect(Math.min(...numbers)).toBeGreaterThan(300)
+    expect(numbers).toContain(400)
+    // 버튼 없는 덩어리도 글은 그린다
+    expect(JSON.stringify(await pane.drawn())).toContain('줄 1\\n줄 2')
+    await pane.unmount()
+  })
+
   // 누르면 $.ui.scroll 로 끝·처음으로 간다: 하네스는 버튼 클로저의 ui.scroll 을 기록하지 않아 실화면으로 확인했다.
   test('긴 패널은 맨 위에 끝으로, 맨 아래에 처음으로(창보다 짧으면 없음)', KO, async ($, on) => {
     const files: Record<string, string> = {}
