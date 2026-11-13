@@ -345,10 +345,10 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
           return node.text
         case 'code': {
           // 백틱 안 주소도 누를 수 있게(엔진 Markdown 처럼).
-          // 바탕이 있으면 글자는 본문색(데스크톱의 조용한 인라인 코드). 바탕이 없으면 글과 가를 것이 색뿐이라 code 색.
+          // 글자는 바탕이 있든 없든 code 색(테마 강조색). 본문색이면 회색 칩만 남아 화면 전체가 단색으로 보였다.
           const text = isUrl(node.text) ? <Link href={node.text}>{urlLabel(node.text)}</Link> : node.text
           return colors.codeBg ? (
-            <Text color={colors.text} backgroundColor={colors.codeBg}>
+            <Text color={colors.code} backgroundColor={colors.codeBg}>
               {' '}
               {text}{' '}
             </Text>
