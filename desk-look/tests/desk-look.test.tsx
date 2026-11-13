@@ -12,7 +12,7 @@ import { scrollBar, treeRows } from '../hooks/jumps'
 import { blockHeight, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, rowHeight, windowPlan, wordSpan, WRAP_ROWS, wrapLine } from '../hooks/diffview'
 import { branchChoices, matchesPath } from '../hooks/gitview'
 import { advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, orderSessions, procStatOf, sessionFileOf } from '../hooks/monitor'
-import { bandStayMs, currentHead, headAt, quoteDecorations, quoteInto, selectionIn } from '../hooks/register'
+import { bandStayMs, currentHead, headAt, isRejectedOutput, quoteDecorations, quoteInto, selectionIn } from '../hooks/register'
 
 // 기존 테스트는 한국어 화면을 확인한다(기본은 영어). 영어 기본값은 맨 아래 테스트가 본다.
 const KO = { options: { language: 'ko' } }
@@ -457,6 +457,36 @@ describe('도구 활동', () => {
     await group.unmount()
   })
 
+  // 2.1.323: 엔진 묶음 줄은 사람이 거절한 호출을 실패가 아니라 "Not run · rejected" 로 쓴다. 이유를 달아도 같은 문장으로 시작한다.
+  test('사람이 권한 창에서 거절한 호출은 failed 가 아니라 not run · rejected', KO, async ($, on) => {
+    on('ui.render', { component: 'ToolGroup' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine-group</Text>
+    })
+    const refusal =
+      "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\nnot now please"
+    const group = await $.ui.mount({
+      plugin: 'desk-look',
+      surface: 'terminal',
+      component: 'ToolGroup',
+      requestId: 'rj',
+      viewport: VIEWPORT,
+      props: {
+        calls: [
+          { tool_use_id: 'rj-a', ...call('Read', { file_path: '/r/a.ts' }) },
+          { tool_use_id: 'rj-b', ...call('Bash', { command: 'touch yy.txt' }, { isErrored: true, output: refusal }) },
+        ],
+        isActive: false,
+        isExpanded: false,
+        isCallsOnly: false,
+      },
+    })
+    const drawn = JSON.stringify(await group.drawn())
+    expect(drawn).toContain('Read a file · 1 rejected')
+    expect(drawn).not.toContain('failed')
+    await group.unmount()
+  })
+
   test('호출 말고 다른 줄이 섞인 묶음(isCallsOnly false)은 엔진이, 실패가 있으면 desk-look 이 그린다', KO, async ($, on) => {
     on('ui.render', { component: 'ToolGroup' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
@@ -565,6 +595,13 @@ test('순수 함수', KO, async () => {
   expect(describeCalls([call('Bash', {}), call('mcp__x__y', {})])).toBe('Ran a command, used a tool')
   expect(describeCalls([call('Bash', {}), { ...call('Bash', {}, { isErrored: true }), isNotRun: true }])).toBe('Ran a command · 1 not run')
   expect(describeCalls([{ ...call('Bash', {}, { isErrored: true }), isNotRun: true }, { ...call('Read', {}, { isErrored: true }), isNotRun: true }])).toBe('2 actions not run')
+  const rejected = call('Bash', {}, { isErrored: true, output: "The user doesn't want to proceed with this tool use. The tool use was rejected" })
+  expect(describeCalls([rejected])).toBe('Not run · rejected')
+  expect(describeCalls([rejected, rejected])).toBe('2 actions not run · rejected')
+  expect(describeCalls([call('Read', {}), rejected, { ...call('Bash', {}, { isErrored: true }), isNotRun: true }])).toBe('Read a file · 1 not run · 1 rejected')
+  expect(describeCalls([call('Bash', {}, { isErrored: true, output: 'exit 1' })])).toBe('Ran a command (1 failed)')
+  expect(isRejectedOutput([{ type: 'text', text: "The user doesn't want to proceed with this tool use." }])).toBe(true)
+  expect(isRejectedOutput('Error: The user doesn\'t want')).toBe(false)
   expect(diffStat(call('Edit', { old_string: 'a\nb', new_string: 'c' }))).toEqual({ added: 1, removed: 2 })
   // Write 로 있던 파일을 덮어쓰면 결과의 헌크로 센다(내용 전체가 + 가 아니라)
   const overwrite = { structuredPatch: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 3, lines: [' a', '-b', '+c', '+d', ' e'] }] }

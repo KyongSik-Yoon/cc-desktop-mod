@@ -406,11 +406,33 @@ const VERB: Record<Category, string> = {
 
 const categoryOf = (tool: string): Category => CATEGORY_OF[tool] ?? 'other'
 
-// 막혀 돌지 않은 호출은 동사에 넣지 않고 끝에 "· N not run" 으로 따로 센다(엔진 2.1.314 의 묶음 줄처럼).
+// 사람이 권한 창에서 거절한 호출(엔진 2.1.323 묶음 줄의 "Not run · rejected"). 엔진은 내부 기록으로 가리지만 플러그인에는
+// 모델이 읽은 글만 오므로 그 글로 가린다. 이유를 달든 안 달든 이 문장으로 시작한다(2.1.323 바이너리·실측).
+const REJECTED_HEAD = "The user doesn't want to proceed with this tool use"
+
+export function isRejectedOutput(output: unknown): boolean {
+  const text =
+    typeof output === 'string'
+      ? output
+      : Array.isArray(output)
+        ? output.map(block => (typeof block === 'object' && block !== null && 'text' in block ? String(block.text) : '')).join('')
+        : ''
+  return text.slice(0, 200).includes(REJECTED_HEAD)
+}
+
+export const isRejected = (call: Call): boolean => call.isErrored && !call.isInterrupted && !call.isNotRun && isRejectedOutput(call.output)
+
+// 막혀 돌지 않은 호출은 동사에 넣지 않고 끝에 "· N not run" 으로, 사람이 거절한 호출은 "· N rejected" 로 따로 센다
+// (엔진 2.1.314·2.1.323 의 묶음 줄처럼).
 export function describeCalls(all: ReadonlyArray<Call>): string {
-  const calls = all.filter(call => !call.isNotRun)
-  const skipped = all.length - calls.length
-  if (calls.length === 0 && skipped > 0) return skipped === 1 ? 'Not run' : `${skipped} actions not run`
+  const calls = all.filter(call => !call.isNotRun && !isRejected(call))
+  const denied = all.filter(call => call.isNotRun).length
+  const rejected = all.length - calls.length - denied
+  const skipped = denied + rejected
+  if (calls.length === 0 && skipped > 0) {
+    const head = skipped === 1 ? 'Not run' : `${skipped} actions not run`
+    return denied === 0 ? `${head} · rejected` : head
+  }
   const counts = new Map<Category, number>()
   for (const call of calls) {
     const category = categoryOf(call.tool)
@@ -423,7 +445,13 @@ export function describeCalls(all: ReadonlyArray<Call>): string {
   const rest = entries.slice(3).reduce((sum, [, count]) => sum + count, 0)
   const text = rest > 0 ? `${shown.join(', ')}, and ${rest} more action${rest === 1 ? '' : 's'}` : shown.join(', ')
   const failed = calls.filter(call => call.isErrored).length
-  return text.charAt(0).toUpperCase() + text.slice(1) + (failed > 0 ? ` (${failed} failed)` : '') + (skipped > 0 ? ` · ${skipped} not run` : '')
+  return (
+    text.charAt(0).toUpperCase() +
+    text.slice(1) +
+    (failed > 0 ? ` (${failed} failed)` : '') +
+    (denied > 0 ? ` · ${denied} not run` : '') +
+    (rejected > 0 ? ` · ${rejected} rejected` : '')
+  )
 }
 
 const fieldsOf = (input: unknown): Record<string, unknown> =>
@@ -3210,7 +3238,8 @@ function agentCard(els: Els, $: EngineInterface, call: RunCall, openState: Recor
           title,
           call.isRunning && <Text color={COLORS.muted}> running</Text>,
           isBackground && <Text color={COLORS.muted}> in background</Text>,
-          call.isErrored && !call.isInterrupted && <Text color={COLORS.danger}> failed</Text>,
+          isRejected(call) && <Text color={COLORS.muted}> not run · rejected</Text>,
+          call.isErrored && !call.isInterrupted && !isRejected(call) && <Text color={COLORS.danger}> failed</Text>,
           call.isInterrupted && <Text color={COLORS.muted}> interrupted</Text>,
           body !== '' && <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
         )}
@@ -3309,7 +3338,8 @@ function callLine(els: Els, $: EngineInterface, call: RunCall, openState: Record
           stat && diffChips(els.Text, stat.added, stat.removed),
           answer && <Text color={COLORS.text}>{` → ${clip(answer, Math.floor(room / 2))}`}</Text>,
           call.isNotRun && <Text color={COLORS.muted}> not run</Text>,
-          call.isErrored && !call.isInterrupted && !call.isNotRun && <Text color={COLORS.danger}> failed</Text>,
+          isRejected(call) && <Text color={COLORS.muted}> not run · rejected</Text>,
+          call.isErrored && !call.isInterrupted && !call.isNotRun && !isRejected(call) && <Text color={COLORS.danger}> failed</Text>,
           call.isInterrupted && <Text color={COLORS.muted}> interrupted</Text>,
           <Text color={COLORS.muted}>{isOpen ? ' ⌄' : ' ›'}</Text>,
         )}
@@ -3835,12 +3865,14 @@ export const register: Register = (on, options) => {
       throw error
     }
     // 서브에이전트 호출은 묶음 줄에 그리지 않고, $.tool.check 는 메인 세션 기준으로 답해 묻지 않는다.
-    const isNotRun = agentId === undefined && ran.isError === true && (await isDenied($, tool, e))
-    settle(isNotRun)
+    // 사람이 거절한 호출도 돌지 않았으니 명령 수·실패 수에 넣지 않는다(묶음 줄 표시는 그린 결과 글에서 가린다).
+    const isRejectedRun = agentId === undefined && ran.isError === true && isRejectedOutput(ran.text)
+    const isNotRun = agentId === undefined && ran.isError === true && !isRejectedRun && (await isDenied($, tool, e))
+    settle(isNotRun || isRejectedRun)
     if (isNotRun) await update($, notRun, marks => ({ ...marks, [e.tool_use_id]: true as const })).catch(() => undefined)
     const editStat = FILE_EDITING.has(tool) && !ran.isError ? diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false, output: ran.result }) : null
     if (ran.isError === true || editStat) void patchLog($, e.tool_use_id, { isError: ran.isError === true, ...(editStat ?? {}) }).catch(() => undefined)
-    if (agentId === undefined && tool === 'Bash' && ran.isError === true && !isNotRun) void update($, turnActivity, state => ({ ...state, failed: (state.failed ?? 0) + 1 })).catch(() => undefined)
+    if (agentId === undefined && tool === 'Bash' && ran.isError === true && !isNotRun && !isRejectedRun) void update($, turnActivity, state => ({ ...state, failed: (state.failed ?? 0) + 1 })).catch(() => undefined)
     if (agentId !== undefined) await patchAgent($, agentId, agent => (agent.activity === activity ? { activity: undefined } : {})).catch(() => undefined)
     // 백그라운드로 넘어간 셸·모니터는 백그라운드 작업 패널에 올린다. 모델이 멈춘 작업은 멈춤으로.
     if (!ran.isError && ran.result !== undefined) {

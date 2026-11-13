@@ -95,7 +95,7 @@ Install only the ones you use. desk-look itself makes no network request of its 
 
 ## Good to know
 
-- **Latest Claude Code only**: desk-look follows the latest release and is tested only there. On an older version, parts the engine can't draw yet fall back to its default look
+- **Latest Claude Code only**: desk-look follows the latest release and is tested only there. Each plugin states the oldest Claude Code it runs on in `engines` (`plugin.json`); from Claude Code 2.1.323, an older Claude Code doesn't install or load a version made for a newer one, and `/desk-update` picks the newest version that fits. Before 2.1.323, parts the engine can't draw yet fall back to its default look
 - **Terminals**: light and dark themes both work. Image thumbnails and round bubble corners draw in kitty, Ghostty and iTerm2 3.5 or later; the gray fills follow the [omarchy](https://omarchy.org) theme, and elsewhere bubbles get a rounded border. Details in [Behavior by environment](docs/reference.md#behavior-by-environment)
 - **Settings**: search for `desk-look` in `/config` for the language (English or Korean), bubble side, chips and more. The full list is in [Settings](docs/reference.md#settings)
 - **The desktop app is untouched**: nothing changes in the Code tab of the desktop app
