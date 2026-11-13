@@ -5149,6 +5149,33 @@ describe('미리보기 패널', () => {
     await pane.unmount()
   })
 
+  test('머리 줄: 이름과 버튼이 한 줄에 안 들어가면 버튼 묶음을 다음 줄로(좁은 패널에서 버튼이 눌려 세로로 접히지 않게)', KO, async ($, on) => {
+    const files: Record<string, string> = { '/h/.claude/plans/idempotent-whistling-turtle.md': '# 계획' }
+    docWorld(on, files)
+    await $.tool.call({ tool: 'mcp__desk-look__preview', path: '/h/.claude/plans/idempotent-whistling-turtle.md' } as never)
+    type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+    // 버튼 묶음(키 preview-buttons)이 든 상자: 한 줄이면 이름과 같은 가로 줄, 두 줄이면 패널 세로 묶음
+    const holder = (node: unknown): Node | null => {
+      const box = node as Node
+      if (!box || typeof box !== 'object' || !Array.isArray(box.children)) return null
+      if (box.children.some(child => (child as Node)?.props?.key === 'preview-buttons')) return box
+      for (const child of box.children) {
+        const found = holder(child)
+        if (found) return found
+      }
+      return null
+    }
+    const place = async (bodyColumns: number) => {
+      const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-preview', viewport: VIEWPORT, props: { title: 'p.md', isFocused: true, bodyColumns } as never })
+      const box = holder(await pane.drawn())
+      expect(await pane.find({ type: 'Button', key: 'preview-browser' })).toBeDefined()
+      await pane.unmount()
+      return box?.props?.flexDirection === 'column' ? 'below' : 'inline'
+    }
+    expect(await place(60)).toBe('below')
+    expect(await place(140)).toBe('inline')
+  })
+
   test('원문 줄 보기는 줄 번호 버튼을 창 둘레(위아래 반 화면 더)에만 단다', KO, async ($, on) => {
     const files: Record<string, string> = { '/repo/LONG.md': Array.from({ length: 800 }, (_, i) => `줄 ${i + 1}`).join('\n') }
     docWorld(on, files)
