@@ -683,6 +683,11 @@ describe('v3: 테마 면과 도구 묶음', () => {
     expect(dark?.mode).toBe('dark')
     expect(parseSurface('nothing here')).toBeNull()
     expect(mix('#000000', '#ffffff', 0.5)).toBe('#808080')
+    // 내 말풍선: 강조색이 있으면 옅게 섞은 색, 없으면 없음(회색 말풍선으로 그린다)
+    expect(light?.mine).toBeUndefined()
+    expect(parseSurface('mode = "light"\naccent = "#3264eb"\nbackground = "#fafafa"\n')?.mine).toBe('#e2e8f8')
+    expect(parseSurface('accent = "#7aa2f7"\nbackground = "#1a1b26"\n')?.mine).toBe(mix('#1a1b26', '#7aa2f7', 0.22))
+    expect(parseSurface('accent = "blue"\nbackground = "#1a1b26"\n')?.mine).toBeUndefined()
   })
 
   test('텍스트가 끼기 전까지의 도구 호출을 한 묶음으로 계산한다', KO, async () => {
@@ -5289,6 +5294,36 @@ describe('데스크톱 모양 diff', () => {
         await wait(10)
       }
       expect(opened.at(-1)?.backgroundColor).toBe(want)
+    }
+  })
+
+  test('내 말풍선은 테마 강조색을 옅게 얹은 면, tmux 안(256색)에서는 회색 말풍선', KO, async ($, on) => {
+    let tmux: string | undefined
+    on('env.get', ($, e) => {
+      const name = String((e as { name?: string }).name ?? e)
+      return { value: (name === 'HOME' ? '/home/t' : name === 'COLORTERM' ? 'truecolor' : name === 'TMUX' ? tmux : undefined) as never }
+    })
+    on('fs.read', ($, e) => {
+      const path = String((e as { path?: string }).path ?? e)
+      if (path.endsWith('colors.toml')) return { value: 'mode = "light"\naccent = "#3264eb"\nbackground = "#fafafa"\n' } as never
+      throw new Error('ENOENT')
+    })
+    on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+    const props = { text: '나도 1번', origin: { kind: 'composer' }, isExpanded: false } as never
+    for (const where of [undefined, '/tmp/tmux-1000/default,1,0']) {
+      tmux = where
+      await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
+      const want = where ? '"backgroundColor":"#eeeeee"' : '"backgroundColor":"#e2e8f8"'
+      let drawn = ''
+      for (let tries = 0; tries < 50 && !drawn.includes(want); tries++) {
+        const row = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'UserMessage', viewport: VIEWPORT, props })
+        drawn = JSON.stringify(await row.drawn())
+        await row.unmount()
+        if (!drawn.includes(want)) await wait(10)
+      }
+      expect(drawn).toContain(want)
+      // 강조색 면일 때 회색 말풍선 색은 쓰이지 않는다
+      if (!where) expect(drawn).not.toContain(mix('#fafafa', '#000000', 0.055))
     }
   })
 

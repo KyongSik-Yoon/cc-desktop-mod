@@ -41,12 +41,16 @@ export function parseSurface(toml: string): Surface | null {
     return (0.2126 * ((value >> 16) & 0xff) + 0.7152 * ((value >> 8) & 0xff) + 0.0722 * (value & 0xff)) / 255
   })()
   const mode = declared === 'light' || declared === 'dark' ? declared : luminance > 0.5 ? 'light' : 'dark'
+  const accent = field('accent')
   return {
     mode,
     background: mix(background, background, 0),
     bubble: mix(background, mode === 'light' ? '#000000' : '#ffffff', mode === 'light' ? 0.055 : 0.08),
     // 패널은 화면 반쯤을 덮어 말풍선 회색이 넓게 깔리면 진해 보인다. 바탕에 더 가깝게(밝은 3%, 어두운 4.5%).
     pane: mix(background, mode === 'light' ? '#000000' : '#ffffff', mode === 'light' ? 0.03 : 0.045),
+    // 내 말풍선은 회색 대신 테마 강조색을 옅게 얹는다: /명령 줄·코드 블록·아래턱이 모두 말풍선 회색이라 내 말이 묻혔다.
+    // 강조색이 없는 테마는 회색 말풍선 그대로.
+    ...(accent && hex(accent) !== null ? { mine: mix(background, accent, mode === 'light' ? 0.12 : 0.22) } : {}),
   }
 }
 
