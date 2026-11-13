@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import type { PlanAskState, PlanPreview } from '../types'
-import { CANCEL_REASON, DISMISS_REASON, fitTextRows, isBridgedRecord, isMarkdown, planAskMode, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from './plan'
+import type { LineComment, PlanAskState, PlanPreview, PlanSent } from '../types'
+import { CANCEL_REASON, DISMISS_REASON, fitTextRows, isBridgedRecord, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from './plan'
 import type { PlanReply } from './plan'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 
@@ -15,6 +15,9 @@ const COLORS = {
 
 const planAsking = atom({ plugin: 'desk-plan', key: 'planAsk' } as const, null as PlanAskState | null)
 const preview = atom({ plugin: 'desk-plan', key: 'preview' } as const, null as PlanPreview | null)
+const sent = atom({ plugin: 'desk-plan', key: 'sent' } as const, null as PlanSent | null)
+// desk-look 의 줄 댓글: 계획 파일 것은 고쳐 달라는 답에 실어 보낸다.
+const lineComments = atom({ plugin: 'desk-look', key: 'lineComments' } as const, [] as LineComment[])
 // desk-look 의 값: 떠 있는 질문 카드(겹쳐 띄우지 않는다), 마지막 사람 입력이 온 곳(폰·Remote Control 이면 엔진 창).
 const asking = atom({ plugin: 'desk-look', key: 'ask' } as const, null as { id: string } | null)
 const promptOrigin = atom({ plugin: 'desk-look', key: 'promptOrigin' } as const, null as 'composer' | 'bridge' | 'phone' | null)
@@ -105,12 +108,20 @@ async function approvePlan($: EngineInterface, state: PlanAskState) {
   await replyPlan($, state.dir, { kind: 'approve' })
 }
 
-async function revisePlan($: EngineInterface, state: PlanAskState, text: string) {
-  if (text.trim() === '') {
+// 고쳐 달라고 하기: 글이나 이 계획의 줄 댓글 가운데 하나는 있어야 한다. 댓글은 답을 받은 훅이 읽어 싣는다.
+async function revisePlan($: EngineInterface, state: PlanAskState, text: string, noted: number) {
+  if (text.trim() === '' && noted === 0) {
     $.ui.toast(T.planReviseEmpty)
     return
   }
   await replyPlan($, state.dir, { kind: 'revise', text })
+}
+
+// 이 카드의 계획 파일에 단 줄 댓글(desk-look 은 미리보기 문서를 실제 경로로 연다).
+const planPaths = (state: Pick<PlanAskState, 'path' | 'real'>) => (typeof state.real === 'string' && state.real !== state.path ? [state.path, state.real] : [state.path])
+
+async function notesOf($: EngineInterface, state: Pick<PlanAskState, 'path' | 'real'>) {
+  return planComments(await read($, lineComments).catch(() => []), planPaths(state))
 }
 
 // 힌트 줄 끝에 붙이는 키. 입력칸에 글이 있으면 숫자 키가 버튼을 누르지 않으니 펴는 키만.
@@ -124,6 +135,7 @@ let planFieldDrawn = false
 async function planAskCard($: EngineInterface, els: Elements['terminal'], state: PlanAskState, columns: number, room: number) {
   const { Box, Text, Button, Input } = els
   const k = state.id
+  const noted = (await notesOf($, state)).length
   const title = planTitle(state.plan)
   const width = Math.max(30, columns)
   const textRows = fitTextRows(planTextRows(state.text, planFieldColumns(width, T.planReviseLabel, T.planRevise)), room)
@@ -140,10 +152,12 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
       </Text>
     </Text>
   )
+  // 3: 계획 파일 줄 댓글(미리보기 패널 c)이 있으면 그것만으로도 고쳐 달라고 한다. 고칠 점 칸이 있으면 그 글도 같이 간다.
   const actions = (
     <Box columnGap={2}>
       <Button key={`plan-approve-${k}`} hotkey="1" label={T.planApprove} onPress={() => void approvePlan($, state)} />
       <Button key={`plan-view-${k}`} plain hotkey="2" label={T.planView} onPress={() => void showPlan($, state.path, true)} />
+      {noted > 0 && <Button key={`plan-comments-${k}`} plain hotkey="3" label={T.planSendComments(noted)} onPress={() => void revisePlan($, state, mode === 'full' ? state.text : '', noted)} />}
       {mode !== 'full' && <Button key={`plan-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyPlan($, state.dir, { kind: 'engine' })} />}
     </Box>
   )
@@ -172,7 +186,7 @@ async function planAskCard($: EngineInterface, els: Elements['terminal'], state:
         value={state.text}
         submitLabel={T.planRevise}
         onInput={value => void setText(value)}
-        onSubmit={value => void revisePlan($, state, value)}
+        onSubmit={value => void revisePlan($, state, value, noted)}
       />
       <Box columnGap={2}>
         <Button key={`plan-engine-${k}`} plain dimColor hotkey="9" label={T.toDefault} onPress={() => void replyPlan($, state.dir, { kind: 'engine' })} />
@@ -218,7 +232,12 @@ export const register: Register = (on, options) => {
     const dir = await openReplyPipe($)
     if (dir === '') return next(e)
     const shownAt = await $.clock.now()
-    await update($, planAsking, () => ({ id: e.tool_use_id ?? dir, dir, plan, path, text: '', shownAt }))
+    // desk-look 은 미리보기 문서를 실제 경로로 열고 그 경로로 줄 댓글을 단다.
+    const real = await $.fs.stat(path, { resolve: true }).then(
+      stat => stat.realPath ?? path,
+      () => path,
+    )
+    await update($, planAsking, () => ({ id: e.tool_use_id ?? dir, dir, plan, path, text: '', shownAt, real }))
     if (notify) void $.ui.notify(planTitle(plan) || T.planAskQuestion, { title: T.planAskTitle }).catch(() => undefined)
     await showPlan($, path, false).catch(() => undefined)
     const answered = await awaitReply($, next.signal, dir)
@@ -231,8 +250,13 @@ export const register: Register = (on, options) => {
     switch (answer.kind) {
       case 'approve':
         return { allow: true, updatedInput: input }
-      case 'revise':
-        return { deny: reviseReason(answer.text) }
+      case 'revise': {
+        // 이 계획에 단 줄 댓글을 사유에 싣고, 실은 것은 desk-look 이 지우게 알린다(다음 프롬프트에 또 붙지 않게).
+        // 승인·닫기·취소 때는 두어 다음 프롬프트에 붙게 한다.
+        const notes = await notesOf($, { path, real })
+        if (notes.length > 0) await update($, sent, current => ({ ids: notes.map(note => note.id), n: (current?.n ?? 0) + 1 })).catch(() => undefined)
+        return { deny: reviseReason(answer.text, notes) }
+      }
       case 'engine':
         return next(e)
       case 'dismiss':
@@ -253,7 +277,10 @@ export const register: Register = (on, options) => {
 
   // 힌트 줄: 카드가 떠 있으면 답하는 키를 엔진 줄 끝에 덧붙인다. 띠를 접어 카드가 안 보일 때 펴는 키를 맨 앞에 둔다.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || (await read($, planAsking)) === null) return next(e)
-    return next({ ...e, props: { ...e.props, tail: hintTail(planFieldDrawn ? T.planHint : T.planHintNoField, e.props.isDraft) } })
+    const state = e.surface === 'terminal' ? await read($, planAsking) : null
+    if (state === null) return next(e)
+    // 댓글 수는 atom 을 읽어 정한다: 패널에서 댓글을 달면 힌트도 다시 그려진다.
+    const noted = (await notesOf($, state)).length
+    return next({ ...e, props: { ...e.props, tail: hintTail((planFieldDrawn ? T.planHint : T.planHintNoField)(noted), e.props.isDraft) } })
   })
 }

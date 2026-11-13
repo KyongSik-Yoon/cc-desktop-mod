@@ -11,10 +11,13 @@ const ko = {
   planView: '◫ 계획 보기',
   planReviseLabel: '고칠 점',
   planRevise: '고쳐 달라고 하기',
-  planReviseEmpty: '고칠 점을 적어 주세요',
-  planHint: '1 승인 · 2 계획 보기 · ctrl+x tab 고칠 점 쓰기 · 9 기본 창 · Esc 취소',
+  planReviseEmpty: '고칠 점을 적거나 계획 줄에 댓글을 달아 주세요',
+  // 계획 파일 줄 댓글(미리보기 패널 c)로 고쳐 달라고 하기
+  planSendComments: (count: number) => `✎ 줄 댓글 ${count}개로 고치기`,
+  // 줄 댓글이 있으면 3, 없으면 패널에서 다는 법
+  planHint: (noted: number) => `1 승인 · 2 계획 보기${noted > 0 ? ' · 3 줄 댓글로 고치기' : '(c 줄 댓글)'} · ctrl+x tab 고칠 점 쓰기 · 9 기본 창 · Esc 취소`,
   // 띠가 낮아 고칠 점 칸이 없을 때의 힌트
-  planHintNoField: '1 승인 · 2 계획 보기 · 9 기본 창 · Esc 취소',
+  planHintNoField: (noted: number) => `1 승인 · 2 계획 보기${noted > 0 ? ' · 3 줄 댓글로 고치기' : '(c 줄 댓글)'} · 9 기본 창 · Esc 취소`,
   // 띠를 접어 카드가 안 보일 때 펴는 키(desk-look 의 질문 카드 힌트와 같다)
   bandToggle: '안 보이면 ctrl+x ctrl+a',
   toDefault: '기본 창으로',
@@ -31,9 +34,10 @@ const en: Strings = {
   planView: '◫ View plan',
   planReviseLabel: 'Changes',
   planRevise: 'Ask for changes',
-  planReviseEmpty: 'Write what to change first',
-  planHint: '1 approve · 2 view plan · ctrl+x tab write changes · 9 default dialog · Esc cancel',
-  planHintNoField: '1 approve · 2 view plan · 9 default dialog · Esc cancel',
+  planReviseEmpty: 'Write what to change, or comment on plan lines',
+  planSendComments: count => `✎ Revise from ${count} line comment${count === 1 ? '' : 's'}`,
+  planHint: noted => `1 approve · 2 view plan${noted > 0 ? ' · 3 revise from comments' : ' (c comment lines)'} · ctrl+x tab write changes · 9 default dialog · Esc cancel`,
+  planHintNoField: noted => `1 approve · 2 view plan${noted > 0 ? ' · 3 revise from comments' : ' (c comment lines)'} · 9 default dialog · Esc cancel`,
   bandToggle: 'hidden? ctrl+x ctrl+a',
   toDefault: 'Default dialog',
   close: 'Close',

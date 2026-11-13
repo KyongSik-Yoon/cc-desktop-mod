@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { fitTextRows, isMarkdown, planAskMode, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from '../hooks/plan'
+import { fitTextRows, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from '../hooks/plan'
 
 const PLAN = ['# 빼기 추가', '', '- math.ts 에 subtract', '- 테스트 추가', '', '| 파일 | 변경 |', '|---|---|', '| math.ts | subtract |'].join('\n')
 const PATH = '/h/.claude/plans/p.md'
@@ -33,10 +33,12 @@ test('계획 카드: 계획 제목·입력 정리·고칠 점 사유·줄 수', 
 
 // 엔진과 desk-look 흉내: 터미널 하나, 카드 버튼이 파이프에 쓸 답을 cat 이 바로 돌려준다.
 // desk-look 의 값(언어·떠 있는 질문·입력이 온 곳)은 look 에서 읽는다.
-const world = (on: On, look: { lang?: string; ask?: unknown; promptOrigin?: string | null } = {}) => {
+const world = (on: On, look: { lang?: string; ask?: unknown; promptOrigin?: string | null; lineComments?: unknown[] } = {}) => {
   const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-  const seen = { reply: '', runs: [] as string[], notified: [] as string[], previews: [] as unknown[], reached: [] as Record<string, unknown>[] }
+  const seen = { reply: '', runs: [] as string[], notified: [] as string[], previews: [] as unknown[], sent: [] as unknown[], reached: [] as Record<string, unknown>[] }
   on('state.get', { plugin: 'desk-look', key: 'lang' }, () => ({ value: { value: look.lang, version: 1 } }) as never)
+  on('state.get', { plugin: 'desk-look', key: 'lineComments' }, () => ({ value: { value: look.lineComments ?? [], version: 1 } }) as never)
+  on('state.set', { plugin: 'desk-plan', key: 'sent' }, ($, e, next) => (seen.sent.push(e.value), next(e)))
   on('state.get', { plugin: 'desk-look', key: 'ask' }, () => ({ value: { value: look.ask ?? null, version: 1 } }) as never)
   on('state.get', { plugin: 'desk-look', key: 'promptOrigin' }, () => ({ value: { value: look.promptOrigin ?? null, version: 1 } }) as never)
   on('state.set', { plugin: 'desk-plan', key: 'preview' }, ($, e, next) => (seen.previews.push(e.value), next(e)))
@@ -102,6 +104,45 @@ test('계획 카드 훅: 승인은 입력 그대로 allow, 고칠 점은 거절 
   await $.tool.call({ tool: 'ExitPlanMode', plan: PLAN } as never)
   expect(seen.reached).toHaveLength(3)
   expect(seen.runs.slice(before)).not.toContain('mktemp')
+})
+
+// desk-look 미리보기 패널 원문 줄 보기에서 계획 파일 4–5번 줄에 단 댓글(patch 키 p:경로)과 다른 파일 diff 댓글.
+const line = (n: number, text: string) => ({ kind: ' ' as const, oldNo: n, newNo: n, text })
+const PLAN_NOTE = { id: '7', patch: `p:${PATH}`, path: PATH, scope: 'document', end: { kind: ' ' as const, oldNo: 4, newNo: 4 }, lines: [line(3, '- math.ts 에 subtract'), line(4, '- 테스트 추가')], body: '테스트를 먼저' }
+const DIFF_NOTE = { ...PLAN_NOTE, id: '8', patch: 'src/a.ts', path: 'src/a.ts', scope: 'uncommitted changes' }
+
+test('계획 줄 댓글: 이 계획 파일 것만 골라 거절 사유에 파일:줄·원문·댓글로 싣는다', () => {
+  expect(planComments([PLAN_NOTE, DIFF_NOTE], [PATH]).map(note => note.id)).toEqual(['7'])
+  expect(planComments([PLAN_NOTE], ['/real/p.md'])).toEqual([])
+  expect(planComments([PLAN_NOTE], ['/real/p.md', PATH])).toHaveLength(1)
+  // 옛 상태·이상한 값은 견딘다
+  expect(planComments(undefined, [PATH])).toEqual([])
+  expect(planComments([{ patch: `p:${PATH}` } as never], [PATH])).toEqual([])
+  const both = reviseReason(' 2단계를 나눠 줘 ', [PLAN_NOTE])
+  expect(both).toContain(`${PATH}:3–4\n\`\`\`\n3 - math.ts 에 subtract\n4 - 테스트 추가\n\`\`\`\n테스트를 먼저`)
+  expect(both).toContain('Also:\n\n2단계를 나눠 줘')
+  expect(both).toContain('call ExitPlanMode again')
+  // 댓글만이면 Also 없이
+  expect(reviseReason('', [PLAN_NOTE])).not.toContain('Also:')
+  // 댓글이 없으면 예전과 같다
+  expect(reviseReason('x')).toBe(reviseReason('x', []))
+  expect(reviseReason('x')).not.toContain('Comments on lines')
+})
+
+test('계획 카드 훅: 고쳐 달라는 답에 계획 줄 댓글을 싣고 sent 로 알린다, 승인 때는 두어 다음 프롬프트로', async ($, on) => {
+  const seen = world(on, { lang: 'ko', lineComments: [PLAN_NOTE, DIFF_NOTE] })
+  seen.reply = JSON.stringify({ kind: 'revise', text: '' })
+  const denied = await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(denied.isError).toBe(true)
+  expect(denied.text).toContain(`${PATH}:3–4`)
+  expect(denied.text).toContain('테스트를 먼저')
+  // 다른 파일의 diff 댓글은 싣지 않는다
+  expect(denied.text).not.toContain('src/a.ts')
+  expect(seen.sent).toEqual([{ ids: ['7'], n: 1 }])
+
+  seen.reply = JSON.stringify({ kind: 'approve' })
+  await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(seen.sent).toHaveLength(1)
 })
 
 test('계획 카드 훅: desk-look 질문 카드가 떠 있거나 폰·앱에서 입력했으면 엔진 창', async ($, on) => {

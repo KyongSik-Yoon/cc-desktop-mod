@@ -51,6 +51,8 @@ While Claude works you see the current step and the command running now, with it
 
 A Markdown document Claude writes in a turn opens in the preview pane when the turn ends, with tables, mermaid diagrams and alert boxes drawn as in the transcript.
 
+Press `c` in the pane to switch to numbered source lines and comment on them as in the diff pane: press a line number (another one for a range), write, Enter. The comments go to Claude with your next prompt, or, on a plan that desk-plan's card is asking about, with `3` on the card as the changes you want.
+
 ### Background tasks and context at a glance
 
 <img src="docs/tasks.png" alt="The background tasks pane: a running agent, monitor and shell, and a finished shell under Done" width="600">

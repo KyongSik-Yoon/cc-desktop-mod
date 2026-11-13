@@ -23,6 +23,10 @@ const ko = {
   // 여러 줄 입력칸 뒤 버튼: 쓴 글을 한 번에 비운다(엔진 칸의 ^U 는 한 줄씩만 지운다)
   inputClear: '지우기',
   commentsSent: (count: number) => `줄 댓글 ${count}개를 같이 보냈어요`,
+  // 미리보기 패널의 원문 줄 보기: 문서가 바뀌어 댓글이 짚은 줄 글이 달라졌을 때
+  commentStale: '(줄이 바뀜)',
+  previewComment: '✎ 줄 댓글',
+  previewRendered: '◫ 그려진 보기',
   // 에이전트 패널
   paneAgents: '백그라운드 작업',
   cmdAgents: '데스크톱 Background tasks 처럼 이 세션의 에이전트·백그라운드 셸·모니터 패널을 연다 (번호를 주면 그 작업의 상세)',
@@ -368,6 +372,9 @@ const en: Strings = {
   cancel: 'Cancel',
   inputClear: 'Clear',
   commentsSent: (count: number) => `Sent ${count} line comment${count === 1 ? '' : 's'} with it`,
+  commentStale: '(line changed)',
+  previewComment: '✎ comment lines',
+  previewRendered: '◫ rendered',
   paneAgents: 'Background tasks',
   cmdAgents: "Open this session's agents, background shells and monitors, like the desktop Background tasks (give a number for that task's details)",
   cmdAgentsHint: '[number]',

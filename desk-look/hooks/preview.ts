@@ -41,3 +41,17 @@ export function previewTool(isAuto: boolean) {
     },
   }
 }
+
+// 원문 줄 보기(줄 댓글): 문서 전체를 안 바뀐 줄만 있는 패치 하나로 만든다. 그러면 diff 패널의 줄 그리기(번호 칸·누르기·줄바꿈)와
+// 줄 댓글(comments.ts)을 그대로 쓴다. 끝의 줄바꿈 하나는 줄로 치지 않는다.
+export function sourcePatch(text: string): string {
+  const lines = sourceLines(text)
+  return [`@@ -1,${lines.length} +1,${lines.length} @@`, ...lines.map(line => ` ${line}`)].join('\n')
+}
+
+export const sourceLines = (text: string) => text.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n')
+
+// 문서 줄 댓글의 patch 키. diff 패널의 키(파일 경로, s:·b:·c: 앞머리)와 겹치지 않는다.
+export const DOC_KEY = 'p:'
+export const previewPatchKey = (path: string) => `${DOC_KEY}${path}`
+export const isDocComment = (comment: { patch: string }) => comment.patch.startsWith(DOC_KEY)
