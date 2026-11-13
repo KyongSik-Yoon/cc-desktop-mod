@@ -131,6 +131,21 @@ describe('응답 렌더링', () => {
     expect(JSON.stringify(tree)).toMatch(/"color":"claude","backgroundColor":"#ededed"/)
   })
 
+  test('표는 머리 밑줄만 긋고, 접히는 행이 있을 때만 행 사이를 점선으로 가른다', () => {
+    const els = { Box: 'Box', Text: 'Text', Code: 'Code', Link: 'Link', Button: 'Button' } as never
+    const colors = { text: 'text', muted: 'inactive', border: 'subtle', code: 'claude', link: 'suggestion', accent: 'claude', codeBg: '#ededed' }
+    const count = (tree: unknown, char: string) => (JSON.stringify(tree).match(new RegExp(`"${char}+"`, 'g')) ?? []).length
+    const short = renderMarkdown('| 파일 | 줄 |\n|---|--:|\n| a.ts | 1 |\n| b.ts | 2 |\n| c.ts | 3 |', els, colors, 80)
+    expect(count(short, '─')).toBe(1)
+    expect(count(short, '┈')).toBe(0)
+    // 머리는 굵은 글씨뿐, 바탕을 깔지 않는다(면 색이 안 보이는 터미널에서도 같은 모양).
+    expect(JSON.stringify(short)).toContain('"weight":"semibold"')
+    expect(JSON.stringify(short)).not.toContain('#ededed')
+    const long = renderMarkdown(`| # | 설명 |\n|---|---|\n| 1 | ${'긴 설명 '.repeat(20)} |\n| 2 | 짧음 |\n| 3 | 짧음 |`, els, colors, 40)
+    expect(count(long, '─')).toBe(1)
+    expect(count(long, '┈')).toBe(2)
+  })
+
   test('따옴표·괄호 안의 외톨이 \\ 는 엔진처럼 남긴다', KO, async $ => {
     const line = `Q1 "\\" Q2 (\\) Q3 a(\\) Q4 (\\)b Q5 **b**(\\) Q6 [\\] Q7 '\\' Q8 {\\} Q9 \\*(\\) Q10 (\\)(\\)\n\nQ11 [x(\\)](https://x.y)`
     const reply = await $.ui.mount({

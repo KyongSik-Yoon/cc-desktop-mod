@@ -388,6 +388,7 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
       ),
     )
     // 데스크톱 메시지 열처럼 폭을 채우되, 아주 넓은 터미널에서 늘어지지 않게 100칸에서 멈춘다.
+    // 데스크톱 메시지 열처럼 폭을 채우되, 아주 넓은 터미널에서 늘어지지 않게 100칸에서 멈춘다.
     const widths = columnWidths(natural, Math.min(room, 100) - 2, true)
     // cards: 칸이 그 칸의 가장 긴 낱말보다 좁아지면 낱말이 쪼개져 못 읽으니 행마다 카드로 그린다.
     if (options.cards) {
@@ -399,22 +400,24 @@ export function renderMarkdown(markdown: string, els: Els, colors: Palette, colu
     const inner = widths.reduce((sum, width) => sum + width + 2, 0)
     const justify = (index: number) =>
       block.align[index] === 'right' ? 'flex-end' : block.align[index] === 'center' ? 'center' : 'flex-start'
-    const headerFill = colors.codeBg ? { backgroundColor: colors.codeBg } : {}
     const row = (cells: string[], rowKey: string, isHeader: boolean) => (
-      <Box flexDirection="row" {...(isHeader ? headerFill : {})}>
+      <Box flexDirection="row">
         {widths.map((width, index) => (
-          <Box width={width + 2} paddingX={1} justifyContent={justify(index)} {...(isHeader ? headerFill : {})}>
-            {prose(cell(cells, index), `${rowKey}.${index}`, isHeader ? (colors.codeBg ? headerFill : { weight: 'semibold' }) : {})}
+          <Box width={width + 2} paddingX={1} justifyContent={justify(index)}>
+            {prose(cell(cells, index), `${rowKey}.${index}`, isHeader ? { weight: 'semibold' } : {})}
           </Box>
         ))}
       </Box>
     )
-    const rule = <Text color={colors.border}>{'─'.repeat(inner)}</Text>
+    const rule = (char: string) => <Text color={colors.border}>{char.repeat(inner)}</Text>
+    // 행 사이 줄은 접히는 행이 있을 때만, 점선으로 긋는다. 한 줄짜리 행뿐이면 줄 없이도 행이 갈리고, 줄마다 그으면 표 높이가 두 배가 된다.
+    const wraps = block.rows.some(cells => widths.some((width, index) => inlineWidth(parseInline(cell(cells, index)), codePadding) > width))
 
     return (
       <Box flexDirection="column" alignSelf="flex-start" borderStyle="round" borderColor={colors.border}>
         {row(block.header, `${key}.h`, true)}
-        {block.rows.flatMap((cells, index) => [rule, row(cells, `${key}.${index}`, false)])}
+        {rule('─')}
+        {block.rows.flatMap((cells, index) => [...(wraps && index > 0 ? [rule('┈')] : []), row(cells, `${key}.${index}`, false)])}
       </Box>
     )
   }

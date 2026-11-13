@@ -1,6 +1,6 @@
 {
   "name": "desk-plan",
-  "version": "0.80.3",
+  "version": "0.80.4",
   "engines": {
     "claude-code": ">=2.1.323"
   },
