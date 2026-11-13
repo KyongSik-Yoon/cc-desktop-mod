@@ -676,6 +676,9 @@ describe('v3: 테마 면과 도구 묶음', () => {
     expect(light?.mode).toBe('light')
     expect(light?.bubble).toBe(mix('#fafafa', '#000000', 0.055))
     expect(light?.bubble).not.toBe('#fafafa')
+    // 패널은 말풍선보다 바탕에 가깝다
+    expect(light?.pane).toBe('#f3f3f3')
+    expect(parseSurface('background = "#1a1b26"\n')?.pane).toBe('#242530')
     const dark = parseSurface('background = "#1a1b26"\n')
     expect(dark?.mode).toBe('dark')
     expect(parseSurface('nothing here')).toBeNull()
@@ -1028,7 +1031,7 @@ test('바탕 면이 바뀌면 열린 패널의 바탕도 다시 준다(포커스
   on('session.start', ($, e) => e as never)
   on('prompt.submit', ($, e) => ({ text: e.text }) as never)
   await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
-  const gray = mix('#fafafa', '#000000', 0.055)
+  const gray = mix('#fafafa', '#000000', 0.03)
   const last = async (count: number) => {
     for (let tries = 0; tries < 50 && opened.filter(item => item.id === 'desk-activity').length < count; tries++) await wait(10)
     return opened.filter(item => item.id === 'desk-activity').at(-1)
@@ -5258,7 +5261,7 @@ describe('데스크톱 모양 diff', () => {
     }
   })
 
-  test('어두운 테마: 패널 바탕은 말풍선 색, tmux 안(256색)에서는 팔레트 회색', KO, async ($, on) => {
+  test('어두운 테마: 패널 바탕은 말풍선보다 옅은 회색, tmux 안(256색)에서는 팔레트 회색', KO, async ($, on) => {
     let tmux: string | undefined
     const opened: { backgroundColor?: string }[] = []
     on('env.get', ($, e) => {
@@ -5278,7 +5281,7 @@ describe('데스크톱 모양 diff', () => {
     for (const where of [undefined, '/tmp/tmux-1000/default,1,0']) {
       tmux = where
       await $.prompt.submit({ text: '테마', origin: { kind: 'composer' }, wait: false } as never)
-      const want = where ? '#303030' : '#2c2d37'
+      const want = where ? '#262626' : '#242530'
       for (let tries = 0; tries < 50; tries++) {
         opened.length = 0
         await $.command.run({ command: 'desk-context', args: '' } as never)

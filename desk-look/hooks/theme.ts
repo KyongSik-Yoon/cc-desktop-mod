@@ -45,6 +45,8 @@ export function parseSurface(toml: string): Surface | null {
     mode,
     background: mix(background, background, 0),
     bubble: mix(background, mode === 'light' ? '#000000' : '#ffffff', mode === 'light' ? 0.055 : 0.08),
+    // 패널은 화면 반쯤을 덮어 말풍선 회색이 넓게 깔리면 진해 보인다. 바탕에 더 가깝게(밝은 3%, 어두운 4.5%).
+    pane: mix(background, mode === 'light' ? '#000000' : '#ffffff', mode === 'light' ? 0.03 : 0.045),
   }
 }
 

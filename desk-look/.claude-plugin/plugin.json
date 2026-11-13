@@ -1,6 +1,6 @@
 {
   "name": "desk-look",
-  "version": "0.79.0",
+  "version": "0.79.1",
   "engines": {
     "claude-code": ">=2.1.323"
   },
