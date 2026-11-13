@@ -72,4 +72,6 @@ grep -nE 'yield\* *\w+\(\$' *.ts*                              # yield* 안의 $
 for n in $(grep -oP '^(export )?(async )?function \K\w+(?=\([^)]*\$)' register.tsx | sort -u); do grep -nP "^\s+(const|let|var|function)\s+$n\b|[\[{,]\s*$n\s*[,\]}]" register.tsx; done   # $ 받는 함수 이름 가림
 ```
 
+로컬 `claude plugin validate --strict` 는 `scripts/validate-strict.sh` 로 돌린다. 연결된 MCP 도구가 많으면 엔진이 적어 둔 MCP 타입(`.claude-plugin/types/claude-code-mcp`, git 에 없음) 때문에 검증기의 타입 검사가 2048 MiB 한도를 넘어 실패하는데, 코드 탓이 아니다. 스크립트가 그 파일을 비우고 돌린 뒤 되돌린다. `$.tool.call` 을 좁은 타입으로 캐스트해 줄이지 않는다(`$` 쓰기 규칙을 벗어난다).
+
 **막혔을 때**: 포털에서 플러그인 → 버전 → 펼치기로 들어가 Blocking 항목과 줄 번호를 본다. 처음 막힌 버전과 그 앞 통과본의 diff 에서 원인을 찾는다. 고친 뒤에는 위 릴리즈 규칙대로 버전을 올린다. "Validation didn't finish" 경고는 고칠 것이 없다.
