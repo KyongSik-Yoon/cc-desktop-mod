@@ -7,6 +7,9 @@
 // 그 훅은 엔진 창과 함께 불려 창이 잠깐 깜빡이므로 두지 않았다(그럴 땐 9 기본 창).
 // 엔진을 부르는 부분($)은 register.tsx 에 있고, 여기는 순수 함수만 둔다($ 는 다른 파일 함수로 넘기지 않는다).
 // 계획 본문은 desk-look 의 미리보기 패널에 연다(desk-plan.preview 에 쓰면 desk-look 이 state.set 훅으로 받는다).
+// 미리보기 패널 원문 줄 보기에서 계획 파일에 단 줄 댓글은 고쳐 달라는 답에 실어 보내고, 보낸 것은 desk-plan.sent 로 알려 desk-look 이 지운다.
+
+import type { CommentLine, LineComment } from '../types'
 
 export type PlanReply = { kind: 'approve' } | { kind: 'revise'; text: string } | { kind: 'engine' } | { kind: 'dismiss' } | { kind: 'cancel' }
 
@@ -24,8 +27,33 @@ export function planTitle(plan: string): string {
 }
 
 // 고칠 점을 받았을 때 모델이 읽는 거절 사유. 엔진 창의 "Tell Claude what to change" 처럼 plan 모드에 남아 다시 묻게 한다.
-export function reviseReason(text: string): string {
-  return `The user reviewed the plan and wants changes before you start:\n\n${text.trim()}\n\nStay in plan mode, revise the plan, and call ExitPlanMode again.`
+// 계획 파일 줄 댓글(desk-look 미리보기 패널 원문 줄 보기)이 있으면 파일:줄, 그 줄 원문, 댓글을 함께 싣는다.
+export function reviseReason(text: string, comments: ReadonlyArray<LineComment> = []): string {
+  const wish = text.trim()
+  const notes =
+    comments.length > 0
+      ? [`Comments on lines of the plan file (line numbers are the file's, each quoting the lines as they were):`, ...comments.map(commentBlock)].join('\n\n')
+      : ''
+  const body = [notes, wish && notes ? `Also:\n\n${wish}` : wish].filter(part => part !== '').join('\n\n')
+  return `The user reviewed the plan and wants changes before you start:\n\n${body}\n\nStay in plan mode, revise the plan, and call ExitPlanMode again.`
+}
+
+const shownNo = (line: CommentLine) => (line.kind === '-' ? line.oldNo : line.newNo)
+
+// desk-look comments.ts 의 docBlock 과 같은 모양: 파일:줄(범위), 그 줄 원문, 댓글.
+function commentBlock(comment: LineComment): string {
+  const numbers = comment.lines.map(shownNo)
+  const first = numbers[0] ?? 0
+  const last = numbers[numbers.length - 1] ?? first
+  const width = String(Math.max(...numbers)).length
+  const quoted = comment.lines.map(line => `${String(shownNo(line)).padStart(width)} ${line.text}`).join('\n')
+  return `${comment.path}:${first === last ? first : `${first}–${last}`}\n\`\`\`\n${quoted}\n\`\`\`\n${comment.body}`
+}
+
+// 이 계획 파일에 단 줄 댓글(desk-look 이 미리보기 패널에서 연 실제 경로 기준). paths 는 계획 파일 경로와 그 실제 경로.
+export function planComments(list: ReadonlyArray<LineComment> | null | undefined, paths: ReadonlyArray<string>): LineComment[] {
+  if (!Array.isArray(list)) return []
+  return list.filter(comment => typeof comment?.patch === 'string' && paths.some(path => comment.patch === `p:${path}`) && Array.isArray(comment.lines) && comment.lines.length > 0)
 }
 
 export const DISMISS_REASON = 'The user closed the plan without approving it. Stay in plan mode and wait for the user.'

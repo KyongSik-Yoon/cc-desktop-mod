@@ -3786,9 +3786,10 @@ const planStub = {
   name: 'desk-plan',
   register: ((on: On) => {
     on('tool.call', { tool: 'PlanStub' } as never, async ($, e) => {
-      const input = e as unknown as { card?: unknown; preview?: unknown }
+      const input = e as unknown as { card?: unknown; preview?: unknown; sent?: unknown }
       if ('card' in input) await $.state.set({ plugin: 'desk-plan', key: 'planAsk' }, input.card as never)
       if ('preview' in input) await $.state.set({ plugin: 'desk-plan', key: 'preview' }, input.preview as never)
+      if ('sent' in input) await $.state.set({ plugin: 'desk-plan', key: 'sent' }, input.sent as never)
       return { result: 'ok' } as never
     })
   }) as never,
@@ -3863,6 +3864,38 @@ test('desk-plan 이 preview 를 쓰면 계획 파일을 미리보기 패널로 �
   // 마크다운이 아니면 열지 않는다
   await $.tool.call({ tool: 'PlanStub', preview: { path: '/etc/passwd', focus: true, n: 3 } } as never)
   expect(opened).toEqual([{ id: 'desk-preview' }, { id: 'desk-preview', focus: true }])
+})
+
+test('desk-plan 이 계획 줄 댓글을 보냈다고 sent 를 쓰면 그 댓글만 지운다', { ...KO, plugins: [planStub] }, async ($, on) => {
+  const toasts: string[] = []
+  on('process.run', gitStub as never)
+  on('clock.now', () => ({ value: 0 }))
+  on('fs.read', () => ({ value: '# 빼기 추가\n\n- 하나\n- 둘' }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.toast', ($, e) => {
+    toasts.push(String((e as { text?: unknown }).text))
+    return { value: undefined } as never
+  })
+  on('tool.call', () => ({ result: 'ok' }) as never)
+  await $.tool.call({ tool: 'PlanStub', preview: { path: PLAN_CARD.path, focus: true, n: 1 } } as never)
+  const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-preview', viewport: VIEWPORT, props: { title: 'p.md', isFocused: true, bodyColumns: 70 } as never })
+  await pane.press({ key: 'preview-source' })
+  const comment = async (key: string, text: string) => {
+    await pane.press({ key })
+    const input = (await pane.find({ type: 'Input' })) as { key?: string } | undefined
+    await pane.input({ key: input?.key ?? '', text })
+  }
+  await comment('src.0.0.p2', '하나를 빼')
+  // 3번 줄 댓글 행이 끼어 4번 줄은 다음 덩어리의 첫 줄
+  await comment('src.1.0.p0', '둘은 그대로')
+  const ids = (await pane.findAll({ type: 'Button' })).map(button => /^comment-del-(.+)$/.exec(String((button as { key?: unknown }).key))?.[1]).filter((id): id is string => id !== undefined)
+  expect(ids).toHaveLength(2)
+  await $.tool.call({ tool: 'PlanStub', sent: { ids: [ids[0]], n: 1 } } as never)
+  const drawn = JSON.stringify(await pane.drawn())
+  expect(drawn).not.toContain('하나를 빼')
+  expect(drawn).toContain('둘은 그대로')
+  expect(toasts).toContain('줄 댓글 1개를 같이 보냈어요')
+  await pane.unmount()
 })
 
 test('diff 패널: 접힌 목록으로 열리고, 파일 머리 줄을 누르면 그 파일 diff 를 펴고 접는다', KO, async ($, on) => {

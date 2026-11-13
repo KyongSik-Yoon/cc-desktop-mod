@@ -3585,6 +3585,16 @@ export const register: Register = (on, options) => {
     if (e.value && isMarkdown(e.value.path)) await openPreview($, e.value.path, e.value.focus).catch(() => undefined)
     return done
   }).catch(($, e, next) => next(e))
+  // desk-plan 이 계획 줄 댓글을 고쳐 달라는 답에 실어 보내면 그 댓글을 지운다(다음 프롬프트에 또 붙지 않게).
+  on('state.set', { plugin: 'desk-plan', key: 'sent' }, async ($, e, next) => {
+    const done = await next(e)
+    const ids = Array.isArray(e.value?.ids) ? e.value.ids : []
+    if (ids.length > 0) {
+      await update($, lineComments, list => list.filter(item => !ids.includes(item.id))).catch(() => undefined)
+      $.ui.toast(T.commentsSent(ids.length))
+    }
+    return done
+  }).catch(($, e, next) => next(e))
   // desk-review 의 리뷰 결과 패널에서 "변경 사항 탭에서 열기"를 누르면 그 파일에서 diff 패널을 연다(턴 끝 카드의 파일 줄과 같은 길).
   on('state.set', { plugin: 'desk-review', key: 'diffAt' }, async ($, e, next) => {
     const done = await next(e)
