@@ -1,6 +1,6 @@
 {
   "name": "desk-review",
-  "version": "0.80.0",
+  "version": "0.80.1",
   "engines": {
     "claude-code": ">=2.1.323"
   },
