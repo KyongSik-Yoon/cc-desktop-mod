@@ -1763,7 +1763,11 @@ async function refreshSurface($: EngineInterface) {
   // 말풍선·아래턱·코드 바탕·모드 알약·패널 바탕·diff 색이 모두 이 값을 쓰므로, 터미널과 어긋나는지 여기서 한 번 가린다.
   const trusted = trustSurface(parsed, engine, remote)
   // 256색(tmux 안)에서는 말풍선·패널 회색을 팔레트의 회색으로: 섞은 색은 엔진이 색 큐브로 줄여 어두운 테마에서 #5f5f5f 로 밝아진다.
-  const next = trusted && !truecolor ? { ...trusted, bubble: gray256(trusted.bubble), ...(trusted.pane ? { pane: gray256(trusted.pane) } : {}) } : trusted
+  // 강조색을 섞은 내 말풍선 색(mine)은 색 큐브에서 어느 칸으로 갈지 알 수 없어 256색에서는 빼고 회색 말풍선을 쓴다.
+  const next: Surface | null =
+    trusted && !truecolor
+      ? { mode: trusted.mode, background: trusted.background, bubble: gray256(trusted.bubble), ...(trusted.pane ? { pane: gray256(trusted.pane) } : {}) }
+      : trusted
   diffColors = next ? diffPalette(next.mode, next.background, COLORS.muted, truecolor) : null
   if (!sameJson(await read($, surface), next)) {
     await update($, surface, () => next)
@@ -3974,7 +3978,7 @@ export const register: Register = (on, options) => {
         )}
         {text !== '' &&
           (face ? (
-            bubbleLines(Box, Text, canDraw ? Image : null, wrapText(text, Math.floor(columns * 0.85) - 6), face.bubble)
+            bubbleLines(Box, Text, canDraw ? Image : null, wrapText(text, Math.floor(columns * 0.85) - 6), face.mine ?? face.bubble)
           ) : (
             <Box width={width} borderStyle="round" borderColor={COLORS.border} paddingX={1}>
               <Text color={COLORS.text}>{text}</Text>

@@ -1,6 +1,6 @@
 {
   "name": "desk-slack",
-  "version": "0.79.1",
+  "version": "0.80.0",
   "engines": {
     "claude-code": ">=2.1.323"
   },

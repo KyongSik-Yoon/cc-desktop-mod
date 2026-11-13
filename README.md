@@ -22,7 +22,7 @@ Run it at the prompt of a Claude Code terminal session, answer `y` to add the ma
 
 Terminal default → desk-look:
 
-- **Your prompt**: a line starting with `>` → a gray bubble, with pasted images as thumbnails
+- **Your prompt**: a line starting with `>` → a bubble tinted with the theme's accent color, with pasted images as thumbnails
 - **Tool calls**: a row per call → one line, `Ran 2 commands, edited a file +3 −1 ›`, that expands on click
 - **Markdown**: grid tables, mermaid as code, plain blockquotes → full-width tables, box diagrams, colored alert boxes
 - **Code blocks**: no way to copy → hover for `⧉ copy`
