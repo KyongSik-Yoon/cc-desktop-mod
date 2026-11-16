@@ -5123,6 +5123,21 @@ describe('미리보기 패널', () => {
     await pane.press({ key: 'src.1.0.p0' })
     const input = (await pane.find({ type: 'Input' })) as { key?: string } | undefined
     expect(JSON.stringify(input)).toContain('4–5번 줄')
+    // 엔진은 칸 글을 패널 폭으로 접어, 칸을 들이거나 옆에 버튼을 두면 글이 첫 줄에서 잘린다:
+    // 칸은 여백 없는 행에 혼자 두고 지우기·취소는 그 밑 행으로.
+    type DraftNode = { type?: string; props?: Record<string, unknown>; children?: DraftNode[] }
+    const findKey = (node: unknown, key: string): DraftNode | undefined => {
+      if (!node || typeof node !== 'object') return undefined
+      if (Array.isArray(node)) return node.map(child => findKey(child, key)).find(Boolean)
+      const box = node as DraftNode
+      return box.props?.key === key ? box : findKey(box.children, key)
+    }
+    const draftNode = findKey(await pane.drawn(), 'pc-draft')
+    expect(draftNode?.props?.paddingLeft).toBeUndefined()
+    const [field, buttons] = draftNode?.children ?? []
+    expect(field?.props?.paddingLeft).toBeUndefined()
+    expect(field?.children?.map(child => child.type)).toEqual(['Input'])
+    expect(JSON.stringify(buttons)).toContain('comment-clear')
     await pane.input({ key: input?.key ?? '', text: '만료는 설정값으로' })
     expect(await pane.find({ type: 'Input' })).toBeUndefined()
     const drawn = JSON.stringify(await pane.drawn())

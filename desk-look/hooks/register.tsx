@@ -60,8 +60,10 @@ const DESK_PANES = new Set([PANE, SESSIONS_PANE, CONTEXT_PANE, PR_PANE, AGENTS_P
 // /desk-tasks 끝남 묶음을 접었는지(open 상태의 한 키).
 const DONE_FOLDED = 'tasks:doneFolded'
 const PER_GROUP = 8
-// diff 줄 댓글 칸 높이(쓰는 동안만 끼는 행), 질문 카드 직접 입력칸이 자랄 수 있는 줄 수.
+// 줄 댓글 입력칸 높이, 질문 카드 직접 입력칸이 자랄 수 있는 줄 수.
 const COMMENT_ROWS = 3
+// 줄 댓글을 쓰는 동안만 끼는 행: 입력칸과 그 밑 버튼 줄.
+const DRAFT_ROWS = COMMENT_ROWS + 1
 const ASK_TEXT_ROWS = 4
 
 const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<string, boolean>)
@@ -2803,12 +2805,15 @@ async function openDocComments($: EngineInterface, path: string) {
   await update($, previewSource, () => true)
 }
 
-// 줄 댓글 초안: 고른 범위 끝 줄 밑의 여러 줄 입력칸과 지우기·취소(diff 패널·미리보기 패널 공용).
-function commentDraftRow($: EngineInterface, els: Els, key: string, picked: CommentDraft, lines: DiffLine[], pad: number) {
+// 줄 댓글 초안: 고른 범위 끝 줄 밑의 여러 줄 입력칸, 그 밑 줄에 지우기·취소(diff 패널·미리보기 패널 공용).
+// 엔진은 칸 글을 패널 폭으로 접어서, 여백이나 옆 버튼으로 칸을 좁히면 Enter 안내가 밀려 글이 첫 줄에서 잘린다.
+// 그래서 칸은 패널 폭 그대로 두고(라벨이 번호 칸까지 내어 쓴다) 버튼은 밑 줄로 뺀다.
+// Input 은 글자색을 못 바꿔, 원문 줄과는 칸 뒤 말풍선 면(fill)과 내어 쓴 라벨로 가른다.
+function commentDraftRow($: EngineInterface, els: Els, key: string, picked: CommentDraft, lines: DiffLine[], pad: number, fill?: string) {
   const { Box, Button, Input } = els
   return (
-    <Box key={key} height={COMMENT_ROWS} paddingLeft={pad} columnGap={1}>
-      <Box flexGrow={1} flexShrink={1} overflow="hidden">
+    <Box key={key} height={DRAFT_ROWS} flexDirection="column">
+      <Box height={COMMENT_ROWS} overflow="hidden" {...(fill ? { backgroundColor: fill } : {})}>
         <Input
           key={draftInputKey(picked)}
           label={T.commentLabel(rangeLabel(lines))}
@@ -2820,8 +2825,10 @@ function commentDraftRow($: EngineInterface, els: Els, key: string, picked: Comm
           onSubmit={value => void saveComment($, picked, lines, value).catch(() => undefined)}
         />
       </Box>
-      <Button key="comment-clear" plain dimColor label={T.inputClear} onPress={() => void clearComment($)} />
-      <Button key="comment-cancel" plain dimColor label={T.cancel} onPress={() => void cancelComment($)} />
+      <Box height={1} paddingLeft={pad} columnGap={2}>
+        <Button key="comment-clear" plain dimColor label={T.inputClear} onPress={() => void clearComment($)} />
+        <Button key="comment-cancel" plain dimColor label={T.cancel} onPress={() => void cancelComment($)} />
+      </Box>
     </Box>
   )
 }
@@ -2852,7 +2859,7 @@ const plainPalette: DiffPalette = { addBg: COLORS.muted, delBg: COLORS.muted, ad
 // 창은 반 화면 넘게 움직여야 다시 적히므로(ui.scroll), 그 지연을 덮게 위아래로 반 화면씩 더 단다.
 // window 는 패널 트리 안의 창, top 은 본문 첫 줄의 트리 안 행.
 type SourceWindow = { offset: number; bodyRows: number; top: number }
-function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text: string, columns: number, draft: CommentDraft | null, comments: LineComment[], window: SourceWindow) {
+function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text: string, columns: number, draft: CommentDraft | null, comments: LineComment[], window: SourceWindow, fill?: string) {
   const { Box } = els
   const key = previewPatchKey(file.path)
   const { rows } = patchBlocks(sourcePatch(text))
@@ -2870,7 +2877,7 @@ function previewSourceView($: EngineInterface, els: Els, file: PreviewFile, text
     const row = rowOf(rows, comment.end)
     if (row !== -1) insert(row, commentNoteRow($, els, `pc-${comment.id}`, comment, pad))
   }
-  if (picking && picked) insert(picked[1], commentDraftRow($, els, 'pc-draft', picking, linesIn(rows, picked), pad), COMMENT_ROWS)
+  if (picking && picked) insert(picked[1], commentDraftRow($, els, 'pc-draft', picking, linesIn(rows, picked), pad, fill), DRAFT_ROWS)
   const cuts = [...after.keys()].sort((a, b) => a - b)
   const pieces = [...cuts, rows.length - 1].map((cut, index) => ({ from: index === 0 ? 0 : (cuts[index - 1] ?? 0) + 1, to: cut }))
   const options = { path: file.path, gutter, columns, wrap: true, unmodified: T.unmodifiedLines }
@@ -3070,7 +3077,7 @@ function virtualDiff(v: VirtualDiff) {
       const row = comment.patch === key ? rowOf(rows, comment.end) : -1
       if (row !== -1) insert(row, { key: `cm-${comment.id}`, height: 1, node: () => v.notes.commentRow(`cm-${comment.id}`, comment, pad) })
     })
-    if (draft && picked) insert(picked[1], { key: 'cm-draft', height: COMMENT_ROWS, node: () => v.notes.draftRow('cm-draft', draft, linesIn(rows, picked), pad) })
+    if (draft && picked) insert(picked[1], { key: 'cm-draft', height: DRAFT_ROWS, node: () => v.notes.draftRow('cm-draft', draft, linesIn(rows, picked), pad) })
     const cuts = [...after.keys()].sort((a, b) => a - b)
     const cutBlocks =
       cuts.length === 0
@@ -4936,7 +4943,7 @@ export const register: Register = (on, options) => {
           {file.error !== undefined ? (
             <Text color={COLORS.danger}>{T.previewUnreadable(file.error)}</Text>
           ) : window ? (
-            previewSourceView($, els, file, text, columns - 1, draft, comments, window)
+            previewSourceView($, els, file, text, columns - 1, draft, comments, window, face?.bubble)
           ) : (
             renderMarkdown(text, els, { ...COLORS, ...(face ? { codeBg: face.bubble } : {}) }, columns - 1, {
               document: true,
@@ -5363,7 +5370,7 @@ export const register: Register = (on, options) => {
           comments,
           scopeOf: prefix => commentScope(prefix, view.base?.ref),
           onLine: at => void pickLine($, at).catch(() => undefined),
-          draftRow: (key, picked, lines, pad) => commentDraftRow($, els, key, picked, lines, pad),
+          draftRow: (key, picked, lines, pad) => commentDraftRow($, els, key, picked, lines, pad, face?.bubble),
           commentRow: (key, comment, pad) => commentNoteRow($, els, key, comment, pad),
         },
       })
