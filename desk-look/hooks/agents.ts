@@ -58,7 +58,8 @@ export function activityOf(tool: string): string {
 // 엔진 목록을 기록에 합친다: 이름·종류·상태는 목록이 정본, 수치는 기록이 가진 것을 둔다.
 // 목록에서 사라진 것(끝난 지 좀 된 에이전트)은 기록 그대로 남는다. 엔진은 도는 에이전트를 빼지 않으므로,
 // 목록에 있다가 사라졌는데 기록이 아직 도는 중이면 끝을 놓친 것(도중의 /reload-plugins 등)이라 끝난 것으로 둔다.
-export function mergeAgents(records: Readonly<Record<string, AgentRecord>>, list: ReadonlyArray<AgentInfo>, now: number): Record<string, AgentRecord> {
+// 목록에서 읽는 것은 이름·종류·상태뿐이다(엔진이 AgentInfo 에 필드를 더해도 받는 쪽은 그대로).
+export function mergeAgents(records: Readonly<Record<string, AgentRecord>>, list: ReadonlyArray<Pick<AgentInfo, 'id' | 'description' | 'type' | 'status' | 'name'>>, now: number): Record<string, AgentRecord> {
   const next = { ...records }
   for (const info of list) {
     const old = next[info.id]
