@@ -6495,3 +6495,31 @@ describe('/desk-monitor 패널', () => {
     expect(periods.length).toBe(0)
   })
 })
+
+// 긴 명령 밑 백그라운드 안내 줄은 비우고 스피너 줄 끝에 단다. 도는 호출은 진행 띠의 호출 목록으로 본다.
+test('백그라운드 안내는 아직 도는 메인 호출에만 스피너 줄 끝에 단다', KO, async ($, on) => {
+  on('clock.now', () => ({ value: 1_000_000 }))
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  let finish: (value: unknown) => void = () => undefined
+  on('tool.call', () => new Promise(resolve => (finish = resolve)) as never)
+  const spinnerProps = { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never
+  const spinnerLine = async () => {
+    const spinner = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: spinnerProps })
+    const drawn = JSON.stringify(await spinner.drawn())
+    await spinner.unmount()
+    return drawn
+  }
+  await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+  const running = $.tool.call({ tool: 'Bash', command: 'sleep 9', tool_use_id: 'bg1' } as never)
+  await wait(50)
+  const progress = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'ToolProgress', viewport: VIEWPORT, props: { kind: 'background_hint', tool_use_id: 'bg1', hint: '(ctrl+b to run in background)' } as never })
+  await progress.unmount()
+  expect(await spinnerLine()).toContain('ctrl+b to run in background')
+  finish({ result: { stdout: '', stderr: '', interrupted: false } })
+  await running
+  // 진행 띠의 호출 목록은 tool.call 이 끝난 뒤 기다리지 않고 비운다
+  await wait(30)
+  expect(await spinnerLine()).not.toContain('ctrl+b to run in background')
+})

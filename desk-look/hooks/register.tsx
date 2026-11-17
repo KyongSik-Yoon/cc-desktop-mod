@@ -2327,10 +2327,11 @@ async function* placeCalls(
 }
 
 // 백그라운드 안내를 띄운 호출 중 아직 도는 것의 안내 글. 없으면 null.
-function backgroundHintOf(state: Runs): string | null {
+// 도는 호출은 진행 띠의 calls(메인 대화, tool.call 이 넣고 settleCall 이 뺀다)로 본다. 스피너는 초당 두세 번 그려지는데
+// 대화 전체의 도구 묶음을 읽으면 긴 세션에서 한 번에 명령어 1,500만 개를 값 복사에 썼다.
+function backgroundHintOf(running: ReadonlyArray<{ id: string }>): string | null {
   for (const [id, hint] of backgroundHints) {
-    const call = state.calls[state.firstOf[id] ?? '']?.find(item => item.tool_use_id === id)
-    if (call?.isRunning) return hint.replace(/^\((.*)\)$/, '$1')
+    if (running.some(call => call.id === id)) return hint.replace(/^\((.*)\)$/, '$1')
   }
   return null
 }
@@ -4231,7 +4232,7 @@ export const register: Register = (on, options) => {
       })
     }
     const elapsed = now - (startedAt ?? spinnerFallbackStart)
-    const hint = backgroundHintOf(await read($, runs))
+    const hint = backgroundHintOf(callsOf(state))
     // 한 줄을 넘지 않게 자른다: 줄이 접혀 늘면 그 위 대화가 밀려 오르내린다.
     const line = (
       <Text wrap="truncate-end">
