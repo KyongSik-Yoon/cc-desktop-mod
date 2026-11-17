@@ -143,7 +143,9 @@ export function stepStrip(list: ReadonlyArray<TaskItem>, columns: number, label:
 // 턴의 경계는 마지막 사람 프롬프트(도구 결과가 아닌 글 있는 user 메시지). 가장 늦은 설명의 첫 문장과 설명 수,
 // 그리고 그 설명 뒤에 부른 도구 호출 id(패널 흐름에서 설명을 그 호출들 앞에 두려고). 기록은 글 블록과
 // 도구 호출 블록을 따로 붙이므로 설명 메시지 자신과 그 뒤 assistant 메시지들의 호출을 모은다.
-export function turnNarration(messages: ReadonlyArray<SessionMessage>): { text: string; count: number; ids: string[] } | null {
+export type Narration = { text: string; count: number; ids: string[] }
+
+export function turnNarration(messages: ReadonlyArray<SessionMessage>): Narration | null {
   let start = 0
   messages.forEach((message, index) => {
     if (message.role === 'user' && message.text.trim() !== '' && (message.toolResults ?? []).length === 0) start = index + 1
@@ -157,6 +159,13 @@ export function turnNarration(messages: ReadonlyArray<SessionMessage>): { text: 
     .filter(message => message.role === 'assistant')
     .flatMap(message => message.toolUses.map(use => use.tool_use_id))
   return { text: firstSentence(last.text), count: said.length, ids }
+}
+
+// 턴 동안 기록에 붙는 assistant 메시지 하나를 이번 턴의 설명에 더한다(turnNarration 과 같은 규칙).
+// 글이 있으면 새 설명(그 메시지의 호출부터 다시 모은다), 없으면 지금 설명 뒤의 호출로 더한다.
+export function foldNarration(said: Narration | null, text: string, ids: ReadonlyArray<string>): Narration | null {
+  if (text.trim() !== '') return { text: firstSentence(text), count: (said?.count ?? 0) + 1, ids: [...ids] }
+  return said === null ? null : { ...said, ids: [...said.ids, ...ids] }
 }
 
 export function firstSentence(text: string): string {

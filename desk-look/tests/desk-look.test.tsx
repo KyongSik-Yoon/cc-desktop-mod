@@ -6543,3 +6543,75 @@ test('백그라운드 안내는 아직 도는 메인 호출에만 스피너 줄 
   await wait(30)
   expect(await spinnerLine()).not.toContain('ctrl+b to run in background')
 })
+
+// 턴 동안 붙는 메시지마다 기록 전체를 다시 읽으면 긴 세션에서 호출 하나에 두 번, 한 번에 명령어 9,000만 개였다.
+test('턴 동안은 기록을 다시 읽지 않고 tool.call 결과로 묶음을 고치고, 턴 끝에 기록으로 다시 맞춘다', KO, async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  on('fs.read', () => {
+    throw new Error('ENOENT')
+  })
+  on('clock.now', () => ({ value: 1_000_000 }))
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  on('clock.after', () => ({ value: undefined }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', () => ({ text: '끝' }) as never)
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  let reads = 0
+  on('session.messages', () => (
+    (reads += 1),
+    {
+      value: [
+        { role: 'user', text: '돌려 줘', toolUses: [] },
+        { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'b1', tool: 'Bash', input: { command: 'ls' } }, { tool_use_id: 'b2', tool: 'Bash', input: { command: 'pwd' } }] },
+      ] as never,
+    }
+  ))
+  const row = async () => {
+    const mounted = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'ToolUse', requestId: 'b1', viewport: VIEWPORT, props: { tool_use_id: 'b1', tool: 'Bash', input: { command: 'ls' }, isRunning: true, isErrored: false, isInterrupted: false } })
+    const drawn = JSON.stringify(await mounted.drawn())
+    await mounted.unmount()
+    return drawn
+  }
+  await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+  // 사람 프롬프트는 기록을 다시 읽는다(턴의 경계)
+  await $.session.append({ message: { type: 'user', role: 'user', content: [{ type: 'text', text: '돌려 줘' }] } } as never)
+  await wait(30)
+  expect(reads).toBe(1)
+  expect(await row()).toContain('···')
+  // 결과는 tool.call 에서, 기록에 붙는 결과 메시지는 다시 읽지 않는다
+  await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'b1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'pwd', tool_use_id: 'b2' } as never)
+  await $.session.append({ message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'ok' }, { type: 'tool_result', tool_use_id: 'b2', content: 'ok' }] } } as never)
+  await wait(30)
+  expect(reads).toBe(1)
+  expect(await row()).not.toContain('···')
+  // 모르는 호출이 붙으면 다시 읽는다
+  await $.session.append({ message: { type: 'assistant', role: 'assistant', content: [{ type: 'tool_use', id: 'zz', name: 'Bash', input: {} }] } } as never)
+  await wait(30)
+  expect(reads).toBe(2)
+  await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '끝', turnId: 't1' } as never)
+  await wait(30)
+  expect(reads).toBe(3)
+})
+
+// 턴 동안 할 일 도구의 결과는 목록에 바로 더한다. 거의 같이 끝난 두 호출이 서로를 덮지 않아야 한다.
+test('턴 동안 함께 끝난 할 일 도구 두 개가 모두 목록에 든다', KO, async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  on('fs.read', () => {
+    throw new Error('ENOENT')
+  })
+  let now = 1_000_000
+  on('clock.now', () => ({ value: now }))
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('session.messages', () => ({ value: [] as never }))
+  on('tool.call', ($, e) => ({ result: { task: { id: (e as unknown as { subject: string }).subject, subject: (e as unknown as { subject: string }).subject } } }) as never)
+  await $.turn.start({ text: '할 일', turnId: 't1' } as never)
+  await Promise.all([$.tool.call({ tool: 'TaskCreate', subject: '가', tool_use_id: 'c1' } as never), $.tool.call({ tool: 'TaskCreate', subject: '나', tool_use_id: 'c2' } as never)])
+  await wait(50)
+  now += 20_000
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never })
+  const drawn = JSON.stringify(await band.drawn())
+  await band.unmount()
+  expect(drawn).toContain('0/2')
+})

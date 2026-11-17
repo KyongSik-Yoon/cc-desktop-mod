@@ -8,16 +8,16 @@ import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth,
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
 import { commentContext, draftKey, isStale, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
 import type { LinePress } from './comments'
-import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, rowsOf, runsFrom, withPredicted } from './runs'
-import type { PredictedCall, RunCursor } from './runs'
+import { agentOf, appendedParts, clipInput, computeRuns, isAgentTool, isPlanTool, patchCall, placeCall, planOf, rowsOf, runsFrom, settledPatch, withPredicted } from './runs'
+import type { CallPatch, PredictedCall, RunCursor } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
 import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, askNotice, isBridgedRecord, isPhoneSend, numberProblem, parseQuestions, type PromptOrigin } from './ask'
 import type { AskReply } from './ask'
 import { gather, gatheredLines } from './gather'
-import { computeTasks } from './tasks'
-import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
-import type { AdvisorCall, FlowRow, LaneSegment, ProcRow, StripPart } from './activity'
+import { applyTask, computeTasks, isTaskTool } from './tasks'
+import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, foldNarration, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
+import type { AdvisorCall, FlowRow, LaneSegment, Narration, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, engineThemeMode, gray256, parseSurface, trustSurface } from './theme'
 import { CHART_CELLS, DOT_MS, MONITOR_DEPTH, MONITOR_POINTS, MONITOR_TICK, advanceSeries, areaRow, brailleLine, bucketMax, cpuTop, formatBytes, formatCpu, memTop, orderSessions, procStatOf, sessionFileOf } from './monitor'
@@ -235,6 +235,12 @@ let currentRuns: Runs = EMPTY_RUNS
 const writtenRows = new Map<string, string>()
 let writtenEdits: string | null = null
 let refreshSeq = 0
+// 메인 턴 동안은 기록 전체를 다시 읽지 않는다(긴 세션에서 한 번에 명령어 9,000만 개, 호출 하나에 두 번이었다).
+// 스트림이 예측한 호출에 기록의 입력과 tool.call 의 결과를 붙이고, 설명 글은 붙는 메시지로 더한다. 턴 끝에 기록으로 다시 맞춘다.
+// turnPatches: 이번 턴에 끝난 호출의 결과. 턴 도중 기록을 다시 읽었는데 결과가 아직 기록에 없으면 이것을 덮는다.
+let inTurn = false
+let narration: Narration | null = null
+const turnPatches = new Map<string, CallPatch>()
 // 진행 띠가 Bash 가 띄운 프로세스를 읽는 시계와 직전 표본. claudePid 는 /proc/self/stat 에서 한 번 읽고,
 // /proc 이 없으면(macOS) null 로 두어 다시 읽지 않는다.
 let procTimer: Timer | null = null
@@ -1958,6 +1964,9 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
   currentRuns = EMPTY_RUNS
   writtenRows.clear()
   writtenEdits = null
+  inTurn = false
+  narration = null
+  turnPatches.clear()
   void refreshRuns($).catch(() => undefined)
   void refreshImages($).catch(() => undefined)
   void refreshAgents($).catch(() => undefined)
@@ -2149,9 +2158,22 @@ async function refreshRuns($: EngineInterface) {
   // 이 읽기보다 늦게 스트림에서 온 호출은 아직 기록에 없다: 지우지 않고 예측 자리에 둔다.
   const computed = computeRuns(messages)
   predicted = predicted.filter(item => computed.firstOf[item.call.tool_use_id] === undefined)
-  await writeRuns($, withPredicted(computed, predicted))
+  let next = withPredicted(computed, predicted)
+  // 결과가 아직 기록에 붙지 않은 호출은 tool.call 이 준 결과를 둔다.
+  for (const [id, patch] of turnPatches) {
+    const call = next.calls[next.firstOf[id] ?? '']?.find(item => item.tool_use_id === id)
+    if (call?.isRunning) next = patchCall(next, id, patch) ?? next
+  }
+  await writeRuns($, next)
   // 이번 턴에 모델이 쓴 가장 늦은 설명 글: 할 일 도구가 없을 때 진행 띠 윗줄의 단계.
-  const said = turnNarration(messages)
+  narration = turnNarration(messages)
+  await applyNarration($)
+  await applyTasks($, computeTasks(messages))
+}
+
+// 진행 띠 윗줄의 설명을 지금 narration 으로 맞춘다.
+async function applyNarration($: EngineInterface) {
+  const said = narration
   const state = await read($, turnActivity)
   if (said?.text !== state.say?.text || said?.count !== state.say?.count) {
     await update($, turnActivity, current => ({ ...current, say: said === null ? null : { text: said.text, count: said.count } }))
@@ -2159,13 +2181,57 @@ async function refreshRuns($: EngineInterface) {
   // 설명 뒤 호출은 설명보다 늦게 기록에 붙으니, 같은 설명이라도 호출이 늘면 다시 시각을 맞춘다.
   // 스트림에서 막 넘긴 호출(아직 기록에 없는 것)도 가장 늦은 설명 뒤의 호출이다.
   if (said !== null) void logSay($, said.text, [...said.ids, ...predicted.map(item => item.call.tool_use_id)]).catch(() => undefined)
-  const list = computeTasks(messages)
-  if (!sameJson(await read($, tasks), list)) {
-    await update($, tasks, () => list)
-    // 하는 중이 된 할 일은 그때부터 시간을 잰다(띠의 "◉ 검증 8m").
-    const now = await $.clock.now()
-    await update($, turnActivity, state => ({ ...state, taskSince: taskSinceOf(list, state.taskSince ?? {}, now) }))
+}
+
+async function applyTasks($: EngineInterface, list: TaskItem[]) {
+  if (sameJson(await read($, tasks), list)) return
+  await update($, tasks, () => list)
+  // 하는 중이 된 할 일은 그때부터 시간을 잰다(띠의 "◉ 검증 8m").
+  const now = await $.clock.now()
+  await update($, turnActivity, state => ({ ...state, taskSince: taskSinceOf(list, state.taskSince ?? {}, now) }))
+}
+
+// 턴 동안 끝난 메인 대화 호출의 결과를 묶음에 둔다. 턴 도중 기록을 다시 읽어도 결과가 아직 기록에 없으면 이것을 쓴다.
+function settleRun($: EngineInterface, id: string, patch: CallPatch) {
+  turnPatches.set(id, patch)
+  void patchRuns($, [[id, patch]]).catch(() => undefined)
+}
+
+// 턴 동안 끝난 할 일 도구 하나를 목록에 더한다. 읽고 쓰는 사이에 다른 호출이 끼어도 잃지 않게 update 안에서 더한다
+// (한 메시지의 TaskCreate 여러 개가 거의 같이 끝난다).
+async function foldTask($: EngineInterface, tool: string, input: Readonly<Record<string, unknown>>, result: unknown) {
+  await update($, tasks, list => applyTask(list, tool, input, result).filter(item => item.subject !== ''))
+  const now = await $.clock.now()
+  const list = await read($, tasks)
+  await update($, turnActivity, state => ({ ...state, taskSince: taskSinceOf(list, state.taskSince ?? {}, now) }))
+}
+
+// 턴 동안 호출들을 고친다: 지금 묶음과 예측 자리를 함께(늦게 끝난 기록 읽기가 덮어도 예측에 남게). 모르는 호출이 있으면 false.
+async function patchRuns($: EngineInterface, patches: ReadonlyArray<readonly [string, CallPatch]>): Promise<boolean> {
+  let next = currentRuns
+  for (const [id, patch] of patches) {
+    predicted = predicted.map(item => (item.call.tool_use_id === id ? { ...item, call: { ...item.call, ...patch } } : item))
+    const patched = patchCall(next, id, patch)
+    if (patched === null) return false
+    next = patched
   }
+  if (patches.length > 0) await writeRuns($, next)
+  return true
+}
+
+// 턴 동안 메인 대화 기록에 붙은 메시지 하나로 묶음과 설명을 고친다. 사람 글(도구 결과 없는 user)이나 모르는 호출이면 false:
+// 부르는 쪽이 기록을 다시 읽는다. 결과는 tool.call 이 주니, 그보다 먼저 붙은 결과 글만 임시로 둔다.
+async function foldAppended($: EngineInterface, message: { type: string; content: ReadonlyArray<{ type: string; [field: string]: unknown }> }): Promise<boolean> {
+  const parts = appendedParts(message.content)
+  if (message.type === 'assistant') {
+    if (!(await patchRuns($, parts.uses.map(use => [use.id, { input: clipInput(use.input) }] as const)))) return false
+    narration = foldNarration(narration, parts.text, parts.uses.map(use => use.id))
+    await applyNarration($)
+    return true
+  }
+  if (parts.results.length === 0) return false
+  const running = parts.results.filter(result => currentRuns.calls[currentRuns.firstOf[result.id] ?? '']?.find(call => call.tool_use_id === result.id)?.isRunning !== false)
+  return patchRuns($, running.map(result => [result.id, settledPatch(undefined, result.text, result.isError)] as const))
 }
 
 // 바뀐 행 몫만 쓴다: 그 몫을 읽어 그린 행만 다시 그려진다. 편집 목록은 편집 호출이 든 묶음이 바뀔 때만 다시 모은다.
@@ -3776,6 +3842,8 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined && e.trigger !== 'precompute' && done.skip === undefined) {
       const at = await $.clock.now()
       contextCompactions = [...contextCompactions, { at, trigger: e.trigger, before: done.tokensBefore ?? null, after: done.tokensAfter ?? null }].slice(-CONTEXT_COMPACTIONS)
+      // 기록이 요약으로 바뀌었다: 턴 도중이라도 다시 읽는다.
+      void refreshRuns($).catch(() => undefined)
     }
     return done
   })
@@ -3828,7 +3896,10 @@ export const register: Register = (on, options) => {
   on('session.append', async ($, e, next) => {
     const appended = await next(e)
     if (e.agentId === undefined && (e.message.type === 'assistant' || e.message.type === 'user')) {
-      void refreshRuns($).catch(() => undefined)
+      const message = e.message
+      void (async () => {
+        if (!inTurn || !(await foldAppended($, message))) await refreshRuns($)
+      })().catch(() => undefined)
     }
     if (e.agentId === undefined && e.message.type !== 'assistant') {
       void refreshImages($).catch(() => undefined)
@@ -3861,6 +3932,8 @@ export const register: Register = (on, options) => {
     // 프롬프트가 열린 묶음을 닫는다. 끝내 기록에 오르지 못한 예측(중단된 스트림)도 여기서 버린다.
     runCursor = null
     predicted = []
+    turnPatches.clear()
+    inTurn = true
     backgroundHints.clear()
     void noticeMoved($).catch(() => undefined)
     return next(e)
@@ -3869,6 +3942,9 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId === undefined) {
+      // 턴 동안 붙여 온 묶음·설명·할 일을 기록으로 다시 맞춘다.
+      inTurn = false
+      void refreshRuns($).catch(() => undefined)
       const files = await read($, pendingEdits)
       const text = done.text.trim().slice(0, MAX_COPY)
       const stats = turnStats(await read($, turnActivity), await read($, tasks), e.durationMs)
@@ -4074,6 +4150,14 @@ export const register: Register = (on, options) => {
     const isRejectedRun = agentId === undefined && ran.isError === true && isRejectedOutput(ran.text)
     const isNotRun = agentId === undefined && ran.isError === true && !isRejectedRun && (await isDenied($, tool, e))
     settle(isNotRun || isRejectedRun)
+    // 메인 대화의 호출은 결과를 바로 묶음에 둔다(턴 동안은 기록을 다시 읽지 않는다). 할 일 도구는 목록에도.
+    if (agentId === undefined) {
+      settleRun($, e.tool_use_id, settledPatch(ran.result, ran.text ?? '', ran.isError === true))
+      if (isTaskTool(tool) && ran.isError !== true) {
+        const input = fieldsOf(e)
+        void foldTask($, tool, input, ran.result).catch(() => undefined)
+      }
+    }
     if (isNotRun) await update($, notRun, marks => ({ ...marks, [e.tool_use_id]: true as const })).catch(() => undefined)
     const editStat = FILE_EDITING.has(tool) && !ran.isError ? diffStat({ tool, input: e, isRunning: false, isErrored: false, isInterrupted: false, output: ran.result }) : null
     if (ran.isError === true || editStat) void patchLog($, e.tool_use_id, { isError: ran.isError === true, ...(editStat ?? {}) }).catch(() => undefined)
@@ -5998,8 +6082,12 @@ function registerAsk(on: Parameters<Register>[0], notify: boolean) {
       answer = { kind: 'cancel' }
     }
     switch (answer.kind) {
-      case 'answer':
-        return { result: { questions: e.questions, answers: answer.answers } }
+      case 'answer': {
+        // 카드로 답하면 next 를 부르지 않아 바깥 tool.call 훅이 결과를 못 본다: 묶음에는 여기서 둔다.
+        const result = { questions: e.questions, answers: answer.answers }
+        if (e.tool_use_id !== undefined) settleRun($, e.tool_use_id, settledPatch(result, '', false))
+        return { result }
+      }
       case 'engine':
         return next(e)
       case 'dismiss':
