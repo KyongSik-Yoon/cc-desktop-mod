@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { fitTextRows, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from '../hooks/plan'
+import { fitTextRows, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason, sessionPid, waitingPath, waitingRecord } from '../hooks/plan'
 
 const PLAN = ['# 빼기 추가', '', '- math.ts 에 subtract', '- 테스트 추가', '', '| 파일 | 변경 |', '|---|---|', '| math.ts | subtract |'].join('\n')
 const PATH = '/h/.claude/plans/p.md'
@@ -33,9 +33,9 @@ test('계획 카드: 계획 제목·입력 정리·고칠 점 사유·줄 수', 
 
 // 엔진과 desk-look 흉내: 터미널 하나, 카드 버튼이 파이프에 쓸 답을 cat 이 바로 돌려준다.
 // desk-look 의 값(언어·떠 있는 질문·입력이 온 곳)은 look 에서 읽는다.
-const world = (on: On, look: { lang?: string; ask?: unknown; promptOrigin?: string | null; lineComments?: unknown[] } = {}) => {
+const world = (on: On, look: { lang?: string; ask?: unknown; promptOrigin?: string | null; lineComments?: unknown[]; env?: Record<string, string> } = {}) => {
   const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-  const seen = { reply: '', runs: [] as string[], notified: [] as string[], previews: [] as unknown[], sent: [] as unknown[], reached: [] as Record<string, unknown>[] }
+  const seen = { reply: '', runs: [] as string[], removed: [] as string[], notified: [] as string[], previews: [] as unknown[], sent: [] as unknown[], reached: [] as Record<string, unknown>[] }
   on('state.get', { plugin: 'desk-look', key: 'lang' }, () => ({ value: { value: look.lang, version: 1 } }) as never)
   on('state.get', { plugin: 'desk-look', key: 'lineComments' }, () => ({ value: { value: look.lineComments ?? [], version: 1 } }) as never)
   on('state.set', { plugin: 'desk-plan', key: 'sent' }, ($, e, next) => (seen.sent.push(e.value), next(e)))
@@ -43,7 +43,7 @@ const world = (on: On, look: { lang?: string; ask?: unknown; promptOrigin?: stri
   on('state.get', { plugin: 'desk-look', key: 'promptOrigin' }, () => ({ value: { value: look.promptOrigin ?? null, version: 1 } }) as never)
   on('state.set', { plugin: 'desk-plan', key: 'preview' }, ($, e, next) => (seen.previews.push(e.value), next(e)))
   on('clock.now', () => ({ value: 1_000 }))
-  on('env.get', () => ({ value: undefined as never }))
+  on('env.get', ($, e) => ({ value: look.env?.[e.name] as never }))
   on('fs.list', () => {
     throw new Error('ENOENT')
   })
@@ -55,6 +55,7 @@ const world = (on: On, look: { lang?: string; ask?: unknown; promptOrigin?: stri
   })
   on('process.run', ($, e) => {
     seen.runs.push(e.argv[0] ?? '')
+    if (e.argv[0] === 'rm' && e.argv[1] === '-f') seen.removed.push(e.argv[2] ?? '')
     if (e.argv[0] === 'mktemp') return ok('/tmp/plan-card\n')
     if (e.argv[0] === 'cat') return ok(seen.reply)
     return ok()
@@ -104,6 +105,45 @@ test('계획 카드 훅: 승인은 입력 그대로 allow, 고칠 점은 거절 
   await $.tool.call({ tool: 'ExitPlanMode', plan: PLAN } as never)
   expect(seen.reached).toHaveLength(3)
   expect(seen.runs.slice(before)).not.toContain('mktemp')
+})
+
+test('답 대기 표식: 재시작하면 비워지는 사용자 폴더에, 세션마다 하나', () => {
+  expect(waitingPath('/run/user/1000', '/tmp', 's-1')).toBe('/run/user/1000/desk-look/waiting/s-1.json')
+  // macOS 는 XDG_RUNTIME_DIR 이 없고 TMPDIR 이 / 로 끝난다
+  expect(waitingPath(undefined, '/var/folders/x/T/', 's-1')).toBe('/var/folders/x/T/desk-look/waiting/s-1.json')
+  expect(waitingPath(undefined, undefined, 's-1')).toBe('')
+  expect(waitingPath('/run/user/1000', undefined, '')).toBe('')
+  expect(waitingPath('/run/user/1000', undefined, '../x')).toBe('')
+  expect(JSON.parse(waitingRecord({ kind: 'plan', sessionId: 's-1', dir: '/tmp/c', since: 5, pid: 42, pane: '7' }))).toEqual({ v: 1, kind: 'plan', sessionId: 's-1', fifo: '/tmp/c/answer', since: 5, pid: 42, pane: '7' })
+  // pid 는 엔진의 세션 상태 파일 이름에서: 죽은 프로세스의 파일이 남았으면 늦게 시작한 쪽
+  const files = [['41.json', '{"pid":41,"sessionId":"s-1","startedAt":10}'], ['42.json', '{"pid":42,"sessionId":"s-1","startedAt":20}'], ['43.json', '{"pid":43,"sessionId":"s-2","startedAt":30}'], ['42.x.key', 's-1']] as const
+  expect(sessionPid(files, 's-1')).toBe(42)
+  expect(sessionPid(files, 's-9')).toBeUndefined()
+})
+
+test('계획 카드 훅: 기다리는 동안 표식을 두고 답하면 지운다, 못 적어도 카드는 뜬다', async ($, on) => {
+  const seen = world(on, { lang: 'ko', env: { XDG_RUNTIME_DIR: '/run/user/1000', HERDR_PANE_ID: '7' } })
+  const { removed } = seen
+  const files: Array<[string, string]> = []
+  let isBroken = false
+  on('fs.write', ($, e) => {
+    if (isBroken) throw new Error('EACCES')
+    files.push([e.path, e.text])
+    return { value: undefined } as never
+  })
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  seen.reply = JSON.stringify({ kind: 'approve' })
+  await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(files).toHaveLength(1)
+  expect(files[0]?.[0]).toBe('/run/user/1000/desk-look/waiting/s1.json')
+  expect(JSON.parse(files[0]?.[1] ?? '')).toEqual({ v: 1, kind: 'plan', sessionId: 's1', fifo: '/tmp/plan-card/answer', since: 1_000, pane: '7' })
+  expect(removed).toEqual(['/run/user/1000/desk-look/waiting/s1.json'])
+
+  // 못 적으면 표식 없이 카드만: 지울 것도 없다
+  isBroken = true
+  await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(seen.reached).toHaveLength(2)
+  expect(removed).toHaveLength(1)
 })
 
 // desk-look 미리보기 패널 원문 줄 보기에서 계획 파일 4–5번 줄에 단 댓글(patch 키 p:경로)과 다른 파일 diff 댓글.

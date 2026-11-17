@@ -12,7 +12,7 @@ import { agentOf, appendedParts, clipInput, computeRuns, isAgentTool, isPlanTool
 import type { CallPatch, PredictedCall, RunCursor } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
-import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, askNotice, isBridgedRecord, isPhoneSend, numberProblem, parseQuestions, type PromptOrigin } from './ask'
+import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, askNotice, isBridgedRecord, isPhoneSend, numberProblem, parseQuestions, sessionPid, waitingPath, waitingRecord, type PromptOrigin } from './ask'
 import type { AskReply } from './ask'
 import { gather, gatheredLines } from './gather'
 import { applyTask, computeTasks, isTaskTool } from './tasks'
@@ -6051,6 +6051,31 @@ async function awaitReply($: EngineInterface, signal: AbortSignal, dir: string):
   return answered
 }
 
+// 답 대기 표식을 적는다(왜·어디에는 waitingPath). 적은 경로, 못 적었으면 ''. 표식은 알림일 뿐이라 실패해도 카드는 그대로 뜬다.
+async function markWaiting($: EngineInterface, dir: string): Promise<string> {
+  const [runtimeDir, tmpDir, pane, socket, configDir, home, sessionId, since] = await Promise.all([
+    $.env.get('XDG_RUNTIME_DIR'),
+    $.env.get('TMPDIR'),
+    $.env.get('HERDR_PANE_ID'),
+    $.env.get('HERDR_SOCKET_PATH'),
+    $.env.get('CLAUDE_CONFIG_DIR'),
+    $.env.get('HOME'),
+    $.session.id(),
+    $.clock.now(),
+  ])
+  const path = waitingPath(runtimeDir, tmpDir, sessionId)
+  if (path === '') return ''
+  const sessions = `${configDir || `${home ?? ''}/.claude`}/sessions`
+  const names = (await $.fs.list(sessions).catch(() => [])).filter(entry => entry.kind === 'file' && entry.name.endsWith('.json')).map(entry => entry.name)
+  const files = await Promise.all(names.map(async name => [name, await $.fs.read(`${sessions}/${name}`).catch(() => '')] as const))
+  await $.fs.write(path, waitingRecord({ kind: 'ask', sessionId, dir, since, pid: sessionPid(files, sessionId), pane, socket }))
+  return path
+}
+
+async function clearWaiting($: EngineInterface, path: string) {
+  if (path !== '') await $.process.run(['rm', '-f', path], { timeoutMs: 3000 }).catch(() => undefined)
+}
+
 // AskUserQuestion 을 카드로 묻고, 고른 답을 도구 결과로 돌려준다.
 function registerAsk(on: Parameters<Register>[0], notify: boolean) {
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
@@ -6065,7 +6090,9 @@ function registerAsk(on: Parameters<Register>[0], notify: boolean) {
     if (notify) {
       void $.ui.notify(askNotice(questions), { title: T.askTitle }).catch(() => undefined)
     }
+    const marker = await markWaiting($, dir).catch(() => '')
     const answered = await awaitReply($, next.signal, dir)
+    await clearWaiting($, marker)
     await update($, asking, () => null)
     if (answered === null) return next(e)
 

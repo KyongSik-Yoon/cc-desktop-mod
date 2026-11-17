@@ -40,6 +40,7 @@ The card is used only in sessions with a single terminal attached, and follows w
 ## What it runs and reads
 
 - `mktemp -d`, `mkfifo`, `cat`, `tee` and `rm -rf`: the card waits for your answer on a named pipe in a temporary folder (`cat` reads it, the card's buttons write the answer with `tee`) and removes the folder afterwards
+- While the card waits it writes a small marker file, `$XDG_RUNTIME_DIR/desk-look/waiting/<session id>.json` (`$TMPDIR/…` when that isn't set, as on macOS), and removes it with `rm -f` when you answer. Other tools on this computer can read it to tell that the session is waiting for you: `{ v, kind: "ask" | "plan", sessionId, fifo, since, pid?, pane?, socket? }`, where `pid` is the Claude Code process and `pane` and `socket` are herdr's `HERDR_PANE_ID` and `HERDR_SOCKET_PATH`. A session that was killed can't remove its marker, so a reader should trust one only while the process `pid` is alive and its `fifo` still exists. If the file can't be written the card works the same without it
 - Reads session state files (`~/.claude/sessions`) to see whether Remote Control is attached, and desk-look's values: its language, whether its question card is open, and where your last prompt came from
 - Sends nothing over the network
 

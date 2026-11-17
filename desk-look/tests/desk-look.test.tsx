@@ -2205,7 +2205,7 @@ describe('진행 띠', () => {
   })
 })
 
-import { answerOf, askNotice, isPhoneSend, numberProblem, parseQuestions } from '../hooks/ask'
+import { answerOf, askNotice, isPhoneSend, numberProblem, parseQuestions, sessionPid, waitingPath, waitingRecord } from '../hooks/ask'
 
 test('질문 카드: 그릴 수 있는 질문과 답 모양', KO, () => {
   setLang('ko')
@@ -6710,4 +6710,17 @@ describe('파일을 범위로 읽기($.fs.read offset·length, 2.1.326)', () => 
     expect(drawn).not.toContain('중간 줄의 끝')
     await pane.unmount()
   })
+})
+
+test('답 대기 표식: 재시작하면 비워지는 사용자 폴더에, 세션마다 하나', () => {
+  expect(waitingPath('/run/user/1000', '/tmp', 's-1')).toBe('/run/user/1000/desk-look/waiting/s-1.json')
+  // macOS 는 XDG_RUNTIME_DIR 이 없고 TMPDIR 이 / 로 끝난다
+  expect(waitingPath(undefined, '/var/folders/x/T/', 's-1')).toBe('/var/folders/x/T/desk-look/waiting/s-1.json')
+  expect(waitingPath(undefined, undefined, 's-1')).toBe('')
+  expect(waitingPath('/run/user/1000', undefined, '../x')).toBe('')
+  expect(JSON.parse(waitingRecord({ kind: 'ask', sessionId: 's-1', dir: '/tmp/c', since: 5, pid: 42, pane: '7' }))).toEqual({ v: 1, kind: 'ask', sessionId: 's-1', fifo: '/tmp/c/answer', since: 5, pid: 42, pane: '7' })
+  // pid 는 엔진의 세션 상태 파일 이름에서: 죽은 프로세스의 파일이 남았으면 늦게 시작한 쪽
+  const files = [['41.json', '{"pid":41,"sessionId":"s-1","startedAt":10}'], ['42.json', '{"pid":42,"sessionId":"s-1","startedAt":20}'], ['43.json', '{"pid":43,"sessionId":"s-2","startedAt":30}'], ['42.x.key', 's-1']] as const
+  expect(sessionPid(files, 's-1')).toBe(42)
+  expect(sessionPid(files, 's-9')).toBeUndefined()
 })

@@ -39,6 +39,35 @@ export function isBridgedRecord(text: string, sessionId: string): boolean {
   return sessionId !== '' && text.includes(`"sessionId":"${sessionId}"`) && text.includes('"bridgeSessionId":"')
 }
 
+// 답 대기 표식: 카드가 답을 기다리는 동안 밖의 도구(herdr 화면을 보는 앱 등)가 읽는 파일. 카드는 도구가 도는 중으로
+// 보여서 엔진의 세션 상태 파일은 busy 로 남고, 터미널 제목도 그대로다. 그래서 카드가 뜰 때 직접 적고 닫힐 때 지운다.
+// 자리는 재시작하면 비워지는 사용자 전용 폴더: $XDG_RUNTIME_DIR, 없으면(macOS) $TMPDIR. 둘 다 없으면 적지 않는다.
+// 강제로 죽은 세션은 표식도 파이프도 못 지운다. 그래서 이 claude 의 pid 를 함께 적고, 읽는 쪽은 그 pid 가 살아 있고
+// fifo 가 남아 있을 때만 믿는다(같은 세션을 다시 열어도 pid 가 달라 옛 표식이 가려진다).
+export function waitingPath(runtimeDir: string | undefined, tmpDir: string | undefined, sessionId: string): string {
+  const base = (runtimeDir || tmpDir || '').replace(/\/+$/, '')
+  return base === '' || !/^[\w-]+$/.test(sessionId) ? '' : `${base}/desk-look/waiting/${sessionId}.json`
+}
+
+export type Waiting = { kind: 'ask' | 'plan'; sessionId: string; dir: string; since: number; pid?: number; pane?: string; socket?: string }
+
+export function waitingRecord({ kind, sessionId, dir, since, pid, pane, socket }: Waiting): string {
+  return JSON.stringify({ v: 1, kind, sessionId, fifo: `${dir}/answer`, since, ...(pid ? { pid } : {}), ...(pane ? { pane } : {}), ...(socket ? { socket } : {}) })
+}
+
+// 이 세션을 돌리는 claude 의 pid: 엔진의 세션 상태 파일(~/.claude/sessions/<pid>.json) 가운데 이 세션 id 를 적은 것의 이름.
+// 죽은 프로세스의 파일이 남아 여럿이면 가장 늦게 시작한 것. /proc 이 없는 macOS 에서도 같다.
+export function sessionPid(files: ReadonlyArray<readonly [name: string, text: string]>, sessionId: string): number | undefined {
+  let found: { pid: number; startedAt: number } | undefined
+  for (const [name, text] of files) {
+    const pid = Number(/^(\d+)\.json$/.exec(name)?.[1] ?? 0)
+    if (pid === 0 || sessionId === '' || !text.includes(`"sessionId":"${sessionId}"`)) continue
+    const startedAt = Number(/"startedAt":(\d+)/.exec(text)?.[1] ?? 0)
+    if (found === undefined || startedAt > found.startedAt) found = { pid, startedAt }
+  }
+  return found?.pid
+}
+
 export type AskReply =
   | { kind: 'answer'; answers: Record<string, string> }
   | { kind: 'engine' }
