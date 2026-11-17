@@ -40,6 +40,7 @@ Claude 가 계획 파일(`~/.claude/plans/`)과 함께 `ExitPlanMode` 를 부르
 ## 실행하고 읽는 것
 
 - `mktemp -d`, `mkfifo`, `cat`, `tee`, `rm -rf`: 임시 폴더의 이름 있는 파이프로 답을 기다리고(`cat` 이 읽고 카드 버튼이 `tee` 로 씀) 끝나면 폴더를 지웁니다
+- 카드가 기다리는 동안 작은 표식 파일 `$XDG_RUNTIME_DIR/desk-look/waiting/<세션 id>.json`(없으면 macOS 처럼 `$TMPDIR/…`)을 두고, 답하면 `rm -f` 로 지웁니다. 이 컴퓨터의 다른 도구가 읽어 세션이 답을 기다리는 중임을 알 수 있습니다: `{ v, kind: "ask" | "plan", sessionId, fifo, since, pid?, pane?, socket? }`(`pid` 는 Claude Code 프로세스, `pane`·`socket` 은 herdr 의 `HERDR_PANE_ID`·`HERDR_SOCKET_PATH`). 강제로 끝난 세션은 표식을 못 지우므로, 읽는 쪽은 `pid` 프로세스가 살아 있고 `fifo` 가 남아 있을 때만 믿어야 합니다. 파일을 못 쓰면 표식 없이 카드만 뜹니다
 - Remote Control 이 붙었는지 보려고 세션 상태 파일(`~/.claude/sessions`)을, 그리고 desk-look 의 값(언어, 질문 카드가 떠 있는지, 마지막 입력이 온 곳)을 읽습니다
 - 네트워크로는 아무것도 보내지 않습니다
 

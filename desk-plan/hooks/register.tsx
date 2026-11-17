@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { LineComment, PlanAskState, PlanPreview, PlanSent } from '../types'
-import { CANCEL_REASON, DISMISS_REASON, fitTextRows, isBridgedRecord, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason } from './plan'
+import { CANCEL_REASON, DISMISS_REASON, fitTextRows, isBridgedRecord, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason, sessionPid, waitingPath, waitingRecord } from './plan'
 import type { PlanReply } from './plan'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 
@@ -92,6 +92,31 @@ async function awaitReply($: EngineInterface, signal: AbortSignal, dir: string):
   signal.removeEventListener('abort', onAbort)
   await $.process.run(['rm', '-rf', dir], { timeoutMs: 3000 }).catch(() => undefined)
   return answered
+}
+
+// 답 대기 표식을 적는다(왜·어디에는 waitingPath). 적은 경로, 못 적었으면 ''. 표식은 알림일 뿐이라 실패해도 카드는 그대로 뜬다.
+async function markWaiting($: EngineInterface, dir: string): Promise<string> {
+  const [runtimeDir, tmpDir, pane, socket, configDir, home, sessionId, since] = await Promise.all([
+    $.env.get('XDG_RUNTIME_DIR'),
+    $.env.get('TMPDIR'),
+    $.env.get('HERDR_PANE_ID'),
+    $.env.get('HERDR_SOCKET_PATH'),
+    $.env.get('CLAUDE_CONFIG_DIR'),
+    $.env.get('HOME'),
+    $.session.id(),
+    $.clock.now(),
+  ])
+  const path = waitingPath(runtimeDir, tmpDir, sessionId)
+  if (path === '') return ''
+  const sessions = `${configDir || `${home ?? ''}/.claude`}/sessions`
+  const names = (await $.fs.list(sessions).catch(() => [])).filter(entry => entry.kind === 'file' && entry.name.endsWith('.json')).map(entry => entry.name)
+  const files = await Promise.all(names.map(async name => [name, await $.fs.read(`${sessions}/${name}`).catch(() => '')] as const))
+  await $.fs.write(path, waitingRecord({ kind: 'plan', sessionId, dir, since, pid: sessionPid(files, sessionId), pane, socket }))
+  return path
+}
+
+async function clearWaiting($: EngineInterface, path: string) {
+  if (path !== '') await $.process.run(['rm', '-f', path], { timeoutMs: 3000 }).catch(() => undefined)
 }
 
 async function replyPlan($: EngineInterface, dir: string, payload: PlanReply) {
@@ -240,7 +265,9 @@ export const register: Register = (on, options) => {
     await update($, planAsking, () => ({ id: e.tool_use_id ?? dir, dir, plan, path, text: '', shownAt, real }))
     if (notify) void $.ui.notify(planTitle(plan) || T.planAskQuestion, { title: T.planAskTitle }).catch(() => undefined)
     await showPlan($, path, false).catch(() => undefined)
+    const marker = await markWaiting($, dir).catch(() => '')
     const answered = await awaitReply($, next.signal, dir)
+    await clearWaiting($, marker)
     await update($, planAsking, () => null)
     if (answered === null) return next(e)
     let answer: PlanReply = { kind: 'cancel' }
