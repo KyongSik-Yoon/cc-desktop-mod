@@ -2,7 +2,7 @@ import { atom, memberOf, read, update } from 'claude-code'
 import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument, UiScrollArgs } from 'claude-code'
 
 import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, RunRow, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
-import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
+import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, bytesOf, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, codeSource, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan, wrapRoom, wrappedHeights } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
@@ -16,7 +16,7 @@ import { PHONE_SEND_MS, PHONE_SENDS_READ, answerOf, askNotice, isBridgedRecord, 
 import type { AskReply } from './ask'
 import { gather, gatheredLines } from './gather'
 import { applyTask, computeTasks, isTaskTool } from './tasks'
-import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, foldNarration, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
+import { GAP_GLYPH, KIND_GLYPH, LOG_EVENTS, advisorCalls, wholeLines, NOW_AFTER_MS, PROC_DEPTH, PROC_POLL_MS, QUIET_AFTER_MS, callProcesses, childPids, clipWidth, clockOf, etimesOf, flowRows, foldNarration, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, stepStrip, turnNarration, uptimeTicks } from './activity'
 import type { AdvisorCall, FlowRow, LaneSegment, Narration, ProcRow, StripPart } from './activity'
 import type { ProcSample } from './activity'
 import { OMARCHY_COLORS, engineThemeMode, gray256, parseSurface, trustSurface } from './theme'
@@ -265,10 +265,10 @@ let monitorSelf: number | null = null
 // 이번에 연 뒤 표본을 한 번이라도 읽었는지: 읽기 전에는 "재는 중", 읽었는데 세션이 없으면 "없음".
 let monitorSampled = false
 // /desk-activity 에 넣는 advisor 호출. advisorOn: 설정 advisorModel 이 있을 때(/advisor 로 켬)만 읽는다.
-// advisorFile: 이 세션의 대화 기록 파일(못 찾았으면 path 가 null, missedAt 뒤 ADVISOR_RETRY 동안 다시 찾지 않는다).
+// advisorFile: 지금 읽는 대화 기록 파일($.session.info 의 transcriptPath, 아직 모르면 null).
 // advisorOffset: 그 파일에서 읽은 데까지(바이트, 늘 줄 경계). advisorSeen: 이 세션에서 읽은 호출.
 let advisorOn = false
-let advisorFile: { session: string; path: string | null; missedAt: number } | null = null
+let advisorFile: string | null = null
 let advisorOffset = 0
 let advisorSeen = new Map<string, AdvisorCall>()
 // 읽었지만 아직 턴 기록에 못 넣은 호출(기록이 열리기 전에 부른 것).
@@ -1940,9 +1940,9 @@ async function listImages($: EngineInterface): Promise<Record<string, ImageInfo>
     const path = `${dir}/${file.name}`
     const key = `${path}@${file.mtimeMs}`
     if (!imageSizes.has(key)) {
-      // 앞 24바이트만 십진수로($.fs.read 는 그림 전체를 옮기고 4 MiB 가 넘으면 거절한다)
-      const ran = await $.process.run(['od', '-An', '-tu1', '-N', '24', path], { timeoutMs: 3000 }).catch(() => null)
-      imageSizes.set(key, ran?.exitCode === 0 ? pngSize(ran.stdout.trim().split(/\s+/).map(Number)) : null)
+      // PNG 머리(앞 24바이트)만 읽는다
+      const head = await $.fs.read(path, { as: 'bytes', length: 24 }).catch(() => null)
+      imageSizes.set(key, head ? pngSize(bytesOf(head.base64)) : null)
     }
     const size = imageSizes.get(key)
     if (size) found[number] = { path, ...size }
@@ -2034,8 +2034,9 @@ async function refreshLive($: EngineInterface) {
   return next
 }
 
-// 기록 파일이 작으면 통째로 읽고, 크면 앞(작업 폴더)과 끝(제목)만 head·tail 로 읽는다($.fs.read 는 4 MiB 까지).
+// 기록 파일이 작으면 통째로 읽고, 크면 앞(작업 폴더)과 끝(제목)만 SESSION_EDGE 바이트씩 읽는다.
 const SESSION_WHOLE = 320 * 1024
+const SESSION_EDGE = 256 * 1024
 
 async function listSessions($: EngineInterface, count: number) {
   const home = await $.env.get('HOME')
@@ -2061,10 +2062,10 @@ async function listSessions($: EngineInterface, count: number) {
         return sessionOf(file.id, file.mtimeMs, text, text)
       }
       const [head, tail] = await Promise.all([
-        $.process.run(['head', '-c', '262144', file.path], { timeoutMs: 5000 }).catch(() => ({ stdout: '' })),
-        $.process.run(['tail', '-c', '262144', file.path], { timeoutMs: 5000 }).catch(() => ({ stdout: '' })),
+        $.fs.read(file.path, { length: SESSION_EDGE }).catch(() => ''),
+        $.fs.read(file.path, { offset: Math.max(0, file.size - SESSION_EDGE), length: SESSION_EDGE }).catch(() => ''),
       ])
-      return sessionOf(file.id, file.mtimeMs, head.stdout, tail.stdout)
+      return sessionOf(file.id, file.mtimeMs, head, tail)
     }),
   )
   return entries.filter(entry => entry !== null)
@@ -2474,6 +2475,18 @@ async function scrollPane($: EngineInterface, args: UiScrollArgs) {
   return moved
 }
 
+// 백그라운드 셸·모니터 출력 파일의 끝 OUTPUT_TAIL 바이트. 4 MiB 넘게 쌓인 출력도 끝은 읽힌다.
+// 줄 가운데서 읽기 시작했으면 그 첫 조각은 버린다. size 를 모르면 stat 으로 잰다. 못 읽으면 null.
+const OUTPUT_TAIL = 64 * 1024
+
+async function outputTail($: EngineInterface, path: string, size?: number): Promise<string | null> {
+  const total = size ?? (await $.fs.stat(path).catch(() => null))?.size
+  if (total === undefined) return null
+  const from = Math.max(0, total - OUTPUT_TAIL)
+  const text = await $.fs.read(path, { offset: from, length: OUTPUT_TAIL }).catch(() => null)
+  return text === null || from === 0 ? text : text.slice(text.indexOf('\n') + 1)
+}
+
 // 에이전트 패널: 엔진 목록을 기록에 합친다. 끝난 에이전트는 목록에서 곧 빠지므로 기록이 남긴다.
 async function refreshAgents($: EngineInterface) {
   const [list, now] = await Promise.all([$.agent.list(), $.clock.now()])
@@ -2494,8 +2507,8 @@ async function settleShells($: EngineInterface, now: number) {
     const size = (await $.fs.stat(file).catch(() => null))?.size
     if (size === undefined || shellSizes.get(task.id) === size) continue
     shellSizes.set(task.id, size)
-    const raw = await $.fs.read(file).catch(() => null)
-    const status = typeof raw === 'string' ? exitStatusOf(raw) : undefined
+    const raw = await outputTail($, file, size)
+    const status = raw === null ? undefined : exitStatusOf(raw)
     if (status) await update($, agents, records => applyNotices(records, [{ id: task.id, status }], now))
   }
 }
@@ -2547,8 +2560,8 @@ async function refreshAgentDetail($: EngineInterface) {
   if (id === null) return
   const task = (await read($, agents))[id]
   if (task?.kind === 'shell' || task?.kind === 'monitor') {
-    const raw = task.outputFile ? await $.fs.read(task.outputFile).catch(() => null) : null
-    const text = typeof raw === 'string' ? tailOf(raw, OUTPUT_LINES) : null
+    const raw = task.outputFile ? await outputTail($, task.outputFile) : null
+    const text = raw === null ? null : tailOf(raw, OUTPUT_LINES)
     await update($, taskOutput, () => ({ id, text }))
     return
   }
@@ -2678,41 +2691,26 @@ async function openActivity($: EngineInterface) {
 }
 
 // ── advisor 호출 ──
-// 엔진 API 에는 advisor 가 없어 대화 기록 JSONL 에서 읽는다. $.fs.read 는 4 MiB 넘는 파일을 거절하고 process.run 의
-// 출력도 그쯤에서 표시 없이 잘려, 지난번에 읽은 곳부터 늘어난 만큼만 tail 로 읽는다. 패널을 오래 닫아 두어 그보다
-// 많이 늘었으면 끝의 ADVISOR_CHUNK 만 읽는다(그 앞의 호출은 지난 턴의 것이라 패널에 안 나온다).
+// 엔진 API 에는 advisor 가 없어 대화 기록 JSONL 에서 읽는다. 지난번에 읽은 곳부터 늘어난 만큼만 범위로 읽고,
+// 패널을 오래 닫아 두어 많이 늘었으면 끝의 ADVISOR_CHUNK 만 읽는다(그 앞의 호출은 지난 턴의 것이라 패널에 안 나온다).
 const ADVISOR_CHUNK = 3_000_000
-const ADVISOR_RETRY = 30_000
 
 async function refreshAdvisorGate($: EngineInterface) {
   const settings = (await $.settings.read()) as { advisorModel?: unknown }
   advisorOn = typeof settings.advisorModel === 'string' && settings.advisorModel !== ''
 }
 
-// 대화 기록은 ~/.claude/projects/<작업 폴더의 영숫자 밖 글자를 - 로>/<세션>.jsonl. 폴더 이름이 길어 줄였거나
-// 세션 중에 작업 폴더를 옮겼으면 프로젝트 폴더들에서 찾는다.
-// 새 세션은 첫 메시지 전까지 파일이 없다: 추측한 경로는 매번 보고(stat 하나), 폴더를 다 뒤지는 것만 ADVISOR_RETRY 에 한 번.
+// 대화 기록 파일은 엔진이 알려 준다($.session.info). 창 안에서 다른 세션으로 넘어가 파일이 바뀌면 처음부터 읽는다.
+// 기록을 남기지 않는 세션이면 null.
 async function advisorPath($: EngineInterface): Promise<string | null> {
-  const [session, now] = await Promise.all([$.session.id(), $.clock.now()])
-  if (advisorFile?.session === session && advisorFile.path !== null) return advisorFile.path
-  if (advisorFile?.session !== session) {
+  const { transcriptPath } = await $.session.info()
+  if (transcriptPath !== advisorFile) {
     advisorOffset = 0
     advisorSeen = new Map()
     advisorPending = new Set()
-    advisorFile = { session, path: null, missedAt: 0 }
+    advisorFile = transcriptPath
   }
-  const root = `${await $.env.get('HOME')}/.claude/projects`
-  const name = `${session}.jsonl`
-  const guess = `${root}/${(await $.session.cwd()).replace(/[^a-zA-Z0-9]/g, '-')}/${name}`
-  let path = (await $.fs.stat(guess).catch(() => null)) ? guess : null
-  if (path === null && now - advisorFile.missedAt >= ADVISOR_RETRY) {
-    const folders = (await $.fs.list(root).catch(() => [])).filter(entry => entry.kind === 'dir')
-    const found = await Promise.all(folders.map(folder => $.fs.stat(`${root}/${folder.name}/${name}`).then(() => `${root}/${folder.name}/${name}`, () => null)))
-    path = found.find(item => item !== null) ?? null
-    if (path === null) advisorFile = { session, path, missedAt: now }
-  }
-  if (path !== null) advisorFile = { session, path, missedAt: 0 }
-  return path
+  return transcriptPath === '' ? null : transcriptPath
 }
 
 // 시계 틱과 패널 열기가 겹치면 도는 읽기 하나를 나눠 받는다.
@@ -2727,7 +2725,9 @@ function syncAdvisor($: EngineInterface): Promise<void> {
 async function readAdvisor($: EngineInterface) {
   const path = await advisorPath($)
   if (path === null) return
-  const size = (await $.fs.stat(path)).size
+  // 새 세션은 첫 메시지 전까지 파일이 없다.
+  const size = (await $.fs.stat(path).catch(() => null))?.size
+  if (size === undefined) return
   // 파일이 줄었으면(다른 파일로 바뀜) 처음부터.
   if (size < advisorOffset) advisorOffset = 0
   if (size === advisorOffset) {
@@ -2735,17 +2735,11 @@ async function readAdvisor($: EngineInterface) {
     return
   }
   const from = Math.max(advisorOffset, size - ADVISOR_CHUNK)
-  const skipped = from > advisorOffset
-  const ran = await $.process.run(['tail', '-c', `+${from + 1}`, path], { timeoutMs: 5000 })
-  const cut = ran.stdout.lastIndexOf('\n')
-  if (ran.exitCode !== 0 || cut < 0) return
-  // 마지막 줄은 아직 쓰는 중일 수 있어 줄바꿈까지만 받는다.
-  const whole = ran.stdout.slice(0, cut + 1)
-  // 건너뛴 자리가 글자 가운데면 앞의 남은 바이트(1~3개)가 저마다 U+FFFD(3바이트)로 읽혀 2바이트씩 더 세진다.
-  const stray = skipped ? (/^�*/.exec(whole)?.[0].length ?? 0) : 0
-  advisorOffset = from + new TextEncoder().encode(whole).length - 2 * stray
-  // 건너뛰고 읽기 시작한 자리는 줄 가운데라 첫 줄을 버린다.
-  const text = skipped ? whole.slice(whole.indexOf('\n') + 1) : whole
+  const chunk = await $.fs.read(path, { as: 'bytes', offset: from, length: size - from })
+  const lines = wholeLines(bytesOf(chunk.base64), from, from > advisorOffset)
+  if (lines === null) return
+  advisorOffset = lines.next
+  const text = lines.text
   const hasCalls = text.includes('"type":"server_tool_use"') || text.includes('"type":"advisor_tool_result"')
   if (hasCalls) advisorSeen = advisorCalls(text, advisorSeen)
   if (hasCalls || advisorPending.size > 0) await placeAdvisor($)
@@ -6302,8 +6296,8 @@ async function shellTail($: EngineInterface, shells: ReadonlyArray<AgentRecord>,
   const shell = shells.find(item => isLive(item.status) && item.outputFile)
   if (!shell?.outputFile) return null
   if (tailCache?.id !== shell.id || now - tailCache.at >= PROC_POLL_MS) {
-    const raw = await $.fs.read(shell.outputFile).catch(() => null)
-    const last = typeof raw === 'string' ? raw.trimEnd().split('\n').pop()?.trim() : undefined
+    const raw = await outputTail($, shell.outputFile)
+    const last = raw?.trimEnd().split('\n').pop()?.trim()
     tailCache = { id: shell.id, at: now, text: last || null }
   }
   return tailCache.text === null ? null : { id: shell.id, text: tailCache.text }
