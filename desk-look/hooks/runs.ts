@@ -1,6 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 
-import type { RunCall, Runs } from '../types'
+import type { RunCall, RunRow, Runs } from '../types'
 
 // $.state 에 도구 출력 전문(Read 파일 내용, 긴 stdout)을 쌓지 않는다. 펼친 행은 30줄 남짓만 보여 준다.
 const LIMIT = 4000
@@ -39,7 +39,7 @@ function outputOf(value: unknown): string | { structuredPatch: unknown[] } | { a
   }
 }
 
-function clipInput(input: Record<string, unknown>): Record<string, unknown> {
+export function clipInput(input: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, typeof value === 'string' ? clip(value) : value]))
 }
 
@@ -191,4 +191,70 @@ export function withPredicted(runs: Runs, predicted: ReadonlyArray<PredictedCall
     calls[head] = [...(calls[head] ?? []), call]
   }
   return { firstOf, calls }
+}
+
+// 묶음을 호출 id 마다의 행 몫으로 나눈다: 첫 호출은 묶음 전체의 호출을, 나머지는 첫 호출 id 만.
+export function rowsOf(runs: Runs): Map<string, RunRow> {
+  const rows = new Map<string, RunRow>()
+  for (const [id, first] of Object.entries(runs.firstOf)) if (id !== first) rows.set(id, { first })
+  for (const [first, calls] of Object.entries(runs.calls)) rows.set(first, { first, calls })
+  return rows
+}
+
+// 행이 읽은 몫(자기 것, 묶음 첫 호출이 다르면 그것도)을 planRow 가 받는 Runs 로 되붙인다.
+export function runsFrom(rows: ReadonlyArray<readonly [string, RunRow | null]>): Runs {
+  const firstOf: Record<string, string> = {}
+  const calls: Record<string, RunCall[]> = {}
+  for (const [id, row] of rows) {
+    if (!row) continue
+    firstOf[id] = row.first
+    if (row.calls) calls[row.first] = row.calls
+  }
+  return { firstOf, calls }
+}
+
+// 턴 동안 기록을 다시 읽지 않고 호출 하나를 고친다(입력은 기록에 붙은 assistant 메시지에서, 결과는 tool.call 에서).
+export type CallPatch = Partial<Pick<RunCall, 'input' | 'output' | 'isRunning' | 'isErrored' | 'isInterrupted'>>
+
+// 호출 하나를 고친 묶음. 그 호출이 묶음에 없으면 null.
+export function patchCall(runs: Runs, id: string, patch: CallPatch): Runs | null {
+  const head = runs.firstOf[id]
+  const calls = head === undefined ? undefined : runs.calls[head]
+  if (head === undefined || !calls?.some(call => call.tool_use_id === id)) return null
+  return { firstOf: runs.firstOf, calls: { ...runs.calls, [head]: calls.map(call => (call.tool_use_id === id ? { ...call, ...patch } : call)) } }
+}
+
+// 도구 결과(엔진이 준 구조화 결과, 없으면 모델이 받은 글)로 끝난 호출의 상태를 만든다. computeRuns 와 같은 규칙.
+export function settledPatch(result: unknown, text: string, isError: boolean): CallPatch {
+  const output = outputOf(result ?? text)
+  return { output, isErrored: isError, isInterrupted: isError && /interrupt/i.test(text), isRunning: output === undefined && !isError }
+}
+
+// 기록에 붙는 메시지 하나(API 블록)의 글·도구 호출·도구 결과.
+export type AppendedParts = {
+  text: string
+  uses: Array<{ id: string; input: Record<string, unknown> }>
+  results: Array<{ id: string; text: string; isError: boolean }>
+}
+
+const blockText = (value: unknown): string =>
+  typeof value === 'string'
+    ? value
+    : Array.isArray(value)
+      ? value.map(block => (typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text' ? String((block as { text?: unknown }).text ?? '') : '')).filter(Boolean).join('\n')
+      : ''
+
+export function appendedParts(content: ReadonlyArray<{ type: string; [field: string]: unknown }>): AppendedParts {
+  const parts: AppendedParts = { text: '', uses: [], results: [] }
+  const texts: string[] = []
+  for (const block of content) {
+    if (block.type === 'text' && typeof block.text === 'string') texts.push(block.text)
+    else if (block.type === 'tool_use' && typeof block.id === 'string') {
+      parts.uses.push({ id: block.id, input: typeof block.input === 'object' && block.input !== null ? (block.input as Record<string, unknown>) : {} })
+    } else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+      parts.results.push({ id: block.tool_use_id, text: blockText(block.content), isError: block.is_error === true })
+    }
+  }
+  parts.text = texts.join('\n')
+  return parts
 }

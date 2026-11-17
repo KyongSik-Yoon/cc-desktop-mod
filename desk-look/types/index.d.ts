@@ -23,6 +23,9 @@ export type RunCall = {
 // 답변 텍스트 없이 이어진 도구 호출 묶음. firstOf: 호출 id → 묶음 첫 호출 id.
 export type Runs = { firstOf: Record<string, string>; calls: Record<string, RunCall[]> }
 
+// 도구 호출 하나의 행이 읽는 몫: 그 호출이 든 묶음의 첫 호출 id, 첫 호출이면 묶음 전체의 호출.
+export type RunRow = { first: string; calls?: RunCall[] }
+
 // 붙여 넣은 이미지 파일과 PNG 헤더의 크기. 키는 [Image #N] 의 N.
 export type ImageInfo = { path: string; width: number; height: number }
 
@@ -238,7 +241,10 @@ declare module 'claude-code' {
       diff: FileDiff[]
       repo: RepoInfo | null
       surface: Surface | null
-      runs: Runs
+      // 호출 id 마다 그 행이 읽는 묶음 몫(RunRow). 대화 전체를 한 값에 두면 쓸 때마다 화면의 모든 행이 통째로 다시 읽었다.
+      runRow: StateFamily<RunRow | null>
+      // 이 세션이 성공한 편집을 파일별로(diff 패널의 저장소 밖 파일, git 이 무시하는 파일).
+      sessionEdits: SessionEdit[]
       // 규칙·PreToolUse 훅에 막혀 돌지 않은 호출 id(tool.check 의 deny).
       notRun: Record<string, true>
       images: Record<string, ImageInfo>

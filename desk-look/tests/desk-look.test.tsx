@@ -690,7 +690,7 @@ test('순수 함수', KO, async () => {
   expect(files[0]).toEqual({ path: 'src/x.ts', added: 2, removed: 1, patch: '@@ -1 +1,2 @@\n-old\n+new\n+more', isNew: false })
 })
 
-import { computeRuns, placeCall, withPredicted } from '../hooks/runs'
+import { computeRuns, placeCall, rowsOf, runsFrom, withPredicted } from '../hooks/runs'
 import type { PredictedCall, RunCursor } from '../hooks/runs'
 import { gray256, mix, parseSurface } from '../hooks/theme'
 
@@ -776,6 +776,26 @@ describe('v3: 테마 면과 도구 묶음', () => {
     expect(planRow(['a', 'b', 'c'], state).kind).toBe('own')
     expect(planRow(['a', 'b'], state).kind).toBe('run')
     expect(planRow(['b', 'c'], state).kind).toBe('hide')
+  })
+
+  test('행마다 나눈 묶음 몫으로도 같은 판정을 내린다', KO, async () => {
+    const runCall = (id: string) => ({ tool_use_id: id, tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false })
+    const state = { firstOf: { a: 'a', b: 'a', c: 'a', z: 'z' }, calls: { a: [runCall('a'), runCall('b'), runCall('c')], z: [runCall('z')] } }
+    const rows = rowsOf(state)
+    // 첫 호출만 묶음의 호출을 갖고, 나머지는 첫 호출 id 만 갖는다
+    expect(rows.get('a')?.calls?.length).toBe(3)
+    expect(rows.get('b')).toEqual({ first: 'a' })
+    // 행은 첫 호출의 몫과(그 묶음의 첫 호출이 다른 호출이면) 그 몫만 읽는다
+    const read = (ids: string[], withHead = false) => {
+      const own = rows.get(ids[0] ?? '') ?? null
+      const head = own && own.first !== ids[0] && (withHead || ids.includes(own.first)) ? (rows.get(own.first) ?? null) : null
+      return runsFrom([[ids[0] ?? '', own], ...(head && own ? [[own.first, head] as const] : [])])
+    }
+    for (const ids of [['a'], ['b'], ['z'], ['unknown'], ['a', 'b', 'c'], ['a', 'b'], ['b', 'c']]) {
+      expect(planRow(ids, read(ids))).toEqual(planRow(ids, state))
+    }
+    // 묶음 중간 호출의 행(백그라운드 작업 줄)은 첫 호출 몫까지 읽어 자기 호출을 찾는다
+    expect(Object.values(read(['b'], true).calls).flat().map(call => call.tool_use_id)).toContain('b')
   })
 })
 
@@ -6494,4 +6514,104 @@ describe('/desk-monitor 패널', () => {
     expect(reads.length).toBe(before)
     expect(periods.length).toBe(0)
   })
+})
+
+// 긴 명령 밑 백그라운드 안내 줄은 비우고 스피너 줄 끝에 단다. 도는 호출은 진행 띠의 호출 목록으로 본다.
+test('백그라운드 안내는 아직 도는 메인 호출에만 스피너 줄 끝에 단다', KO, async ($, on) => {
+  on('clock.now', () => ({ value: 1_000_000 }))
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  let finish: (value: unknown) => void = () => undefined
+  on('tool.call', () => new Promise(resolve => (finish = resolve)) as never)
+  const spinnerProps = { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never
+  const spinnerLine = async () => {
+    const spinner = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: spinnerProps })
+    const drawn = JSON.stringify(await spinner.drawn())
+    await spinner.unmount()
+    return drawn
+  }
+  await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+  const running = $.tool.call({ tool: 'Bash', command: 'sleep 9', tool_use_id: 'bg1' } as never)
+  await wait(50)
+  const progress = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'ToolProgress', viewport: VIEWPORT, props: { kind: 'background_hint', tool_use_id: 'bg1', hint: '(ctrl+b to run in background)' } as never })
+  await progress.unmount()
+  expect(await spinnerLine()).toContain('ctrl+b to run in background')
+  finish({ result: { stdout: '', stderr: '', interrupted: false } })
+  await running
+  // 진행 띠의 호출 목록은 tool.call 이 끝난 뒤 기다리지 않고 비운다
+  await wait(30)
+  expect(await spinnerLine()).not.toContain('ctrl+b to run in background')
+})
+
+// 턴 동안 붙는 메시지마다 기록 전체를 다시 읽으면 긴 세션에서 호출 하나에 두 번, 한 번에 명령어 9,000만 개였다.
+test('턴 동안은 기록을 다시 읽지 않고 tool.call 결과로 묶음을 고치고, 턴 끝에 기록으로 다시 맞춘다', KO, async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  on('fs.read', () => {
+    throw new Error('ENOENT')
+  })
+  on('clock.now', () => ({ value: 1_000_000 }))
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  on('clock.after', () => ({ value: undefined }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', () => ({ text: '끝' }) as never)
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }) as never)
+  let reads = 0
+  on('session.messages', () => (
+    (reads += 1),
+    {
+      value: [
+        { role: 'user', text: '돌려 줘', toolUses: [] },
+        { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'b1', tool: 'Bash', input: { command: 'ls' } }, { tool_use_id: 'b2', tool: 'Bash', input: { command: 'pwd' } }] },
+      ] as never,
+    }
+  ))
+  const row = async () => {
+    const mounted = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'ToolUse', requestId: 'b1', viewport: VIEWPORT, props: { tool_use_id: 'b1', tool: 'Bash', input: { command: 'ls' }, isRunning: true, isErrored: false, isInterrupted: false } })
+    const drawn = JSON.stringify(await mounted.drawn())
+    await mounted.unmount()
+    return drawn
+  }
+  await $.turn.start({ text: '돌려 줘', turnId: 't1' } as never)
+  // 사람 프롬프트는 기록을 다시 읽는다(턴의 경계)
+  await $.session.append({ message: { type: 'user', role: 'user', content: [{ type: 'text', text: '돌려 줘' }] } } as never)
+  await wait(30)
+  expect(reads).toBe(1)
+  expect(await row()).toContain('···')
+  // 결과는 tool.call 에서, 기록에 붙는 결과 메시지는 다시 읽지 않는다
+  await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'b1' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'pwd', tool_use_id: 'b2' } as never)
+  await $.session.append({ message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'ok' }, { type: 'tool_result', tool_use_id: 'b2', content: 'ok' }] } } as never)
+  await wait(30)
+  expect(reads).toBe(1)
+  expect(await row()).not.toContain('···')
+  // 모르는 호출이 붙으면 다시 읽는다
+  await $.session.append({ message: { type: 'assistant', role: 'assistant', content: [{ type: 'tool_use', id: 'zz', name: 'Bash', input: {} }] } } as never)
+  await wait(30)
+  expect(reads).toBe(2)
+  await $.turn.complete({ durationMs: 1000, reason: 'answer', answer: '끝', turnId: 't1' } as never)
+  await wait(30)
+  expect(reads).toBe(3)
+})
+
+// 턴 동안 할 일 도구의 결과는 목록에 바로 더한다. 거의 같이 끝난 두 호출이 서로를 덮지 않아야 한다.
+test('턴 동안 함께 끝난 할 일 도구 두 개가 모두 목록에 든다', KO, async ($, on) => {
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
+  on('fs.read', () => {
+    throw new Error('ENOENT')
+  })
+  let now = 1_000_000
+  on('clock.now', () => ({ value: now }))
+  on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('session.messages', () => ({ value: [] as never }))
+  on('tool.call', ($, e) => ({ result: { task: { id: (e as unknown as { subject: string }).subject, subject: (e as unknown as { subject: string }).subject } } }) as never)
+  await $.turn.start({ text: '할 일', turnId: 't1' } as never)
+  await Promise.all([$.tool.call({ tool: 'TaskCreate', subject: '가', tool_use_id: 'c1' } as never), $.tool.call({ tool: 'TaskCreate', subject: '나', tool_use_id: 'c2' } as never)])
+  await wait(50)
+  now += 20_000
+  const band = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Spinner', viewport: VIEWPORT, props: { word: 'Running', message: null, suffix: '…', mode: 'tool-use' } as never })
+  const drawn = JSON.stringify(await band.drawn())
+  await band.unmount()
+  expect(drawn).toContain('0/2')
 })
