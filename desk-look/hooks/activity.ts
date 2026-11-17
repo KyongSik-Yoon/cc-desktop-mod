@@ -236,6 +236,16 @@ export type AdvisorCall = { id: string; message: string; index: number; start: n
 type TranscriptLine = { timestamp?: string; message?: { id?: string; content?: unknown; usage?: { iterations?: unknown } } }
 type AdvisorIteration = { type?: string; model?: string; input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
 
+// 대화 기록을 from 바이트부터 읽은 조각에서 온전한 줄만 글로 꺼내고, 다음에 읽을 자리(늘 줄 경계)를 준다.
+// 마지막 줄은 아직 쓰는 중일 수 있어 줄바꿈까지만 받는다. 줄 가운데서 읽기 시작했으면(skipped) 첫 줄을 버린다.
+// 줄바꿈이 하나도 없으면 null(다음에 다시 읽는다). 바이트로 세므로 글자 가운데서 잘려도 자리가 어긋나지 않는다.
+export function wholeLines(bytes: Uint8Array, from: number, skipped: boolean): { text: string; next: number } | null {
+  const cut = bytes.lastIndexOf(10)
+  if (cut < 0) return null
+  const start = skipped ? bytes.indexOf(10) + 1 : 0
+  return { text: new TextDecoder().decode(bytes.subarray(start, cut + 1)), next: from + cut + 1 }
+}
+
 // 대화 기록 JSONL 조각에서 advisor 호출을 모아 known 에 이어 붙인다. 엔진은 응답(message.id) 하나를 블록마다
 // 한 줄로, 줄마다 블록이 끝난 시각과 응답 전체의 usage.iterations 를 달아 쓴다. k 번째 advisor_message 가 그 응답의
 // k 번째 advisor 호출의 토큰이다. 시작은 호출 블록 줄, 끝은 결과 블록 줄의 시각.

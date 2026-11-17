@@ -110,3 +110,6 @@ export function cornerPixels(corner: Corner, color: string): Uint8Array {
   }
   return pixels
 }
+
+// $.fs.read(path, { as: 'bytes' }) 가 준 base64 를 바이트로.
+export const bytesOf = (base64: string) => Uint8Array.from(atob(base64), char => char.charCodeAt(0))

@@ -799,7 +799,7 @@ describe('v3: 테마 면과 도구 묶음', () => {
   })
 })
 
-import { CORNER_SIZE, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, tmuxGraphicsOf } from '../hooks/images'
+import { CORNER_SIZE, bytesOf, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, tmuxGraphicsOf } from '../hooks/images'
 import { renderDiagram } from '../hooks/diagram'
 
 test('붙여 넣은 이미지 목록과 썸네일 크기', KO, async () => {
@@ -865,6 +865,8 @@ test('iTerm2 3.5 전체 화면: 모서리는 rgba, 썸네일은 PNG 바이트로
   on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
   on('fs.read', ($, e) => {
     const path = String((e as { path?: string }).path ?? e)
+    // PNG 머리는 앞 24바이트만 범위로 읽는다
+    if (path === `${dir}/3.png` && (e as { length?: number }).length === 24) return { value: { base64: btoa(String.fromCharCode(...header)) } } as never
     if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
     if (path === `${dir}/3.png`) return { value: { base64: png } } as never
     throw new Error('ENOENT')
@@ -878,7 +880,7 @@ test('iTerm2 3.5 전체 화면: 모서리는 rgba, 썸네일은 PNG 바이트로
   on('fs.exists', ($, e) => ({ value: (e as { path?: string }).path === dir }) as never)
   on('session.id', () => ({ value: 's1' }))
   on('process.run', ($, e) => {
-    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'od' ? header.join(' ') : ''
+    const stdout = e.argv[0] === 'id' ? '501\n' : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('command.register', () => ({ value: undefined as never }))
@@ -931,6 +933,8 @@ test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없�
   on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
   on('fs.read', ($, e) => {
     const path = String((e as { path?: string }).path ?? e)
+    // PNG 머리는 앞 24바이트만 범위로 읽는다
+    if (path === `${dir}/3.png` && (e as { length?: number }).length === 24) return { value: { base64: btoa(String.fromCharCode(...header)) } } as never
     if (path.endsWith('colors.toml')) return { value: 'mode = "dark"\nbackground = "#1a1a1a"\n' } as never
     if (path === '/home/t/.config/herdr/config.toml') return { value: '[experimental]\nkitty_graphics = true\n' } as never
     if (path === '/proc/net/unix') return { value: unixTable(bridge ? ['62751', '70001'] : ['62751']) } as never
@@ -949,7 +953,7 @@ test('herdr 원격 클라이언트가 붙은 동안만 말풍선을 그림 없�
   on('process.run', ($, e) => {
     if (e.argv[0] === 'pgrep') asked.push([...e.argv])
     const exitCode = e.argv[0] === 'pgrep' && !bridge ? 1 : 0
-    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'od' ? header.join(' ') : e.argv[0] === 'pgrep' && bridge ? '4242\n' : ''
+    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'pgrep' && bridge ? '4242\n' : ''
     return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('command.register', () => ({ value: undefined as never }))
@@ -1192,6 +1196,8 @@ test('tmux 안 kitty: 썸네일과 모서리를 파일 이름 대신 바이트�
   on('env.get', ($, e) => ({ value: env[String((e as { name?: string }).name)] as never }))
   on('fs.read', ($, e) => {
     const path = String((e as { path?: string }).path ?? e)
+    // PNG 머리는 앞 24바이트만 범위로 읽는다
+    if (path === `${dir}/3.png` && (e as { length?: number }).length === 24) return { value: { base64: btoa(String.fromCharCode(...header)) } } as never
     if (path.endsWith('colors.toml')) return { value: 'mode = "light"\nbackground = "#fafafa"\n' } as never
     if (path === `${dir}/3.png`) return { value: { base64: png } } as never
     throw new Error('ENOENT')
@@ -1206,7 +1212,7 @@ test('tmux 안 kitty: 썸네일과 모서리를 파일 이름 대신 바이트�
   on('session.id', () => ({ value: 's1' }))
   on('process.run', ($, e) => {
     if (e.argv[0] === 'tmux') asked.push([...e.argv])
-    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'od' ? header.join(' ') : e.argv[0] === 'tmux' ? 'kitty(0.35.1)\ton\t1\t0\n' : ''
+    const stdout = e.argv[0] === 'id' ? '501\n' : e.argv[0] === 'tmux' ? 'kitty(0.35.1)\ton\t1\t0\n' : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('command.register', () => ({ value: undefined as never }))
@@ -1364,7 +1370,7 @@ test('세션 목록 읽기·묶기·표시', KO, async () => {
   expect(clip('짧음', 10)).toBe('짧음')
 })
 
-test('세션 목록: 기록 폴더를 훑어 최근 것부터, 큰 기록은 앞뒤만 읽는다', KO, async ($, on) => {
+test('세션 목록: 기록 폴더를 훑어 최근 것부터, 큰 기록은 앞뒤만 범위로 읽는다', KO, async ($, on) => {
   const root = '/home/u/.claude/projects'
   const entry = (name: string, kind: 'file' | 'dir', size = 0, mtimeMs = 0) => ({ name, kind, size, mtimeMs, isLink: false })
   const small = [JSON.stringify({ cwd: '/home/u/repo' }), JSON.stringify({ aiTitle: '작은 기록' })].join('\n')
@@ -1383,11 +1389,16 @@ test('세션 목록: 기록 폴더를 훑어 최근 것부터, 큰 기록은 앞
       } as never
     throw new Error('ENOENT')
   })
-  on('fs.read', () => ({ value: small }) as never)
+  const ranges: Array<{ offset?: number; length?: number }> = []
+  on('fs.read', ($, e) => {
+    const { path, offset, length } = e as { path: string; offset?: number; length?: number }
+    if (!path.includes('83c92571')) return { value: small } as never
+    ranges.push({ offset, length })
+    return { value: offset ? `x"}\n${JSON.stringify({ customTitle: '큰 기록' })}\n` : JSON.stringify({ cwd: '/home/u/repo' }) } as never
+  })
   on('process.run', ($, e) => {
     ran.push([...e.argv])
-    const stdout = e.argv[0] === 'head' ? JSON.stringify({ cwd: '/home/u/repo' }) : e.argv[0] === 'tail' ? `x"}\n${JSON.stringify({ customTitle: '큰 기록' })}\n` : ''
-    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.cwd', () => ({ value: '/home/u/repo' }))
   on('session.id', () => ({ value: 'other' }))
@@ -1398,8 +1409,9 @@ test('세션 목록: 기록 폴더를 훑어 최근 것부터, 큰 기록은 앞
   const drawn = JSON.stringify(await pane.drawn())
   expect(drawn.indexOf('큰 기록')).toBeGreaterThan(-1)
   expect(drawn.indexOf('큰 기록')).toBeLessThan(drawn.indexOf('작은 기록'))
-  // 큰 기록만 head·tail 로, 셸 없이. 떠 있는 세션은 엔진 목록(claude agents --json)에서
-  expect(ran.filter(argv => argv[0] !== 'claude').map(argv => argv[0]).sort()).toEqual(['head', 'tail'])
+  // 큰 기록은 앞 256 KiB 와 끝 256 KiB 만 $.fs.read 범위로, 셸 없이. 떠 있는 세션은 엔진 목록(claude agents --json)에서
+  expect(ranges).toEqual([{ length: 262_144 }, { offset: 50_000_000 - 262_144, length: 262_144 }])
+  expect(ran.filter(argv => argv[0] !== 'claude')).toEqual([])
   expect(ran.find(argv => argv[0] === 'claude')).toEqual(['claude', 'agents', '--json'])
   await pane.unmount()
 })
@@ -1419,7 +1431,7 @@ test('진행 표시 글자', KO, () => {
 })
 
 import { computeTasks } from '../hooks/tasks'
-import { advisorCalls, callProcesses, childPids, clockOf, etimesOf, firstSentence, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, statTicks, stepStrip, turnNarration, uptimeTicks } from '../hooks/activity'
+import { advisorCalls, wholeLines, callProcesses, childPids, clockOf, etimesOf, firstSentence, flowRows, ioBytes, isCallRoot, kindOf, laneCells, laneSegments, procView, sayStrip, statPid, statRow, statTicks, stepStrip, turnNarration, uptimeTicks } from '../hooks/activity'
 
 test('할 일 목록 다시 세우기와 보일 줄', KO, () => {
   const ok = (id: string, result: unknown) => ({ tool_use_id: id, text: 'ok', isError: false, result })
@@ -4907,6 +4919,7 @@ test('백그라운드 작업 패널: 셸이 뜨고, 멈춤은 두 번, 끝남 �
   on('ui.toast', () => ({ value: undefined as never }))
   on('agent.list', () => ({ value: [] as never }))
   on('fs.read', ($, e) => ({ value: (String((e as { path?: string }).path ?? e) === '/tmp/t/b2.output' ? 'line1\nline2\n' : '') as never }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: 12, mtimeMs: 0, isLink: false } as never }))
   on('tool.call', ($, e) => {
     if (e.tool === 'TaskStop') {
       stopped.push(String((e as { task_id?: string }).task_id))
@@ -6614,4 +6627,87 @@ test('턴 동안 함께 끝난 할 일 도구 두 개가 모두 목록에 든다
   const drawn = JSON.stringify(await band.drawn())
   await band.unmount()
   expect(drawn).toContain('0/2')
+})
+
+describe('파일을 범위로 읽기($.fs.read offset·length, 2.1.326)', () => {
+  test('순수 함수: base64 를 바이트로, 범위 조각에서 온전한 줄과 다음 자리', KO, () => {
+    const bytes = new TextEncoder().encode('반쪽 줄\n{"a":1}\n{"b":"한"}\n쓰는 중')
+    expect([...bytesOf(btoa('\x89PNG'))]).toEqual([137, 80, 78, 71])
+    // 처음부터 읽었으면 첫 줄도 받고, 마지막 줄바꿈 뒤(쓰는 중)는 남긴다
+    expect(wholeLines(bytes, 100, false)).toEqual({ text: '반쪽 줄\n{"a":1}\n{"b":"한"}\n', next: 100 + bytes.lastIndexOf(10) + 1 })
+    // 줄 가운데서 시작했으면 첫 줄을 버린다. 글자 가운데서 잘려도(한 글자의 뒤 두 바이트부터) 자리는 바이트로 센다
+    const cut = bytes.subarray(1)
+    expect(wholeLines(cut, 1, true)).toEqual({ text: '{"a":1}\n{"b":"한"}\n', next: 1 + cut.lastIndexOf(10) + 1 })
+    expect(wholeLines(new TextEncoder().encode('줄바꿈 없음'), 0, false)).toBeNull()
+  })
+
+  test('advisor: 대화 기록 경로는 $.session.info 에서, 늘어난 만큼만 바이트 범위로 읽는다(셸 없이)', KO, async ($, on) => {
+    const transcript = '/home/u/.claude/projects/-elsewhere/s1.jsonl'
+    let file = `${JSON.stringify({ type: 'user', message: { content: '안녕' } })}\n`
+    const reads: Array<{ path: string; as?: string; offset?: number; length?: number }> = []
+    const ran: string[][] = []
+    on('settings.read', () => ({ value: { advisorModel: 'opus' } }) as never)
+    on('session.info', () => ({ value: { transcriptPath: transcript, platform: 'linux', isHosted: false } }) as never)
+    on('fs.stat', ($, e) => {
+      if ((e as { path: string }).path !== transcript) throw new Error('ENOENT')
+      return { value: { kind: 'file', size: new TextEncoder().encode(file).length, mtimeMs: 0, isLink: false } } as never
+    })
+    on('fs.read', ($, e) => {
+      const ask = e as { path: string; as?: string; offset?: number; length?: number }
+      if (ask.path !== transcript) throw new Error('ENOENT')
+      reads.push({ path: ask.path, as: ask.as, offset: ask.offset, length: ask.length })
+      const all = new TextEncoder().encode(file)
+      const part = all.subarray(ask.offset ?? 0, (ask.offset ?? 0) + (ask.length ?? all.length))
+      return { value: { base64: btoa(String.fromCharCode(...part)) } } as never
+    })
+    on('process.run', ($, e) => {
+      ran.push([...e.argv])
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('clock.every', () => ({ value: { cancel: () => undefined } }) as never)
+    await $.command.run({ command: 'desk-activity', args: '' } as never)
+    const first = new TextEncoder().encode(file).length
+    // 두 번째 줄은 쓰는 중(줄바꿈 전)이라 다음 읽기가 그 줄 처음부터 다시 받는다
+    file += `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'server_tool_use', id: 'srv_1', name: 'advisor', input: {} }] } })}`
+    await $.command.run({ command: 'desk-activity', args: '' } as never)
+    file += '\n'
+    await $.command.run({ command: 'desk-activity', args: '' } as never)
+    const size = new TextEncoder().encode(file).length
+    expect(reads).toEqual([
+      { path: transcript, as: 'bytes', offset: 0, length: first },
+      { path: transcript, as: 'bytes', offset: first, length: size - 1 - first },
+      { path: transcript, as: 'bytes', offset: first, length: size - first },
+    ])
+    expect(ran.filter(argv => argv[0] === 'tail' || argv[0] === 'head')).toEqual([])
+  })
+
+  test('4 MiB 넘게 쌓인 백그라운드 셸 출력도 끝 줄을 범위로 읽어 상세에 보이고 종료 줄로 끝남이 된다', KO, async ($, on) => {
+    const size = 6 * 1024 * 1024
+    const ends = '…중간 줄의 끝\nstep 9999 ok\nKeyError: x\n\n[exited with code 1]\n'
+    const reads: Array<{ offset?: number; length?: number }> = []
+    on('clock.now', () => ({ value: 1_000 }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('agent.list', () => ({ value: [] as never }))
+    on('fs.stat', () => ({ value: { kind: 'file', size, mtimeMs: 0, isLink: false } as never }))
+    on('fs.read', ($, e) => {
+      const { offset, length } = e as { offset?: number; length?: number }
+      reads.push({ offset, length })
+      // 엔진처럼: 범위 없이 4 MiB 넘는 파일을 읽으면 거절한다
+      if (length === undefined) throw new Error('file is over 4 MiB')
+      return { value: ends as never }
+    })
+    on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b6' }, text: 'Command running in background with ID: b6. Output is being written to: /tmp/t/b6.output. You will be notified' }) as never)
+    await $.tool.call({ tool: 'Bash', command: 'python3 long.py', description: '긴 출력', run_in_background: true, agentId: 'a1' } as never)
+    await $.command.run({ command: 'desk-tasks', args: '1' } as never)
+    expect(reads.length).toBeGreaterThan(0)
+    expect(reads.every(range => range.offset === size - 64 * 1024 && range.length === 64 * 1024)).toBe(true)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-tasks', viewport: VIEWPORT, props: { title: '백그라운드 작업', isFocused: true, bodyColumns: 70 } as never })
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('실패')
+    expect(drawn).toContain('KeyError: x')
+    // 줄 가운데서 시작한 첫 조각은 버린다
+    expect(drawn).not.toContain('중간 줄의 끝')
+    await pane.unmount()
+  })
 })
