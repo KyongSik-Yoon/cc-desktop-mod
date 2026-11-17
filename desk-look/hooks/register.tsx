@@ -1,14 +1,14 @@
-import { atom, read, update } from 'claude-code'
+import { atom, memberOf, read, update } from 'claude-code'
 import type { Chunk, Elements, EngineInterface, ModelUsage, Register, RenderSurface, TextHoverProps, Timer, ToolGroupCall, TurnStepResult, UiPressArgument, UiScrollArgs } from 'claude-code'
 
-import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
+import type { ActivityKind, ActivityLog, ActivityState, TurnStats, AgentDetail, AgentRecord, CommentDraft, LineComment, DiffFilter, DiffScope, DiffView, FileDiff, OpenedGaps, ImageInfo, PrCheck, PrInfo, PrState, PrThread, RepoInfo, RunCall, RunRow, Runs, AskState, CommitInfo, FoldedPane, Graphics, SessionEdit, SessionEntry, LiveSession, PreviewFile, Surface, TaskItem, TurnCard, TurnEdit, UsageBreakdown, UsageInfo, ContextCompaction, ContextPoint } from '../types'
 import { CORNER_SIZE, IMAGE_TOKEN, TMUX_GRAPHICS_FORMAT, cornerPixels, graphicsOf, herdrGraphicsOn, imageNumber, pngSize, thumbnailSize, type Corner } from './images'
 import { cellWidth, codeSource, parseBlocks, renderMarkdown } from './markdown'
 import { blockHeight, diffBlock, diffBlocks, diffPalette, diffRows, gutterWidth, isTruecolor, openGaps, parseHunks, patchBlocks, untab, windowPlan, wrapRoom, wrappedHeights } from './diffview'
 import type { DiffBlock, DiffLine, DiffPalette, DiffRow, Gap } from './diffview'
 import { commentContext, draftKey, isStale, lineRef, linesIn, pressLine, rangeLabel, rangeOf, rowOf } from './comments'
 import type { LinePress } from './comments'
-import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, withPredicted } from './runs'
+import { agentOf, computeRuns, isAgentTool, isPlanTool, placeCall, planOf, rowsOf, runsFrom, withPredicted } from './runs'
 import type { PredictedCall, RunCursor } from './runs'
 import { activityOf, agentDetailOf, applyNotices, backgroundTaskOf, dismissAgents, exitStatusOf, isLive, mergeAgents, modelLabel, orderAgents, outputFileOf, parseNotices, stepTokens, tailOf } from './agents'
 import { ago, clip, filterSessions, groupSessions, herdrPaneOf, isGroupFolded, liveSessionsOf, numbered, sessionOf } from './sessions'
@@ -70,7 +70,12 @@ const open = atom({ plugin: 'desk-look', key: 'open' } as const, {} as Record<st
 const diff = atom({ plugin: 'desk-look', key: 'diff' } as const, [] as FileDiff[])
 const repo = atom({ plugin: 'desk-look', key: 'repo' } as const, null as RepoInfo | null)
 const surface = atom({ plugin: 'desk-look', key: 'surface' } as const, null as Surface | null)
-const runs = atom({ plugin: 'desk-look', key: 'runs' } as const, { firstOf: {}, calls: {} } as Runs)
+// 도구 묶음은 호출 id 마다 그 행이 읽는 몫으로 나눠 둔다(rowsOf). 행은 자기 몫만 읽어, 바뀐 묶음의 행만 다시 그려진다.
+// 대화 전체를 한 값(runs)에 두었을 때는 쓸 때마다 화면의 모든 도구 행이 그 값을 통째로 다시 읽었다
+// (호출 330개 세션에서 쓰기 한 번에 행 22개 × 명령어 1,500만 개).
+const runRow = atom({ plugin: 'desk-look', key: 'runRow' } as const, null as RunRow | null)
+const sessionEdits = atom({ plugin: 'desk-look', key: 'sessionEdits' } as const, [] as SessionEdit[])
+const EMPTY_RUNS: Runs = { firstOf: {}, calls: {} }
 // 설정 규칙·모드가 막아 돌지 않은 호출. 묶음 줄이 실패가 아니라 "not run" 으로 센다(isDenied 참고).
 const notRun = atom({ plugin: 'desk-look', key: 'notRun' } as const, {} as Record<string, true>)
 const images = atom({ plugin: 'desk-look', key: 'images' } as const, {} as Record<string, ImageInfo>)
@@ -224,6 +229,12 @@ const CONTEXT_COMPACTIONS = 50
 let contextPoints: ContextPoint[] = []
 let contextCompactions: ContextCompaction[] = []
 let predicted: PredictedCall[] = []
+// 마지막으로 계산한 도구 묶음(기록 + 예측)과, 행마다·편집 목록에 마지막으로 쓴 값(JSON). 같은 값은 다시 쓰지 않고,
+// 비교하려고 상태를 다시 읽지도 않는다. 세션을 바꾸면 엔진이 상태를 비우니 refreshSessionState 가 함께 비운다.
+let currentRuns: Runs = EMPTY_RUNS
+const writtenRows = new Map<string, string>()
+let writtenEdits: string | null = null
+let refreshSeq = 0
 // 진행 띠가 Bash 가 띄운 프로세스를 읽는 시계와 직전 표본. claudePid 는 /proc/self/stat 에서 한 번 읽고,
 // /proc 이 없으면(macOS) null 로 두어 다시 읽지 않는다.
 let procTimer: Timer | null = null
@@ -1043,7 +1054,7 @@ async function refreshDiff($: EngineInterface) {
   ]
   // 이 세션이 고친 저장소 안 파일 중 git 이 무시하는 것은 git diff·ls-files 어디에도 안 잡힌다. 세션 기록으로 보이게 골라 둔다.
   const root = top.stdout.trim()
-  const inRepo = root ? sessionEditsOf(await read($, runs)).map(edit => edit.path).filter(path => path.startsWith(`${root}/`)) : []
+  const inRepo = root ? (await read($, sessionEdits)).map(edit => edit.path).filter(path => path.startsWith(`${root}/`)) : []
   const ignored = inRepo.length ? (await $.process.run(['git', 'check-ignore', '--stdin'], { ...opts, stdin: `${inRepo.join('\n')}\n` })).stdout.split('\n').filter(Boolean) : []
   await update($, repo, () => ({
     name: root.split('/').pop() ?? '',
@@ -1166,7 +1177,7 @@ async function openDiffAt($: EngineInterface, path: string, line?: number) {
   await refreshDiffView($, 'uncommitted')
   const inGit = matchDiffFile(await read($, diff), path)
   // git 이 모르는 파일(저장소 밖)은 세션 편집 기록에서 찾는다. 경로는 도구가 준 절대 경로다.
-  const outside = inGit === null ? matchDiffFile(outsideEdits(sessionEditsOf(await read($, runs)), await read($, repo)), path) : null
+  const outside = inGit === null ? matchDiffFile(outsideEdits(await read($, sessionEdits), await read($, repo)), path) : null
   // 이미 커밋한 파일(리뷰 결과 패널 등): 브랜치 diff, 거기도 없으면 그 파일을 마지막으로 바꾼 커밋에서 찾는다.
   const target = inGit ?? (outside === null ? await committedTarget($, path) : `${OUTSIDE}${outside}`)
   await $.ui.open({ ...(await paneLook($)), id: PANE, title: T.paneChanges, focus: true })
@@ -1944,6 +1955,9 @@ function refreshSessionState($: EngineInterface, showPr: boolean) {
   // 다른 세션의 예측이 섞이지 않게 비우고 다시 읽는다.
   runCursor = null
   predicted = []
+  currentRuns = EMPTY_RUNS
+  writtenRows.clear()
+  writtenEdits = null
   void refreshRuns($).catch(() => undefined)
   void refreshImages($).catch(() => undefined)
   void refreshAgents($).catch(() => undefined)
@@ -2128,12 +2142,14 @@ async function copyText($: EngineInterface, text: string, press: UiPressArgument
 }
 
 async function refreshRuns($: EngineInterface) {
+  // 겹쳐 부르면 가장 늦게 시작한 것만 쓴다: 먼저 읽은 기록이 나중에 끝나 새 값을 덮지 않게.
+  const seq = ++refreshSeq
   const messages = await $.session.messages()
+  if (seq !== refreshSeq) return
   // 이 읽기보다 늦게 스트림에서 온 호출은 아직 기록에 없다: 지우지 않고 예측 자리에 둔다.
   const computed = computeRuns(messages)
   predicted = predicted.filter(item => computed.firstOf[item.call.tool_use_id] === undefined)
-  const next = withPredicted(computed, predicted)
-  if (!sameJson(await read($, runs), next)) await update($, runs, () => next)
+  await writeRuns($, withPredicted(computed, predicted))
   // 이번 턴에 모델이 쓴 가장 늦은 설명 글: 할 일 도구가 없을 때 진행 띠 윗줄의 단계.
   const said = turnNarration(messages)
   const state = await read($, turnActivity)
@@ -2150,6 +2166,47 @@ async function refreshRuns($: EngineInterface) {
     const now = await $.clock.now()
     await update($, turnActivity, state => ({ ...state, taskSince: taskSinceOf(list, state.taskSince ?? {}, now) }))
   }
+}
+
+// 바뀐 행 몫만 쓴다: 그 몫을 읽어 그린 행만 다시 그려진다. 편집 목록은 편집 호출이 든 묶음이 바뀔 때만 다시 모은다.
+async function writeRuns($: EngineInterface, next: Runs) {
+  currentRuns = next
+  const rows = rowsOf(next)
+  const writes: Promise<unknown>[] = []
+  let editsChanged = writtenEdits === null
+  for (const [id, row] of rows) {
+    const json = JSON.stringify(row)
+    if (writtenRows.get(id) === json) continue
+    writtenRows.set(id, json)
+    if (row.calls?.some(call => FILE_EDITING.has(call.tool))) editsChanged = true
+    writes.push($.state.set({ plugin: 'desk-look', key: 'runRow', id }, row).catch(() => writtenRows.delete(id)))
+  }
+  for (const id of [...writtenRows.keys()]) {
+    if (rows.has(id)) continue
+    writtenRows.delete(id)
+    editsChanged = true
+    writes.push($.state.set({ plugin: 'desk-look', key: 'runRow', id }, null).catch(() => undefined))
+  }
+  if (editsChanged) {
+    const edits = sessionEditsOf(next)
+    const json = JSON.stringify(edits)
+    if (json !== writtenEdits) {
+      writtenEdits = json
+      writes.push(update($, sessionEdits, () => edits))
+    }
+  }
+  await Promise.all(writes)
+}
+
+// 행이 맡은 호출들의 묶음 몫을 읽는다: 첫 호출의 몫과, 그 묶음의 첫 호출이 다른 호출이면(행이 그 호출도 맡았거나
+// withHead) 그 몫까지. 읽은 몫만 구독하니 다른 묶음이 바뀌어도 이 행은 다시 그려지지 않는다.
+async function rowRuns($: EngineInterface, ids: ReadonlyArray<string>, withHead = false): Promise<Runs> {
+  const id = ids[0]
+  if (id === undefined) return EMPTY_RUNS
+  const own = await read($, memberOf(runRow, { requestId: id }))
+  if (!own || own.first === id || !(withHead || ids.includes(own.first))) return runsFrom([[id, own]])
+  const head = await read($, memberOf(runRow, { requestId: own.first }))
+  return runsFrom([[id, own], [own.first, head]])
 }
 
 export function taskSinceOf(list: ReadonlyArray<TaskItem>, since: Record<string, number>, now: number): Record<string, number> {
@@ -3965,7 +4022,7 @@ export const register: Register = (on, options) => {
       const withInput = inputIntoTurn
       inputIntoTurn = false
       await update($, stepEffort, held => effortInForce(held, e.index, e.effort, withInput))
-      const savePredicted = () => update($, runs, state => withPredicted(state, predicted))
+      const savePredicted = () => writeRuns($, withPredicted(currentRuns, predicted))
       if (!isGather || (await read($, promptOrigin)) === 'bridge') return yield* placeCalls(next(e), savePredicted)
       return yield* placeCalls(gather(next(e), () => $.clock.sleep(GATHER_SETTLE_MS)), savePredicted)
     }
@@ -4061,7 +4118,8 @@ export const register: Register = (on, options) => {
     // 백그라운드 작업 알림과 에이전트가 보낸 메시지: 데스크톱처럼 그 자리에서 펼치는 줄. ctrl+o 화면은 엔진 그대로.
     if (e.surface === 'terminal' && !e.props.isExpanded && (e.props.from || e.props.task)) {
       const els = $.ui.resolve(e)
-      const [openState, state, records] = await Promise.all([read($, open), read($, runs), read($, agents)])
+      const toolUseId = e.props.task?.toolUseId
+      const [openState, state, records] = await Promise.all([read($, open), toolUseId ? rowRuns($, [toolUseId], true) : EMPTY_RUNS, read($, agents)])
       if (e.props.task) return taskRow(els, $, e.props.task, e.props.text, state, e.props.task.id !== undefined && e.props.task.id in records)
       return peerRow(els, $, e.props.from?.name ?? 'agent', e.props.text, openState, e.viewport?.columns ?? 80)
     }
@@ -4158,7 +4216,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const els = $.ui.resolve(e)
-    const [state, openState, marks] = await Promise.all([read($, runs), read($, open), read($, notRun)])
+    const [state, openState, marks] = await Promise.all([rowRuns($, [e.props.tool_use_id]), read($, open), read($, notRun)])
     const plan = planRow([e.props.tool_use_id], state)
     if (plan.kind === 'hide') return <els.Box display="none" />
     if (plan.kind === 'run') return runLine(els, $, plan.first, markNotRun(plan.calls, marks), openState, e.viewport?.columns ?? 80)
@@ -4188,8 +4246,8 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const els = $.ui.resolve(e)
-    const [state, openState, marks] = await Promise.all([read($, runs), read($, open), read($, notRun)])
     const ids = e.props.calls.map(call => call.tool_use_id).filter((id): id is string => id !== undefined)
+    const [state, openState, marks] = await Promise.all([rowRuns($, ids), read($, open), read($, notRun)])
     const plan = planRow(ids, state)
     if (plan.kind === 'hide') return <els.Box display="none" />
     if (plan.kind === 'run') return runLine(els, $, plan.first, markNotRun(plan.calls, marks), openState, e.viewport?.columns ?? 80)
@@ -5048,7 +5106,7 @@ export const register: Register = (on, options) => {
       read($, diffView),
       read($, open),
       read($, repo),
-      read($, runs),
+      read($, sessionEdits),
       $.env.get('HOME').catch(() => undefined),
       read($, surface),
       read($, diffWindow),
@@ -5071,7 +5129,7 @@ export const register: Register = (on, options) => {
       seen && seen.bodyRows > 0 && (seen.bodyRows !== window.bodyRows || Math.abs(seen.offset - window.offset) * 2 > seen.bodyRows) ? seen : window
     const allFiles = view.scope === 'branch' ? view.files : uncommitted
     // 커밋 안 한 변경에는 git 이 못 보는 저장소 밖 편집을 세션 기록으로 덧붙인다.
-    const allOutside = view.scope === 'uncommitted' ? outsideEdits(sessionEditsOf(edits), info) : []
+    const allOutside = view.scope === 'uncommitted' ? outsideEdits(edits, info) : []
     // 파일 이름 거르기: 목록·n·p·z 는 걸러진 파일만. 제목의 파일 수와 +/− 합계는 전체로 센다.
     const query = filter.query.trim()
     const isMatch = (path: string) => matchesPath(path, query)

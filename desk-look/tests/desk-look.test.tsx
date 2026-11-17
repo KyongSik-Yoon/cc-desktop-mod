@@ -690,7 +690,7 @@ test('순수 함수', KO, async () => {
   expect(files[0]).toEqual({ path: 'src/x.ts', added: 2, removed: 1, patch: '@@ -1 +1,2 @@\n-old\n+new\n+more', isNew: false })
 })
 
-import { computeRuns, placeCall, withPredicted } from '../hooks/runs'
+import { computeRuns, placeCall, rowsOf, runsFrom, withPredicted } from '../hooks/runs'
 import type { PredictedCall, RunCursor } from '../hooks/runs'
 import { gray256, mix, parseSurface } from '../hooks/theme'
 
@@ -776,6 +776,26 @@ describe('v3: 테마 면과 도구 묶음', () => {
     expect(planRow(['a', 'b', 'c'], state).kind).toBe('own')
     expect(planRow(['a', 'b'], state).kind).toBe('run')
     expect(planRow(['b', 'c'], state).kind).toBe('hide')
+  })
+
+  test('행마다 나눈 묶음 몫으로도 같은 판정을 내린다', KO, async () => {
+    const runCall = (id: string) => ({ tool_use_id: id, tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false })
+    const state = { firstOf: { a: 'a', b: 'a', c: 'a', z: 'z' }, calls: { a: [runCall('a'), runCall('b'), runCall('c')], z: [runCall('z')] } }
+    const rows = rowsOf(state)
+    // 첫 호출만 묶음의 호출을 갖고, 나머지는 첫 호출 id 만 갖는다
+    expect(rows.get('a')?.calls?.length).toBe(3)
+    expect(rows.get('b')).toEqual({ first: 'a' })
+    // 행은 첫 호출의 몫과(그 묶음의 첫 호출이 다른 호출이면) 그 몫만 읽는다
+    const read = (ids: string[], withHead = false) => {
+      const own = rows.get(ids[0] ?? '') ?? null
+      const head = own && own.first !== ids[0] && (withHead || ids.includes(own.first)) ? (rows.get(own.first) ?? null) : null
+      return runsFrom([[ids[0] ?? '', own], ...(head && own ? [[own.first, head] as const] : [])])
+    }
+    for (const ids of [['a'], ['b'], ['z'], ['unknown'], ['a', 'b', 'c'], ['a', 'b'], ['b', 'c']]) {
+      expect(planRow(ids, read(ids))).toEqual(planRow(ids, state))
+    }
+    // 묶음 중간 호출의 행(백그라운드 작업 줄)은 첫 호출 몫까지 읽어 자기 호출을 찾는다
+    expect(Object.values(read(['b'], true).calls).flat().map(call => call.tool_use_id)).toContain('b')
   })
 })
 

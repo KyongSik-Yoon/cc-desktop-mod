@@ -1,6 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 
-import type { RunCall, Runs } from '../types'
+import type { RunCall, RunRow, Runs } from '../types'
 
 // $.state 에 도구 출력 전문(Read 파일 내용, 긴 stdout)을 쌓지 않는다. 펼친 행은 30줄 남짓만 보여 준다.
 const LIMIT = 4000
@@ -189,6 +189,26 @@ export function withPredicted(runs: Runs, predicted: ReadonlyArray<PredictedCall
     const head = firstOf[first] ?? first
     firstOf[call.tool_use_id] = head
     calls[head] = [...(calls[head] ?? []), call]
+  }
+  return { firstOf, calls }
+}
+
+// 묶음을 호출 id 마다의 행 몫으로 나눈다: 첫 호출은 묶음 전체의 호출을, 나머지는 첫 호출 id 만.
+export function rowsOf(runs: Runs): Map<string, RunRow> {
+  const rows = new Map<string, RunRow>()
+  for (const [id, first] of Object.entries(runs.firstOf)) if (id !== first) rows.set(id, { first })
+  for (const [first, calls] of Object.entries(runs.calls)) rows.set(first, { first, calls })
+  return rows
+}
+
+// 행이 읽은 몫(자기 것, 묶음 첫 호출이 다르면 그것도)을 planRow 가 받는 Runs 로 되붙인다.
+export function runsFrom(rows: ReadonlyArray<readonly [string, RunRow | null]>): Runs {
+  const firstOf: Record<string, string> = {}
+  const calls: Record<string, RunCall[]> = {}
+  for (const [id, row] of rows) {
+    if (!row) continue
+    firstOf[id] = row.first
+    if (row.calls) calls[row.first] = row.calls
   }
   return { firstOf, calls }
 }
