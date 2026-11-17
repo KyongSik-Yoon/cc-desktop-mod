@@ -111,5 +111,11 @@ export function cornerPixels(corner: Corner, color: string): Uint8Array {
   return pixels
 }
 
-// $.fs.read(path, { as: 'bytes' }) 가 준 base64 를 바이트로.
-export const bytesOf = (base64: string) => Uint8Array.from(atob(base64), char => char.charCodeAt(0))
+// $.fs.read(path, { as: 'bytes' }) 가 준 base64 를 바이트로. Uint8Array.from(글, 변환 함수) 는 바이트마다
+// 반복자와 콜백을 거쳐 advisor 첫 읽기(3 MB)에 38~63 ms 가 들었다. 루프로 채우면 3~6 ms.
+export function bytesOf(base64: string): Uint8Array {
+  const text = atob(base64)
+  const bytes = new Uint8Array(text.length)
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i)
+  return bytes
+}
