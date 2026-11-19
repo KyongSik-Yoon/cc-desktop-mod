@@ -5322,17 +5322,19 @@ describe('미리보기 패널', () => {
     expect(listed).toContain('mermaid@11.4.1')
   })
 
-  test('o: 문서를 엔진 임시 폴더에 HTML 로 쓰고 xdg-open 으로, 없으면 open 으로 연다', KO, async ($, on) => {
+  test('o: 문서를 엔진 임시 폴더에 HTML 로 쓰고 macOS 는 open, 그 밖은 xdg-open 으로 연다', KO, async ($, on) => {
     const runs: string[][] = []
     const toasts: string[] = []
     const files: Record<string, string> = { '/repo/NOTES.md': DOC }
-    const hasXdg = { value: true }
+    const sysname = { value: 'Linux' }
+    on('session.machine', () => ({ value: { sysname: sysname.value, release: '6.8.0', machine: 'x86_64', packageManagers: [], runtimes: [] } }) as never)
     docWorld(on, files, ($, e) => {
       const argv = (e as { argv: string[] }).argv
       if (argv[0] === 'id') return { value: { exitCode: 0, stdout: '1000\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
       if (argv[0] !== 'xdg-open' && argv[0] !== 'open') return gitStub($, e)
       runs.push(argv)
-      if (argv[0] === 'xdg-open' && !hasXdg.value) throw new Error('ENOENT: xdg-open')
+      if (argv[0] === 'xdg-open' && sysname.value === 'Darwin') throw new Error('ENOENT: xdg-open')
+      if (argv[0] === 'xdg-open' && sysname.value === 'NoXdg') throw new Error('ENOENT: xdg-open')
       return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     })
     on('fs.write', ($, e) => {
@@ -5352,9 +5354,14 @@ describe('미리보기 패널', () => {
     expect(files[page]).toContain('<h1>0.23.0</h1>')
     expect(runs).toEqual([['xdg-open', page]])
     expect(toasts).toEqual([`브라우저로 열었어요: ${page}`])
-    hasXdg.value = false
+    sysname.value = 'Darwin'
     await pane.press({ key: 'preview-browser' })
-    expect(runs.slice(1)).toEqual([['xdg-open', page], ['open', page]])
+    expect(runs.slice(1)).toEqual([['open', page]])
+    // xdg-open 이 없는 리눅스: open(openvt)으로 넘어가지 않고 xdg-open 이 없다고 알린다.
+    sysname.value = 'NoXdg'
+    await pane.press({ key: 'preview-browser' })
+    expect(runs.slice(2)).toEqual([['xdg-open', page]])
+    expect(toasts.at(-1)).toStartWith('브라우저로 열지 못했어요: ')
     await pane.unmount()
   })
 
