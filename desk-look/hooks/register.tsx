@@ -264,6 +264,8 @@ let monitorRun: Promise<void> | null = null
 let monitorSelf: number | null = null
 // 이번에 연 뒤 표본을 한 번이라도 읽었는지: 읽기 전에는 "재는 중", 읽었는데 세션이 없으면 "없음".
 let monitorSampled = false
+// 엔진이 도는 시스템(uname -s, $.session.machine 2.1.328). 모니터는 /proc 으로 재서 Linux 에서만 표본을 읽는다.
+let machineSystem: string | null = null
 // /desk-activity 에 넣는 advisor 호출. advisorOn: 설정 advisorModel 이 있을 때(/advisor 로 켬)만 읽는다.
 // advisorFile: 지금 읽는 대화 기록 파일($.session.info 의 transcriptPath, 아직 모르면 null).
 // advisorOffset: 그 파일에서 읽은 데까지(바이트, 늘 줄 경계). advisorSeen: 이 세션에서 읽은 호출.
@@ -1146,19 +1148,17 @@ async function openPreview($: EngineInterface, path: string, focus = false) {
 }
 
 // o: 미리보기 문서를 브라우저 창으로. 패널은 터미널의 45%를 넘지 못해 창 전체로 보려면 바깥 창이 필요하다.
-// 엔진 임시 폴더에 HTML 을 쓰고 엔진이 브라우저를 여는 것처럼 xdg-open(없으면 macOS 의 open)으로 연다.
+// 엔진 임시 폴더에 HTML 을 쓰고 엔진이 브라우저를 여는 것처럼 macOS 는 open, 그 밖은 xdg-open 으로 연다.
+// 운영체제는 $.session.machine 으로 안다(2.1.328). 전에는 xdg-open 이 없으면 open 을 불렀는데, 리눅스의 open 은 openvt 다.
 async function openPreviewInBrowser($: EngineInterface, file: PreviewFile) {
   const root = await findTempRoot($)
   if (root === null) return $.ui.toast(T.browserFailed('id -u'))
   const page = `${root}/desk-look/${fileName(file.path).replace(/\.[^.]+$/, '')}.html`
   await $.fs.write(page, previewHtml(file.text, file.path))
   const failed = (error: unknown) => ({ exitCode: 1, stderr: error instanceof Error ? error.message : String(error) })
-  let ran: { exitCode: number; stderr: string }
-  try {
-    ran = await $.process.run(['xdg-open', page], { timeoutMs: 10_000 })
-  } catch {
-    ran = await $.process.run(['open', page], { timeoutMs: 10_000 }).catch(failed)
-  }
+  const { sysname } = await $.session.machine()
+  const opening = sysname === 'Darwin' ? $.process.run(['open', page], { timeoutMs: 10_000 }) : $.process.run(['xdg-open', page], { timeoutMs: 10_000 })
+  const ran: { exitCode: number; stderr: string } = await opening.catch(failed)
   $.ui.toast(ran.exitCode === 0 ? T.browserOpened(page) : T.browserFailed(ran.stderr.trim() || `exit ${ran.exitCode}`))
 }
 
@@ -2139,9 +2139,10 @@ async function focusHerdrSession($: EngineInterface, sessionId: string): Promise
   return workspace?.exitCode === 0 && tab?.exitCode === 0
 }
 
+// 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 예전에는 wl-copy 만 돌려 Wayland 밖(macOS·X11·SSH)에서는 못 했다.
 async function copyCommand($: EngineInterface, shell: string, copiedText: (shell: string) => string, plainText: (shell: string) => string) {
-  const copied = await $.process.run(['wl-copy', '--', shell], { timeoutMs: 2000 }).catch(() => null)
-  $.ui.toast(copied?.exitCode === 0 ? copiedText(shell) : plainText(shell))
+  const copied = await $.ui.copy({ text: shell }).catch(() => null)
+  $.ui.toast(copied?.isCopied ? copiedText(shell) : plainText(shell))
 }
 
 // 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 멀티플렉서·SSH 안에서도 된다.
@@ -2678,8 +2679,13 @@ function startMonitorClock($: EngineInterface) {
   })
 }
 
+async function readSystem($: EngineInterface): Promise<string> {
+  if (machineSystem === null) machineSystem = (await $.session.machine()).sysname
+  return machineSystem
+}
+
 async function openMonitor($: EngineInterface) {
-  await sampleMonitor($).catch(() => undefined)
+  if ((await readSystem($)) === 'Linux') await sampleMonitor($).catch(() => undefined)
   await openInFront($, { ...(await paneLook($)), id: MONITOR_PANE, title: T.paneMonitor, focus: true })
 }
 
@@ -4693,6 +4699,9 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     const [now, home] = await Promise.all([$.clock.now(), $.env.get('HOME'), read($, monitorClock)])
+    // /proc 이 없는 시스템(macOS)에서는 세션이 없다고 하지 않고 리눅스 전용이라고 알리며, 시계도 돌리지 않는다.
+    const system = await readSystem($)
+    if (system !== 'Linux') return <Text color={COLORS.muted}>{T.monitorLinuxOnly(system)}</Text>
     monitorSeen = now
     if (monitorTimer === null) startMonitorClock($)
     if (monitorRows.length === 0) return <Text color={COLORS.muted}>{monitorSampled ? T.monitorNone : T.monitorWaiting}</Text>
