@@ -264,6 +264,8 @@ let monitorRun: Promise<void> | null = null
 let monitorSelf: number | null = null
 // 이번에 연 뒤 표본을 한 번이라도 읽었는지: 읽기 전에는 "재는 중", 읽었는데 세션이 없으면 "없음".
 let monitorSampled = false
+// 엔진이 도는 시스템(uname -s, $.session.machine 2.1.328). 모니터는 /proc 으로 재서 Linux 에서만 표본을 읽는다.
+let machineSystem: string | null = null
 // /desk-activity 에 넣는 advisor 호출. advisorOn: 설정 advisorModel 이 있을 때(/advisor 로 켬)만 읽는다.
 // advisorFile: 지금 읽는 대화 기록 파일($.session.info 의 transcriptPath, 아직 모르면 null).
 // advisorOffset: 그 파일에서 읽은 데까지(바이트, 늘 줄 경계). advisorSeen: 이 세션에서 읽은 호출.
@@ -2137,9 +2139,10 @@ async function focusHerdrSession($: EngineInterface, sessionId: string): Promise
   return workspace?.exitCode === 0 && tab?.exitCode === 0
 }
 
+// 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 예전에는 wl-copy 만 돌려 Wayland 밖(macOS·X11·SSH)에서는 못 했다.
 async function copyCommand($: EngineInterface, shell: string, copiedText: (shell: string) => string, plainText: (shell: string) => string) {
-  const copied = await $.process.run(['wl-copy', '--', shell], { timeoutMs: 2000 }).catch(() => null)
-  $.ui.toast(copied?.exitCode === 0 ? copiedText(shell) : plainText(shell))
+  const copied = await $.ui.copy({ text: shell }).catch(() => null)
+  $.ui.toast(copied?.isCopied ? copiedText(shell) : plainText(shell))
 }
 
 // 엔진의 /copy 와 같은 길(클립보드 도구, 없으면 OSC 52)로 복사한다. 멀티플렉서·SSH 안에서도 된다.
@@ -2676,8 +2679,13 @@ function startMonitorClock($: EngineInterface) {
   })
 }
 
+async function readSystem($: EngineInterface): Promise<string> {
+  if (machineSystem === null) machineSystem = (await $.session.machine()).sysname
+  return machineSystem
+}
+
 async function openMonitor($: EngineInterface) {
-  await sampleMonitor($).catch(() => undefined)
+  if ((await readSystem($)) === 'Linux') await sampleMonitor($).catch(() => undefined)
   await openInFront($, { ...(await paneLook($)), id: MONITOR_PANE, title: T.paneMonitor, focus: true })
 }
 
@@ -4691,6 +4699,9 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Text } = els
     const [now, home] = await Promise.all([$.clock.now(), $.env.get('HOME'), read($, monitorClock)])
+    // /proc 이 없는 시스템(macOS)에서는 세션이 없다고 하지 않고 리눅스 전용이라고 알리며, 시계도 돌리지 않는다.
+    const system = await readSystem($)
+    if (system !== 'Linux') return <Text color={COLORS.muted}>{T.monitorLinuxOnly(system)}</Text>
     monitorSeen = now
     if (monitorTimer === null) startMonitorClock($)
     if (monitorRows.length === 0) return <Text color={COLORS.muted}>{monitorSampled ? T.monitorNone : T.monitorWaiting}</Text>

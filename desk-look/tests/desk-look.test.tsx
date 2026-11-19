@@ -2380,9 +2380,16 @@ test('세션 패널: 다른 폴더는 접힘, z 로 모두 펴기, 칩, 떠 있�
     resumed.push(e.args)
     return { text: '' }
   })
+  const cdBlocked = { value: false }
   on('command.run', { command: 'cd' }, ($, e) => {
+    if (cdBlocked.value) throw new Error('blocked')
     resumed.push(`cd ${e.args}`)
     return { text: '' }
+  })
+  const copies: string[] = []
+  on('ui.copy', ($, e) => {
+    copies.push((e as { text: string }).text)
+    return { value: { isCopied: true } } as never
   })
   on('ui.toast', ($, e) => {
     toasts.push((e as { text: string }).text)
@@ -2430,6 +2437,14 @@ test('세션 패널: 다른 폴더는 접힘, z 로 모두 펴기, 칩, 떠 있�
   await pane.press({ key: `open-${id(4)}` })
   for (let tries = 0; tries < 50 && resumed.length < 2; tries++) await wait(10)
   expect(resumed).toEqual(['cd /home/u/other', id(4)])
+  // 옮길 수 없으면 명령을 엔진 복사($.ui.copy, 클립보드 도구·OSC 52)로 복사한다. wl-copy 를 돌리지 않는다.
+  cdBlocked.value = true
+  await pane.press({ key: `open-${id(4)}` })
+  for (let tries = 0; tries < 50 && copies.length === 0; tries++) await wait(10)
+  const shell = `cd '/home/u/other' && claude --resume ${id(4)}`
+  expect(copies).toEqual([shell])
+  expect(toasts.at(-1)).toBe(`다른 폴더의 세션이에요. 명령을 복사했어요: ${shell}`)
+  expect(ran.some(argv => argv[0] === 'wl-copy')).toBe(false)
   await pane.unmount()
 })
 
@@ -6493,6 +6508,7 @@ describe('/desk-monitor 패널', () => {
     })
     on('ui.open', () => ({ value: { isPlaced: true } }) as never)
     on('ui.panes', () => ({ value: [] }) as never)
+    on('session.machine', () => ({ value: { sysname: 'Linux', release: '6.8.0', machine: 'x86_64', packageManagers: [], runtimes: [] } }) as never)
 
     await $.command.run({ command: 'desk-monitor', args: '' } as never)
     const paneProps = { title: '모니터', isFocused: true, bodyColumns: 70 } as never
@@ -6533,6 +6549,36 @@ describe('/desk-monitor 패널', () => {
     await tick()
     expect(reads.length).toBe(before)
     expect(periods.length).toBe(0)
+  })
+
+  test('리눅스가 아니면(/proc 없음) 세션이 없다고 하지 않고 리눅스 전용이라고 알리며, 읽지도 시계를 돌리지도 않는다', KO, async ($, on) => {
+    const reads: string[] = []
+    let clocks = 0
+    on('env.get', ($, e) => ({ value: (e as { name?: string }).name === 'HOME' ? '/Users/u' : undefined }) as never)
+    on('fs.list', ($, e) => {
+      reads.push(String((e as { path?: string }).path))
+      return { value: [] } as never
+    })
+    on('fs.read', ($, e) => {
+      reads.push(String((e as { path?: string }).path ?? e))
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: 1000 }))
+    on('clock.every', () => {
+      clocks++
+      return { value: { cancel: () => undefined } } as never
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    on('ui.panes', () => ({ value: [] }) as never)
+    on('session.machine', () => ({ value: { sysname: 'Darwin', release: '24.1.0', machine: 'arm64', packageManagers: [], runtimes: [] } }) as never)
+    await $.command.run({ command: 'desk-monitor', args: '' } as never)
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-monitor', viewport: VIEWPORT, props: { title: '모니터', isFocused: true, bodyColumns: 70 } as never })
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('리눅스에서만 볼 수 있어요 (이 컴퓨터: Darwin)')
+    expect(drawn).not.toContain('떠 있는 Claude 세션을 찾지 못했어요')
+    expect(reads.filter(path => path.startsWith('/proc') || path.includes('.claude/sessions'))).toEqual([])
+    expect(clocks).toBe(0)
+    await pane.unmount()
   })
 })
 
