@@ -1150,13 +1150,14 @@ async function openPreview($: EngineInterface, path: string, focus = false) {
 // o: 미리보기 문서를 브라우저 창으로. 패널은 터미널의 45%를 넘지 못해 창 전체로 보려면 바깥 창이 필요하다.
 // 엔진 임시 폴더에 HTML 을 쓰고 엔진이 브라우저를 여는 것처럼 macOS 는 open, 그 밖은 xdg-open 으로 연다.
 // 운영체제는 $.session.machine 으로 안다(2.1.328). 전에는 xdg-open 이 없으면 open 을 불렀는데, 리눅스의 open 은 openvt 다.
+// 그 호출이 거부되면(2.1.330 서버) 모르는 시스템으로 보고 xdg-open 으로 연다.
 async function openPreviewInBrowser($: EngineInterface, file: PreviewFile) {
   const root = await findTempRoot($)
   if (root === null) return $.ui.toast(T.browserFailed('id -u'))
   const page = `${root}/desk-look/${fileName(file.path).replace(/\.[^.]+$/, '')}.html`
   await $.fs.write(page, previewHtml(file.text, file.path))
   const failed = (error: unknown) => ({ exitCode: 1, stderr: error instanceof Error ? error.message : String(error) })
-  const { sysname } = await $.session.machine()
+  const { sysname } = await $.session.machine().catch(() => ({ sysname: '' }))
   const opening = sysname === 'Darwin' ? $.process.run(['open', page], { timeoutMs: 10_000 }) : $.process.run(['xdg-open', page], { timeoutMs: 10_000 })
   const ran: { exitCode: number; stderr: string } = await opening.catch(failed)
   $.ui.toast(ran.exitCode === 0 ? T.browserOpened(page) : T.browserFailed(ran.stderr.trim() || `exit ${ran.exitCode}`))
@@ -2679,9 +2680,11 @@ function startMonitorClock($: EngineInterface) {
   })
 }
 
+// 서버(CLI 아님)에서 도구가 다른 컨테이너에서 돌면 그 컨테이너가 답하거나 호출이 거부된다(2.1.330).
+// 거부되면 모르는 시스템('')으로 보고, 적어 두지 않아 다음에 다시 묻는다.
 async function readSystem($: EngineInterface): Promise<string> {
-  if (machineSystem === null) machineSystem = (await $.session.machine()).sysname
-  return machineSystem
+  if (machineSystem === null) machineSystem = await $.session.machine().then(machine => machine.sysname, () => null)
+  return machineSystem ?? ''
 }
 
 async function openMonitor($: EngineInterface) {
@@ -4701,7 +4704,7 @@ export const register: Register = (on, options) => {
     const [now, home] = await Promise.all([$.clock.now(), $.env.get('HOME'), read($, monitorClock)])
     // /proc 이 없는 시스템(macOS)에서는 세션이 없다고 하지 않고 리눅스 전용이라고 알리며, 시계도 돌리지 않는다.
     const system = await readSystem($)
-    if (system !== 'Linux') return <Text color={COLORS.muted}>{T.monitorLinuxOnly(system)}</Text>
+    if (system !== 'Linux') return <Text color={COLORS.muted}>{T.monitorLinuxOnly(system || T.systemUnknown)}</Text>
     monitorSeen = now
     if (monitorTimer === null) startMonitorClock($)
     if (monitorRows.length === 0) return <Text color={COLORS.muted}>{monitorSampled ? T.monitorNone : T.monitorWaiting}</Text>

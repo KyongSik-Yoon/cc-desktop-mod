@@ -5342,7 +5342,10 @@ describe('미리보기 패널', () => {
     const toasts: string[] = []
     const files: Record<string, string> = { '/repo/NOTES.md': DOC }
     const sysname = { value: 'Linux' }
-    on('session.machine', () => ({ value: { sysname: sysname.value, release: '6.8.0', machine: 'x86_64', packageManagers: [], runtimes: [] } }) as never)
+    on('session.machine', () => {
+      if (sysname.value === 'Rejected') throw new Error('no container answered')
+      return { value: { sysname: sysname.value, release: '6.8.0', machine: 'x86_64', packageManagers: [], runtimes: [] } } as never
+    })
     docWorld(on, files, ($, e) => {
       const argv = (e as { argv: string[] }).argv
       if (argv[0] === 'id') return { value: { exitCode: 0, stdout: '1000\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -5377,6 +5380,11 @@ describe('미리보기 패널', () => {
     await pane.press({ key: 'preview-browser' })
     expect(runs.slice(2)).toEqual([['xdg-open', page]])
     expect(toasts.at(-1)).toStartWith('브라우저로 열지 못했어요: ')
+    // $.session.machine 이 거부되면(2.1.330 서버) 시스템을 모르는 것으로 보고 xdg-open 으로 연다.
+    sysname.value = 'Rejected'
+    await pane.press({ key: 'preview-browser' })
+    expect(runs.slice(3)).toEqual([['xdg-open', page]])
+    expect(toasts.at(-1)).toBe(`브라우저로 열었어요: ${page}`)
     await pane.unmount()
   })
 
@@ -6576,6 +6584,43 @@ describe('/desk-monitor 패널', () => {
     const drawn = JSON.stringify(await pane.drawn())
     expect(drawn).toContain('리눅스에서만 볼 수 있어요 (이 컴퓨터: Darwin)')
     expect(drawn).not.toContain('떠 있는 Claude 세션을 찾지 못했어요')
+    expect(reads.filter(path => path.startsWith('/proc') || path.includes('.claude/sessions'))).toEqual([])
+    expect(clocks).toBe(0)
+    await pane.unmount()
+  })
+
+  // 서버에서 도구가 다른 컨테이너에서 돌 때 $.session.machine 은 거부될 수 있다(2.1.330). 패널은 열리고 모른다고 알린다.
+  test('$.session.machine 이 거부되면 패널을 열고 시스템을 모른다고 알리며, /proc 을 읽지 않는다', KO, async ($, on) => {
+    const reads: string[] = []
+    let clocks = 0
+    on('env.get', ($, e) => ({ value: (e as { name?: string }).name === 'HOME' ? '/home/u' : undefined }) as never)
+    on('fs.list', ($, e) => {
+      reads.push(String((e as { path?: string }).path))
+      return { value: [] } as never
+    })
+    on('fs.read', ($, e) => {
+      reads.push(String((e as { path?: string }).path ?? e))
+      throw new Error('ENOENT')
+    })
+    on('clock.now', () => ({ value: 1000 }))
+    on('clock.every', () => {
+      clocks++
+      return { value: { cancel: () => undefined } } as never
+    })
+    const opened: string[] = []
+    on('ui.open', ($, e) => {
+      opened.push((e as { id: string }).id)
+      return { value: { isPlaced: true } } as never
+    })
+    on('ui.panes', () => ({ value: [] }) as never)
+    on('session.machine', () => {
+      throw new Error('no container answered')
+    })
+    await $.command.run({ command: 'desk-monitor', args: '' } as never)
+    expect(opened).toContain('desk-monitor')
+    const pane = await $.ui.mount({ plugin: 'desk-look', surface: 'terminal', component: 'Pane', requestId: 'desk-monitor', viewport: VIEWPORT, props: { title: '모니터', isFocused: true, bodyColumns: 70 } as never })
+    const drawn = JSON.stringify(await pane.drawn())
+    expect(drawn).toContain('리눅스에서만 볼 수 있어요 (이 컴퓨터: 알 수 없음)')
     expect(reads.filter(path => path.startsWith('/proc') || path.includes('.claude/sessions'))).toEqual([])
     expect(clocks).toBe(0)
     await pane.unmount()
