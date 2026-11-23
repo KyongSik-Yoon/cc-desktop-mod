@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { fitTextRows, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason, sessionPid, waitingPath, waitingRecord } from '../hooks/plan'
+import { CANCEL_REASON, fitTextRows, isMarkdown, parseReply, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason, sessionPid, waitingPath, waitingRecord } from '../hooks/plan'
 
 const PLAN = ['# 빼기 추가', '', '- math.ts 에 subtract', '- 테스트 추가', '', '| 파일 | 변경 |', '|---|---|', '| math.ts | subtract |'].join('\n')
 const PATH = '/h/.claude/plans/p.md'
@@ -144,6 +144,38 @@ test('계획 카드 훅: 기다리는 동안 표식을 두고 답하면 지운�
   await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
   expect(seen.reached).toHaveLength(2)
   expect(removed).toHaveLength(1)
+})
+
+// 파이프에 쓰는 답은 표식 v1 의 약속이다(README): 다른 도구(예: Agent World)가 이 모양으로 쓴다. 바꾸려면 표식의 v 를 올린다.
+test('계획 카드 답: 표식 v1 이 약속한 모양만 알아보고, 나머지는 null', () => {
+  expect(parseReply('{"kind":"approve"}')).toEqual({ kind: 'approve' })
+  expect(parseReply('{"kind":"revise","text":"2단계를 나눠 줘"}')).toEqual({ kind: 'revise', text: '2단계를 나눠 줘' })
+  expect(parseReply('{"kind":"engine"}\n')).toEqual({ kind: 'engine' })
+  expect(parseReply('{"kind":"dismiss"}')).toEqual({ kind: 'dismiss' })
+  expect(parseReply('{"kind":"cancel"}')).toEqual({ kind: 'cancel' })
+  // 모르는 kind·글이 없는 revise·JSON 이 아닌 것·두 답이 붙은 것
+  expect(parseReply('{"kind":"rewrite","text":"x"}')).toBeNull()
+  expect(parseReply('{"kind":"revise"}')).toBeNull()
+  expect(parseReply('{"kind":"revise","text":3}')).toBeNull()
+  expect(parseReply('not json')).toBeNull()
+  expect(parseReply('null')).toBeNull()
+  expect(parseReply('{"kind":"approve"}{"kind":"cancel"}')).toBeNull()
+})
+
+test('계획 카드 훅: 알아볼 수 없는 답은 취소로 거절하지 않고 엔진 창으로, 취소는 그대로 취소', async ($, on) => {
+  const seen = world(on, { lang: 'ko' })
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  seen.reply = JSON.stringify({ kind: 'rewrite', text: '테스트를 먼저' })
+  await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(seen.reached).toHaveLength(1)
+  seen.reply = 'not json'
+  await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(seen.reached).toHaveLength(2)
+  seen.reply = JSON.stringify({ kind: 'cancel' })
+  const cancelled = await $.tool.call({ tool: 'ExitPlanMode', ...INPUT } as never)
+  expect(cancelled.isError).toBe(true)
+  expect(cancelled.text).toContain(CANCEL_REASON)
+  expect(seen.reached).toHaveLength(2)
 })
 
 // desk-look 미리보기 패널 원문 줄 보기에서 계획 파일 4–5번 줄에 단 댓글(patch 키 p:경로)과 다른 파일 diff 댓글.
