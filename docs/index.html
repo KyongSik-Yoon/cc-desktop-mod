@@ -725,7 +725,7 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
       <div data-for="up" class="on"><span class="key"><span lang="en">Progress band, upper line</span><span lang="ko">진행 띠 윗줄</span></span><p><span lang="en">The current step: the task list, or on Claude 5 models the first sentence Claude wrote before its latest tool call. When the turn ends it stays 30 seconds with its last step marked done.</span><span lang="ko">지금 단계: 할 일 목록, Claude 5 모델에서는 Claude 가 마지막 도구 호출 앞에 쓴 글의 첫 문장. 턴이 끝나면 마지막 단계를 끝난 것으로 30초 남깁니다.</span></p></div>
       <div data-for="low"><span class="key"><span lang="en">Progress band, lower line</span><span lang="ko">진행 띠 아랫줄</span></span><p><span lang="en">What runs now: the tool call and its time and, for a shell command, the program it started and its CPU (Linux). Click it for <code>/desk-activity</code>.</span><span lang="ko">지금 도는 일: 도구 호출과 그 시간, 셸 명령이면 띄운 프로그램과 CPU(리눅스). 누르면 <code>/desk-activity</code>.</span></p></div>
       <div data-for="repo"><span class="key"><span lang="en">Chin band</span><span lang="ko">아래턱 띠</span></span><p><span lang="en">Repository and branch on a rounded gray band, like the chin under the desktop prompt.</span><span lang="ko">데스크톱 입력창 아래턱 같은 둥근 회색 띠에 저장소와 브랜치.</span></p></div>
-      <div data-for="diff"><span class="key">+48 −6</span><p><span lang="en">Changed lines. Click for the <code>/desk-diff</code> pane; <code>✎&#xFE0E; N</code> shows here while diff line comments wait for your next prompt.</span><span lang="ko">바뀐 줄 수. 누르면 <code>/desk-diff</code> 패널이 열리고, 다음 프롬프트에 같이 갈 diff 줄 댓글이 있으면 여기 <code>✎&#xFE0E; N</code> 이 붙습니다.</span></p></div>
+      <div data-for="diff"><span class="key">+48 −6</span><p><span lang="en">Changed lines. Click for the <code>/desk-diff</code> pane; <code>✎&#xFE0E; N</code> shows here while line comments wait for your next prompt.</span><span lang="ko">바뀐 줄 수. 누르면 <code>/desk-diff</code> 패널이 열리고, 다음 프롬프트에 같이 갈 줄 댓글이 있으면 여기 <code>✎&#xFE0E; N</code> 이 붙습니다.</span></p></div>
       <div data-for="pr"><span class="key"><span lang="en">PR chip</span><span lang="ko">PR 칩</span></span><p><span lang="en">The current branch's pull request: checks passed, <code>✗</code> failing, <code>●</code> running, <code>◆</code> unresolved review threads. GitLab merge requests show as <code>!7</code>. Click for <code>/desk-pr</code>.</span><span lang="ko">지금 브랜치의 PR: 통과한 체크, <code>✗</code> 실패, <code>●</code> 진행 중, <code>◆</code> 안 풀린 리뷰 스레드. GitLab MR 은 <code>!7</code> 로 나옵니다. 누르면 <code>/desk-pr</code>.</span></p></div>
       <div data-for="ctx"><span class="key"><span lang="en">Context chip</span><span lang="ko">컨텍스트 칩</span></span><p><span lang="en">Shows once context passes half, in a caution color from 75% and a warning color from 90%. Click for <code>/desk-context</code>.</span><span lang="ko">컨텍스트가 절반을 넘으면 나오고, 75% 부터 주의 색, 90% 부터 경고 색입니다. 누르면 <code>/desk-context</code>.</span></p></div>
       <div data-for="tasks"><span class="key"><span lang="en">Tasks chip</span><span lang="ko">작업 칩</span></span><p><span lang="en">How many background tasks are running. Click for <code>/desk-tasks</code>.</span><span lang="ko">돌고 있는 백그라운드 작업 수. 누르면 <code>/desk-tasks</code>.</span></p></div>
@@ -779,8 +779,8 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
       </div>
       <div data-for="p-preview" id="d-preview" hidden>
         <h3><span lang="en">Markdown preview</span><span lang="ko">마크다운 미리보기</span></h3>
-        <p lang="en">A document Claude writes in a turn opens here by itself when the turn ends, drawn with the transcript's own renderer: bordered tables, mermaid diagrams, alert boxes, front matter as a small key/value box. Later writes and edits reload it.</p>
-        <p lang="ko">Claude 가 한 턴에 쓴 문서는 턴이 끝나면 여기 저절로 열립니다. 대화와 같은 렌더러로 테두리 표, mermaid 그림, 알림 상자, front matter 키·값 상자를 그리고, 그 뒤 고친 내용도 따라갑니다.</p>
+        <p lang="en">A document Claude writes in a turn opens here by itself when the turn ends, drawn with the transcript's own renderer: bordered tables, mermaid diagrams, alert boxes, front matter as a small key/value box. Later writes and edits reload it. Press <code>c</code> for its numbered source lines and comment on them as in the diff pane.</p>
+        <p lang="ko">Claude 가 한 턴에 쓴 문서는 턴이 끝나면 여기 저절로 열립니다. 대화와 같은 렌더러로 테두리 표, mermaid 그림, 알림 상자, front matter 키·값 상자를 그리고, 그 뒤 고친 내용도 따라갑니다. <code>c</code> 를 누르면 번호 붙은 원문 줄이 나오고, diff 패널처럼 줄에 댓글을 달 수 있습니다.</p>
       </div>
       <div data-for="p-context" id="d-context" hidden>
         <h3><span lang="en">Context and usage</span><span lang="ko">컨텍스트와 사용량</span></h3>
@@ -858,12 +858,12 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
 <!-- ═══ Line comments ═══ -->
 <section class="sec" id="comments">
   <div class="wrap">
-    <div class="band rv"><i class="blk"></i><b>04</b><span lang="en">diff line comments</span><span lang="ko">diff 줄 댓글</span><span class="grow"></span><span class="dim">✎&#xFE0E; N</span></div>
+    <div class="band rv"><i class="blk"></i><b>04</b><span lang="en">line comments</span><span lang="ko">줄 댓글</span><span class="grow"></span><span class="dim">✎&#xFE0E; N</span></div>
     <div class="head rv">
       <h2><span lang="en">Comment on a line. Claude reads it with your next prompt.</span><span lang="ko">줄에 댓글을 달면, 다음 프롬프트와 함께 Claude 가 읽습니다.</span></h2>
     </div>
     <ol class="steps row rv">
-      <li><div><span lang="en">Click a line number in <code>/desk-diff</code>.</span><span lang="ko"><code>/desk-diff</code> 에서 줄 번호를 누릅니다.</span></div></li>
+      <li><div><span lang="en">Click a line number in <code>/desk-diff</code>, or in a document's source lines (<code>c</code> in <code>/desk-preview</code>).</span><span lang="ko"><code>/desk-diff</code>, 또는 문서의 원문 줄(<code>/desk-preview</code> 에서 <code>c</code>)에서 줄 번호를 누릅니다.</span></div></li>
       <li><div><span lang="en">Click another line number in the same file for a range, type, and press Enter.</span><span lang="ko">같은 파일의 다른 줄 번호를 누르면 범위가 됩니다. 쓰고 Enter 를 누릅니다.</span></div></li>
       <li><div><span lang="en">Kept comments wait as <code>✎&#xFE0E; N</code> on the chin band, then go with your next prompt: the file and lines, the lines themselves, and your comment.</span><span lang="ko">담은 댓글은 아래턱 띠에 <code>✎&#xFE0E; N</code> 으로 남았다가 다음 프롬프트와 함께 갑니다: 파일·줄, 그 줄들, 댓글.</span></div></li>
     </ol>
@@ -910,8 +910,8 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
       </li>
       <li>
         <h3><a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/tree/main/desk-plan">desk-plan</a> <small lang="en">needs desk-look</small><small lang="ko">desk-look 필요</small></h3>
-        <p lang="en">Asks for plan approval in a card above the prompt instead of the engine's full-screen dialog, with the plan open in the preview pane so you can read it while you decide.</p>
-        <p lang="ko">계획 승인을 화면을 덮는 엔진 창 대신 입력창 위 카드로 묻습니다. 계획은 미리보기 패널에 열려, 읽으면서 고를 수 있습니다.</p>
+        <p lang="en">Asks for plan approval in a card above the prompt instead of the engine's full-screen dialog, with the plan open in the preview pane so you can read it while you decide. Comment on lines of the plan there, and <code>3</code> on the card sends them back as the changes you want.</p>
+        <p lang="ko">계획 승인을 화면을 덮는 엔진 창 대신 입력창 위 카드로 묻습니다. 계획은 미리보기 패널에 열려, 읽으면서 고를 수 있습니다. 거기서 계획 줄에 댓글을 달고 카드의 <code>3</code> 을 누르면 고칠 점으로 돌려보냅니다.</p>
         <div class="cmd"><code>/plugin install desk-plan@cc-desktop-mod</code><button class="copy" type="button" data-copy="/plugin install desk-plan@cc-desktop-mod">⧉ copy</button></div>
       </li>
       <li>
@@ -941,8 +941,8 @@ figcaption { margin-top: 14px; font-size: .9rem; color: var(--ink-2); max-width:
         <li><div><span lang="en">Later, update with <code>/desk-update</code>. It updates desk-asana, desk-slack, desk-plan and desk-review too when they are installed, and runs <code>/reload-plugins</code> for you when a new version came in.</span><span lang="ko">업데이트는 <code>/desk-update</code>. 설치한 desk-asana·desk-slack·desk-plan·desk-review 도 함께 올리고, 새 버전을 받았으면 <code>/reload-plugins</code> 까지 대신 실행합니다.</span></div></li>
       </ol>
       <div class="after">
-        <p lang="en">desk-look follows the latest Claude Code release and is tested only there; keep Claude Code up to date. On an older version, parts the engine can't draw yet fall back to its default look.</p>
-        <p lang="ko">desk-look 은 최신 Claude Code 를 따르고 거기서만 시험합니다. Claude Code 를 최신으로 유지하세요. 옛 버전에서는 엔진이 아직 못 그리는 부분이 기본 모양으로 돌아갑니다.</p>
+        <p lang="en">desk-look follows the latest Claude Code release and is tested only there; keep Claude Code up to date. Each version names the oldest Claude Code it runs on; an older Claude Code doesn't install it, and <code>/desk-update</code> picks the newest version that fits.</p>
+        <p lang="ko">desk-look 은 최신 Claude Code 를 따르고 거기서만 시험합니다. Claude Code 를 최신으로 유지하세요. 버전마다 돌 수 있는 가장 옛 Claude Code 를 적어 두어, 그보다 옛 Claude Code 에는 설치되지 않고 <code>/desk-update</code> 는 맞는 가장 새 버전을 고릅니다.</p>
         <p lang="en">Image thumbnails and round bubble corners draw in kitty, Ghostty and iTerm2 3.5 or later, and inside tmux 3.3 or later. The gray fills follow the <a href="https://omarchy.org">omarchy</a> theme; elsewhere the bubble is a rounded border. <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/blob/main/docs/reference.md#behavior-by-environment">Behavior by environment</a></p>
         <p lang="ko">이미지 미리보기와 둥근 말풍선 모서리는 kitty, Ghostty, iTerm2 3.5 이상에서, tmux 3.3 이상 안에서도 그립니다. 회색 면은 <a href="https://omarchy.org">omarchy</a> 테마를 따르고, 그 밖에서는 둥근 테두리 말풍선입니다. <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/blob/main/docs/reference.ko.md#환경별-동작">환경별 동작</a></p>
         <p lang="en">Settings: search for <code>desk-look</code> in <code>/config</code>. <a href="https://github.com/KyongSik-Yoon/cc-desktop-mod/blob/main/docs/reference.md#settings">Every setting</a></p>
