@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { LineComment, PlanAskState, PlanPreview, PlanSent } from '../types'
-import { CANCEL_REASON, DISMISS_REASON, fitTextRows, isBridgedRecord, isMarkdown, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason, sessionPid, waitingPath, waitingRecord } from './plan'
+import { CANCEL_REASON, DISMISS_REASON, fitTextRows, isBridgedRecord, isMarkdown, parseReply, planAskMode, planComments, planFieldColumns, planInput, planTextRows, planTitle, reviseReason, sessionPid, waitingPath, waitingRecord } from './plan'
 import type { PlanReply } from './plan'
 import { T, langFromConfig, langSetting, setLang } from './i18n'
 
@@ -270,10 +270,9 @@ export const register: Register = (on, options) => {
     await clearWaiting($, marker)
     await update($, planAsking, () => null)
     if (answered === null) return next(e)
-    let answer: PlanReply = { kind: 'cancel' }
-    try {
-      answer = JSON.parse(answered) as PlanReply
-    } catch {}
+    const answer = parseReply(answered)
+    // 알아볼 수 없는 답은 취소로 거절하지 않고 엔진 창에 넘긴다 — 터미널에서 다시 답할 수 있다
+    if (answer === null) return next(e)
     switch (answer.kind) {
       case 'approve':
         return { allow: true, updatedInput: input }

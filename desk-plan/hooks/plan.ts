@@ -11,7 +11,24 @@
 
 import type { CommentLine, LineComment } from '../types'
 
+// 카드가 기다리는 파이프(표식의 fifo)에 들어오는 답. 카드의 버튼이 쓰고, 다른 도구도 표식 v1 을 보고 쓴다(README) —
+// 모양을 바꾸면 표식의 v 를 올린다. 그래서 tests 가 이 모양을 못 박는다.
 export type PlanReply = { kind: 'approve' } | { kind: 'revise'; text: string } | { kind: 'engine' } | { kind: 'dismiss' } | { kind: 'cancel' }
+
+// 파이프에서 읽은 글을 답으로. 알아볼 수 없으면(JSON 이 아니거나, 모르는 kind, 글이 없는 revise) null — 받는 쪽은
+// 아무 답도 하지 않은 셈으로 엔진 창에 넘겨, 사용자가 터미널에서 다시 답할 수 있게 한다(취소로 거절하지 않는다).
+export function parseReply(raw: string): PlanReply | null {
+  let v: unknown
+  try {
+    v = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (typeof v !== 'object' || v === null) return null
+  const { kind, text } = v as { kind?: unknown; text?: unknown }
+  if (kind === 'revise') return typeof text === 'string' ? { kind, text } : null
+  return kind === 'approve' || kind === 'engine' || kind === 'dismiss' || kind === 'cancel' ? { kind } : null
+}
 
 // 도구 입력(classic.PreToolUse 의 e 에서 tool·tool_use_id 를 뺀 것). 승인할 때 updatedInput 으로 그대로 돌려준다.
 export function planInput(e: Record<string, unknown>): Record<string, unknown> {
