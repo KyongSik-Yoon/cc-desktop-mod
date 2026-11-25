@@ -145,7 +145,7 @@ export const register: Register = (on, options) => {
     if (language === 'auto' && (await pickLang($).catch(() => false))) $.ui.invalidate('ui.render')
     // 도구를 못 걸어도(엔진이 거절) 명령은 그대로 건다. 스킬은 도구가 없으면 Markdown 보고로 대신한다.
     await $.tool.register(reviewTool()).catch(() => undefined)
-    await $.command.register({ name: 'desk-review', description: T.cmdReview, immediate: true })
+    await $.command.register({ name: 'desk-review', description: T.cmdReview, immediate: true, isTerminalOnly: true })
     return next(e)
   })
 

@@ -27,6 +27,8 @@ desk-look 이 그리는 것과 키를 빠짐없이 적은 문서입니다. 짧�
 
 패널 명령은 Claude 가 일하는 중에도 바로 실행된다. 큐에 들어가거나 턴을 멈추지 않고 패널만 연다.
 
+`/desk-update` 말고는 터미널에서만 쓴다. `claude -p`, Agent SDK, 데스크톱 Code 탭, VS Code, Remote Control 에서는 목록에 안 뜨고, 치면 거기서는 쓸 수 없다고 답한다.
+
 ## 대화 기록
 
 ![Claude Code 터미널의 desk-look: 프롬프트 띠, 접힌 도구 호출, 마크다운 표, mermaid 순서도, Note 상자, 고친 파일 카드](screenshot.png)

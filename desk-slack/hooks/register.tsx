@@ -293,7 +293,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     if (language === 'auto' && (await pickLang($).catch(() => false))) $.ui.invalidate('ui.render')
     // 패널만 여는 명령은 턴 중에도 바로 연다(immediate).
-    await $.command.register({ name: 'desk-slack', description: T.cmdSlack, immediate: true })
+    await $.command.register({ name: 'desk-slack', description: T.cmdSlack, immediate: true, isTerminalOnly: true })
     refreshSessionState($)
     // Slack 확인은 1분마다(MCP 서버는 시작 뒤에 붙는다).
     slackWatch?.cancel()

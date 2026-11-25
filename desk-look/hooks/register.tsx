@@ -3763,54 +3763,65 @@ export const register: Register = (on, options) => {
     // 도구를 못 걸어도(엔진이 거절) 아래 명령·언어 설정은 그대로 한다.
     await $.tool.register(previewTool(isPreviewAuto)).catch(() => undefined)
     // 패널만 여는 명령은 턴 중에도 바로 연다(immediate). 큐에 넣지 않고, 턴 상태에 기대지 않는다.
-    await $.command.register({ name: 'desk-preview', description: T.cmdPreview, argumentHint: T.cmdPreviewHint, immediate: true })
+    // 패널·띠·선택은 이 터미널 앞 사람의 것이라 터미널 전용(isTerminalOnly, 2.1.332): -p·SDK·Desktop·VS Code·Remote Control 에서는
+    // 목록에 안 뜨고 쓸 수 없다고 답한다. /desk-update 는 claude CLI 만 돌리므로 어디서나 둔다.
+    await $.command.register({ name: 'desk-preview', description: T.cmdPreview, argumentHint: T.cmdPreviewHint, immediate: true, isTerminalOnly: true })
     await $.command.register({
       name: 'desk-sessions',
       description: T.cmdSessions,
       argumentHint: T.cmdSessionsHint,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-diff',
       description: T.cmdDiff,
       argumentHint: T.cmdDiffHint,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-pr',
       description: T.cmdPr,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-context',
       description: T.cmdContext,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-activity',
       description: T.cmdActivity,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-monitor',
       description: T.cmdMonitor,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-tasks',
       description: T.cmdAgents,
       argumentHint: T.cmdAgentsHint,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-fold',
       description: T.cmdFold,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-quote',
       description: T.cmdQuote,
       immediate: true,
+      isTerminalOnly: true,
     })
     await $.command.register({
       name: 'desk-update',

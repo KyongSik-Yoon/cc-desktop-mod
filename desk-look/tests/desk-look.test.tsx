@@ -3688,6 +3688,32 @@ test('/desk-update: 마켓 목록을 새로 받고 desk-look 과 설치한 desk-
   expect(commands).toEqual(['reload-plugins'])
 })
 
+// 2.1.332 isTerminalOnly: 패널·띠·선택을 다루는 명령은 터미널 앞 사람에게만 뜻이 있다. -p·SDK·Desktop·VS Code·Remote Control 에서는
+// 목록에 안 뜨고 "쓸 수 없음"으로 답한다. /desk-update 는 claude CLI 만 돌리므로 어디서나 둔다.
+test('패널 명령은 터미널 전용으로, /desk-update 는 어디서나 등록한다', KO, async ($, on) => {
+  const registered: { name: string; isTerminalOnly?: true }[] = []
+  on('command.register', ($, e) => (registered.push(e as never), { value: undefined as never }))
+  on('tool.register', () => ({ value: undefined as never }))
+  on('clock.every', () => ({ value: undefined }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.start', ($, e) => e as never)
+  await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal' } as never)
+  const only = Object.fromEntries(registered.map(c => [c.name, c.isTerminalOnly === true]))
+  expect(only).toEqual({
+    'desk-preview': true,
+    'desk-sessions': true,
+    'desk-diff': true,
+    'desk-pr': true,
+    'desk-context': true,
+    'desk-activity': true,
+    'desk-monitor': true,
+    'desk-tasks': true,
+    'desk-fold': true,
+    'desk-quote': true,
+    'desk-update': false,
+  })
+})
+
 test('/desk-update 결과 문장: 최신, 실패(이때는 다시 불러오지 않는다)', KO, () => {
   setLang('ko')
   expect(isUpdated(0, '{"outcome":"ok","updateOutcome":"updated","oldVersion":"0.15.4","newVersion":"0.15.5"}')).toBe(true)
