@@ -27,6 +27,8 @@ Everything desk-look draws and every key, in full. For the short tour and the in
 
 The pane commands run at once even while Claude is working: they open the pane without queueing or stopping the turn.
 
+All but `/desk-update` work only in the terminal: under `claude -p`, the Agent SDK, Desktop's Code tab, VS Code and Remote Control they are not listed, and typing one says it isn't available there.
+
 ## The transcript
 
 ![desk-look in the Claude Code terminal: a prompt band, folded tool calls, a markdown table, a mermaid flowchart, a note box and the edited-files card](screenshot.png)

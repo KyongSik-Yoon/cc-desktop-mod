@@ -592,7 +592,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     if (language === 'auto' && (await pickLang($).catch(() => false))) $.ui.invalidate('ui.render')
     // 패널만 여는 명령은 턴 중에도 바로 연다(immediate).
-    await $.command.register({ name: 'desk-asana', description: T.cmdAsana, immediate: true })
+    await $.command.register({ name: 'desk-asana', description: T.cmdAsana, immediate: true, isTerminalOnly: true })
     refreshSessionState($)
     return next(e)
   })
